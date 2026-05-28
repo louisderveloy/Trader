@@ -1,0 +1,10 @@
+services:
+  bot:
+    container_name: trader-bot
+    build:
+      context: ./Bot
+    develop:
+      watch:
+        - path: ./Bot
+          action: sync+restart
+          target: /app
