@@ -9,7 +9,9 @@
       "Bash(python -m pytest:*)",
       "Bash(docker compose exec:*)",
       "Bash(docker compose logs:*)",
-      "Bash(docker compose:*)"
+      "Bash(docker compose:*)",
+      "Bash(docker-compose build:*)",
+      "Bash(curl:*)"
     ]
   }
 }

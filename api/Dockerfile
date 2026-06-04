@@ -10,10 +10,13 @@ COPY requirements.txt .
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY . .
+COPY . /app/api/
+
+# Set PYTHONPATH so imports work
+ENV PYTHONPATH=/app
 
 # Expose API port
 EXPOSE 8000
 
 # Start FastAPI with uvicorn
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
