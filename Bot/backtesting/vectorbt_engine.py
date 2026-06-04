@@ -30,8 +30,8 @@ from .types import (
 )
 from .metrics import calculate_metrics, build_equity_curve
 
-# Import indicator modules for signal calculation
-from indicators import ema, macd, rsi, stoch_rsi, bollinger, atr, obv, fear_greed
+# Note: Indicator signals are computed inline (vectorized) for backtesting performance
+# rather than using the real-time indicator modules which return single values.
 
 # Structured logging
 logger = logging.getLogger(__name__)
@@ -120,10 +120,12 @@ class VectorbtBacktester(BacktesterBase):
             result.trades = self.extract_trades(portfolio)
 
             # Build equity curve
+            # build_equity_curve expects 'timestamp' column, but candles_df has 'time' as index
+            candles_for_equity = self.candles_df.reset_index().rename(columns={'time': 'timestamp'})
             equity_curve = build_equity_curve(
                 result.trades,
                 self.config.initial_capital,
-                self.candles_df
+                candles_for_equity
             )
 
             # Calculate metrics
@@ -162,7 +164,7 @@ class VectorbtBacktester(BacktesterBase):
         Load historical candles from database.
 
         Returns:
-            DataFrame: Candles with columns [timestamp, open, high, low, close, volume]
+            DataFrame: Candles with columns [time, open, high, low, close, volume]
         """
         if not self.db_pool:
             raise ValueError("Database pool required to load candles")
@@ -171,7 +173,7 @@ class VectorbtBacktester(BacktesterBase):
 
         query = """
             SELECT
-                timestamp,
+                time,
                 open,
                 high,
                 low,
@@ -180,9 +182,9 @@ class VectorbtBacktester(BacktesterBase):
             FROM candles
             WHERE symbol = $1
                 AND timeframe = $2
-                AND timestamp >= $3
-                AND timestamp <= $4
-            ORDER BY timestamp ASC
+                AND time >= $3
+                AND time <= $4
+            ORDER BY time ASC
         """
 
         async with self.db_pool.acquire() as conn:
@@ -199,14 +201,14 @@ class VectorbtBacktester(BacktesterBase):
             return pd.DataFrame()
 
         # Convert to DataFrame
-        df = pd.DataFrame(rows, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df = pd.DataFrame(rows, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
 
         # Convert Decimal to float for vectorbt compatibility
         for col in ['open', 'high', 'low', 'close', 'volume']:
             df[col] = df[col].astype(float)
 
-        # Set timestamp as index
-        df.set_index('timestamp', inplace=True)
+        # Set time as index
+        df.set_index('time', inplace=True)
 
         logger.info(f"Loaded {len(df)} candles from database")
 
@@ -217,66 +219,146 @@ class VectorbtBacktester(BacktesterBase):
         Calculate all indicator signals and weighted scores.
 
         Populates self.signals_df with:
-        - Individual indicator signals
+        - Individual indicator signals (vectorized for all bars)
         - Weighted score
+
+        Note: This method computes VECTORIZED signals for backtesting,
+        unlike the real-time indicators which return single values.
         """
-        logger.info("Calculating indicator signals")
+        logger.info("Calculating indicator signals (vectorized)")
 
         if self.candles_df is None or self.candles_df.empty:
             raise ValueError("No candles available for signal calculation")
 
-        # Convert DataFrame to candles format for indicators
-        candles = self.candles_df.reset_index().to_dict('records')
-
         # Initialize signals DataFrame
         self.signals_df = pd.DataFrame(index=self.candles_df.index)
 
-        # Load weights (or use defaults)
-        weights = self.config.weights or self._get_default_weights()
+        # Load weights from strategy_params (or use defaults)
+        weights = self.config.strategy_params.get('weights', self._get_default_weights())
 
-        # Calculate each indicator and its signal
-        # Note: In production, these would come from the database weights_sets table
+        close = self.candles_df['close'].astype(float)
+        high = self.candles_df['high'].astype(float)
+        low = self.candles_df['low'].astype(float)
+        volume = self.candles_df['volume'].astype(float)
 
-        # EMA
-        ema_result = ema.compute(candles, self.config.strategy_params.get('ema', {}))
-        ema_signal = ema.to_signal(ema_result.values)
-        self.signals_df['ema_signal'] = ema_signal.value
+        # ===== EMA: Fast vs Slow crossover signal =====
+        ema_params = self.config.strategy_params.get('ema', {})
+        ema_fast_period = ema_params.get('fast_period', 50)
+        ema_slow_period = ema_params.get('slow_period', 200)
 
-        # MACD
-        macd_result = macd.compute(candles, self.config.strategy_params.get('macd', {}))
-        macd_signal = macd.to_signal(macd_result.values)
-        self.signals_df['macd_signal'] = macd_signal.value
+        ema_fast = close.ewm(span=ema_fast_period, adjust=False).mean()
+        ema_slow = close.ewm(span=ema_slow_period, adjust=False).mean()
 
-        # RSI
-        rsi_result = rsi.compute(candles, self.config.strategy_params.get('rsi', {}))
-        rsi_signal = rsi.to_signal(rsi_result.values)
-        self.signals_df['rsi_signal'] = rsi_signal.value
+        # Signal: percentage difference normalized to [-1, 1]
+        ema_pct_diff = (ema_fast - ema_slow) / ema_slow
+        self.signals_df['ema_signal'] = np.clip(ema_pct_diff / 0.01, -1.0, 1.0)
 
-        # Stochastic RSI
-        stoch_result = stoch_rsi.compute(candles, self.config.strategy_params.get('stoch_rsi', {}))
-        stoch_signal = stoch_rsi.to_signal(stoch_result.values)
-        self.signals_df['stoch_rsi_signal'] = stoch_signal.value
+        # ===== MACD: Histogram sign and magnitude =====
+        macd_params = self.config.strategy_params.get('macd', {})
+        macd_fast = macd_params.get('fast_period', 12)
+        macd_slow = macd_params.get('slow_period', 26)
+        macd_signal_period = macd_params.get('signal_period', 9)
 
-        # Bollinger Bands
-        bb_result = bollinger.compute(candles, self.config.strategy_params.get('bollinger', {}))
-        bb_signal = bollinger.to_signal(bb_result.values)
-        self.signals_df['bollinger_signal'] = bb_signal.value
+        macd_line = close.ewm(span=macd_fast, adjust=False).mean() - close.ewm(span=macd_slow, adjust=False).mean()
+        macd_signal_line = macd_line.ewm(span=macd_signal_period, adjust=False).mean()
+        macd_histogram = macd_line - macd_signal_line
 
-        # ATR
-        atr_result = atr.compute(candles, self.config.strategy_params.get('atr', {}))
-        atr_signal = atr.to_signal(atr_result.values)
-        self.signals_df['atr_signal'] = atr_signal.value
+        # Normalize histogram to signal (using percentile-based normalization)
+        hist_std = macd_histogram.rolling(window=100, min_periods=20).std()
+        hist_std = hist_std.replace(0, np.nan).fillna(macd_histogram.std())
+        self.signals_df['macd_signal'] = np.clip(macd_histogram / (2 * hist_std), -1.0, 1.0)
 
-        # OBV
-        obv_result = obv.compute(candles, {})
-        obv_signal = obv.to_signal(obv_result.values)
-        self.signals_df['obv_signal'] = obv_signal.value
+        # ===== RSI: Contrarian overbought/oversold =====
+        rsi_params = self.config.strategy_params.get('rsi', {})
+        rsi_period = rsi_params.get('period', 14)
+        rsi_overbought = rsi_params.get('overbought', 70)
+        rsi_oversold = rsi_params.get('oversold', 30)
 
-        # Fear & Greed (simplified - use neutral 0.0 for backtesting)
+        delta = close.diff()
+        gain = delta.where(delta > 0, 0.0)
+        loss = (-delta).where(delta < 0, 0.0)
+
+        avg_gain = gain.ewm(alpha=1/rsi_period, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1/rsi_period, adjust=False).mean()
+
+        rs = avg_gain / avg_loss.replace(0, np.nan)
+        rsi_values = 100 - (100 / (1 + rs))
+        rsi_values = rsi_values.fillna(50)
+
+        # Contrarian: oversold = buy (+1), overbought = sell (-1)
+        rsi_signal = pd.Series(0.0, index=rsi_values.index)
+        rsi_signal[rsi_values <= rsi_oversold] = (rsi_oversold - rsi_values[rsi_values <= rsi_oversold]) / rsi_oversold
+        rsi_signal[rsi_values >= rsi_overbought] = -(rsi_values[rsi_values >= rsi_overbought] - rsi_overbought) / (100 - rsi_overbought)
+        self.signals_df['rsi_signal'] = np.clip(rsi_signal, -1.0, 1.0)
+
+        # ===== Stochastic RSI =====
+        stoch_params = self.config.strategy_params.get('stoch_rsi', {})
+        stoch_period = stoch_params.get('period', 14)
+        stoch_k = stoch_params.get('k_period', 3)
+        stoch_d = stoch_params.get('d_period', 3)
+
+        rsi_min = rsi_values.rolling(window=stoch_period).min()
+        rsi_max = rsi_values.rolling(window=stoch_period).max()
+        stoch_rsi_k = ((rsi_values - rsi_min) / (rsi_max - rsi_min).replace(0, np.nan)) * 100
+        stoch_rsi_k = stoch_rsi_k.fillna(50)
+        stoch_rsi_d = stoch_rsi_k.rolling(window=stoch_d).mean()
+
+        # Similar contrarian logic
+        stoch_signal = (50 - stoch_rsi_k) / 50  # Oversold (+1), overbought (-1)
+        self.signals_df['stoch_rsi_signal'] = np.clip(stoch_signal, -1.0, 1.0)
+
+        # ===== Bollinger Bands: Position within bands =====
+        bb_params = self.config.strategy_params.get('bollinger', {})
+        bb_period = bb_params.get('period', 20)
+        bb_std_dev = bb_params.get('std_dev', 2.0)
+
+        bb_sma = close.rolling(window=bb_period).mean()
+        bb_std = close.rolling(window=bb_period).std()
+        bb_upper = bb_sma + bb_std_dev * bb_std
+        bb_lower = bb_sma - bb_std_dev * bb_std
+
+        # Position: -1 at upper band, +1 at lower band (contrarian)
+        bb_width = bb_upper - bb_lower
+        bb_position = (bb_sma - close) / (bb_width / 2).replace(0, np.nan)
+        bb_position = bb_position.fillna(0)
+        self.signals_df['bollinger_signal'] = np.clip(bb_position, -1.0, 1.0)
+
+        # ===== ATR: Volatility percentile (neutral signal for backtesting) =====
+        atr_params = self.config.strategy_params.get('atr', {})
+        atr_period = atr_params.get('period', 14)
+
+        tr1 = high - low
+        tr2 = (high - close.shift(1)).abs()
+        tr3 = (low - close.shift(1)).abs()
+        true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        atr_values = true_range.ewm(span=atr_period, adjust=False).mean()
+
+        # ATR percentile: high volatility = cautious (neutral to negative)
+        atr_percentile = atr_values.rolling(window=100, min_periods=20).apply(
+            lambda x: (x.iloc[-1] < x).sum() / len(x) if len(x) > 0 else 0.5
+        )
+        # Map: low vol (0%) → +0.3, median (50%) → 0, high vol (100%) → -0.3
+        self.signals_df['atr_signal'] = np.clip((0.5 - atr_percentile.fillna(0.5)) * 0.6, -1.0, 1.0)
+
+        # ===== OBV: Volume trend =====
+        obv_values = (np.sign(close.diff()) * volume).fillna(0).cumsum()
+
+        # OBV trend: use EMA crossover
+        obv_fast = obv_values.ewm(span=10, adjust=False).mean()
+        obv_slow = obv_values.ewm(span=30, adjust=False).mean()
+
+        obv_signal = (obv_fast - obv_slow) / obv_slow.abs().replace(0, np.nan)
+        obv_signal = obv_signal.fillna(0)
+        self.signals_df['obv_signal'] = np.clip(obv_signal * 10, -1.0, 1.0)
+
+        # ===== Fear & Greed (simplified - use neutral 0.0 for backtesting) =====
         self.signals_df['fear_greed_signal'] = 0.0
 
-        # User indicator (simplified - use neutral 0.0 for backtesting)
+        # ===== User indicator (simplified - use neutral 0.0 for backtesting) =====
         self.signals_df['user_signal'] = 0.0
+
+        # Fill any NaN values with 0 (neutral)
+        self.signals_df = self.signals_df.fillna(0.0)
 
         # Calculate weighted score: Σ (signal_i × weight_i)
         weighted_score = (
@@ -288,16 +370,50 @@ class VectorbtBacktester(BacktesterBase):
             self.signals_df['atr_signal'] * weights.get('atr', 0.10) +
             self.signals_df['obv_signal'] * weights.get('obv', 0.10) +
             self.signals_df['fear_greed_signal'] * weights.get('fear_greed', 0.05) +
-            self.signals_df['user_signal'] * weights.get('user', 0.05)
+            self.signals_df['user_signal'] * weights.get('user_indicator', 0.0)
         )
 
         self.signals_df['weighted_score'] = weighted_score
 
+        # DEBUG: Log individual signal distributions
+        logger.debug(
+            "Individual signal distributions",
+            extra={
+                "ema_signal": {
+                    "mean": float(self.signals_df['ema_signal'].mean()),
+                    "std": float(self.signals_df['ema_signal'].std()),
+                    "min": float(self.signals_df['ema_signal'].min()),
+                    "max": float(self.signals_df['ema_signal'].max())
+                },
+                "macd_signal": {
+                    "mean": float(self.signals_df['macd_signal'].mean()),
+                    "std": float(self.signals_df['macd_signal'].std()),
+                    "min": float(self.signals_df['macd_signal'].min()),
+                    "max": float(self.signals_df['macd_signal'].max())
+                },
+                "rsi_signal": {
+                    "mean": float(self.signals_df['rsi_signal'].mean()),
+                    "std": float(self.signals_df['rsi_signal'].std()),
+                    "min": float(self.signals_df['rsi_signal'].min()),
+                    "max": float(self.signals_df['rsi_signal'].max())
+                },
+                "bollinger_signal": {
+                    "mean": float(self.signals_df['bollinger_signal'].mean()),
+                    "std": float(self.signals_df['bollinger_signal'].std()),
+                    "min": float(self.signals_df['bollinger_signal'].min()),
+                    "max": float(self.signals_df['bollinger_signal'].max())
+                }
+            }
+        )
+
         logger.info(
-            "Signals calculated",
+            "Signals calculated (vectorized)",
             extra={
                 "mean_score": float(weighted_score.mean()),
-                "std_score": float(weighted_score.std())
+                "std_score": float(weighted_score.std()),
+                "min_score": float(weighted_score.min()),
+                "max_score": float(weighted_score.max()),
+                "weights_used": weights
             }
         )
 
@@ -314,20 +430,29 @@ class VectorbtBacktester(BacktesterBase):
             raise ValueError("No signals calculated")
 
         # Get thresholds from config (or use defaults)
-        entry_threshold = self.config.strategy_params.get('entry_threshold', 0.3)
-        exit_threshold = self.config.strategy_params.get('exit_threshold', -0.1)
+        # For backtesting/optimization, use lower thresholds to allow trades
+        entry_threshold = self.config.strategy_params.get('entry_threshold', 0.05)  # Lowered from 0.3
+        exit_threshold = self.config.strategy_params.get('exit_threshold', -0.05)  # Lowered from -0.1
+
+        weighted_score = self.signals_df['weighted_score']
 
         # Entry: weighted_score > entry_threshold
-        entries = self.signals_df['weighted_score'] > entry_threshold
+        entries = weighted_score > entry_threshold
 
         # Exit: weighted_score < exit_threshold
-        exits = self.signals_df['weighted_score'] < exit_threshold
+        exits = weighted_score < exit_threshold
 
         logger.info(
             "Generated entry/exit signals",
             extra={
+                "entry_threshold": entry_threshold,
+                "exit_threshold": exit_threshold,
+                "weighted_score_min": float(weighted_score.min()),
+                "weighted_score_max": float(weighted_score.max()),
+                "weighted_score_mean": float(weighted_score.mean()),
                 "total_entry_signals": int(entries.sum()),
-                "total_exit_signals": int(exits.sum())
+                "total_exit_signals": int(exits.sum()),
+                "total_candles": len(weighted_score)
             }
         )
 
@@ -380,42 +505,148 @@ class VectorbtBacktester(BacktesterBase):
         """
         trades = []
 
-        # Get trade records from portfolio
-        trade_records = portfolio.trades.records
+        # Get trade records as DataFrame for easier access
+        try:
+            trade_df = portfolio.trades.records_readable
+        except Exception as e:
+            # Fallback: no trades or empty
+            logger.warning(f"No trades found in portfolio (records_readable failed): {e}")
+            return trades
 
-        if len(trade_records) == 0:
+        if trade_df is None or len(trade_df) == 0:
             logger.warning("No trades found in portfolio")
             return trades
 
-        for i, record in enumerate(trade_records):
+        # DEBUG: Log DataFrame columns and sample data
+        logger.debug(
+            f"Vectorbt trade_df: columns={list(trade_df.columns)}, shape={trade_df.shape}"
+        )
+        if len(trade_df) > 0:
+            first_row = trade_df.iloc[0]
+            logger.debug(
+                f"Sample trade row (first): {first_row.to_dict()}"
+            )
+
+        # Get the index (timestamps) for mapping entry/exit indices to times
+        index = self.candles_df.index
+
+        # DEBUG: Log index info
+        logger.debug(
+            f"Candles index: type={type(index[0]).__name__}, first={index[0]}, last={index[-1]}, len={len(index)}"
+        )
+
+        for i, row in trade_df.iterrows():
             # Calculate P&L components
-            gross_pnl = Decimal(str(record['pnl']))
-            commission = Decimal(str(abs(record['fees'])))
+            # vectorbt records_readable uses specific column names - handle variations
+            # PnL column
+            if 'PnL' in row:
+                gross_pnl = Decimal(str(row['PnL']))
+            elif 'pnl' in row:
+                gross_pnl = Decimal(str(row['pnl']))
+            else:
+                gross_pnl = Decimal("0")
+
+            # Fees - vectorbt splits into Entry Fees + Exit Fees
+            entry_fees = float(row.get('Entry Fees', 0) or 0)
+            exit_fees = float(row.get('Exit Fees', 0) or 0)
+            commission = Decimal(str(entry_fees + exit_fees))
             slippage = Decimal("0")  # Included in fees for vectorbt
 
-            net_pnl = gross_pnl - commission
+            # Net PnL: vectorbt's PnL already includes fees, so don't subtract again
+            net_pnl = gross_pnl
+
+            # Entry/Exit prices - vectorbt uses 'Avg Entry Price' / 'Avg Exit Price'
+            if 'Avg Entry Price' in row:
+                entry_price = Decimal(str(row['Avg Entry Price']))
+            elif 'Entry Price' in row:
+                entry_price = Decimal(str(row['Entry Price']))
+            else:
+                entry_price = Decimal("0")
+
+            if 'Avg Exit Price' in row:
+                exit_price = Decimal(str(row['Avg Exit Price']))
+            elif 'Exit Price' in row:
+                exit_price = Decimal(str(row['Exit Price']))
+            else:
+                exit_price = Decimal("0")
+
+            # Size
+            if 'Size' in row:
+                size = Decimal(str(row['Size']))
+            elif 'size' in row:
+                size = Decimal(str(row['size']))
+            else:
+                size = Decimal("0")
+
+            # Entry/Exit timestamps - vectorbt records_readable provides timestamps directly
+            # NOT indices! Use 'Entry Timestamp' / 'Exit Timestamp' columns
+            if 'Entry Timestamp' in row:
+                entry_time = row['Entry Timestamp']
+            elif 'Entry Idx' in row:
+                entry_idx = int(row['Entry Idx'])
+                entry_time = index[entry_idx] if entry_idx < len(index) else index[-1]
+            else:
+                entry_time = index[0]
+
+            if 'Exit Timestamp' in row:
+                exit_time = row['Exit Timestamp']
+            elif 'Exit Idx' in row:
+                exit_idx = int(row['Exit Idx'])
+                exit_time = index[exit_idx] if exit_idx < len(index) else index[-1]
+            else:
+                exit_time = index[-1]
+
+            # Calculate return percentage
+            # vectorbt provides 'Return' column directly, use it if available
+            if 'Return' in row:
+                return_pct = Decimal(str(row['Return'] * 100))  # Convert to percentage
+            elif entry_price > 0 and size > 0:
+                return_pct = (net_pnl / (entry_price * size)) * 100
+            else:
+                return_pct = Decimal("0")
 
             trade = BacktestTrade(
                 trade_number=i + 1,
                 direction=TradeDirection.LONG,  # Assuming long only for now
-                entry_time=record['entry_idx'],
-                entry_price=Decimal(str(record['entry_price'])),
+                entry_time=entry_time,
+                entry_price=entry_price,
                 entry_order_type=OrderType.MARKET,  # vectorbt uses market orders
-                quantity=Decimal(str(record['size'])),
-                exit_time=record['exit_idx'],
-                exit_price=Decimal(str(record['exit_price'])),
+                quantity=size,
+                exit_time=exit_time,
+                exit_price=exit_price,
                 exit_order_type=OrderType.MARKET,
                 exit_reason="signal",  # Simplified
                 gross_pnl=gross_pnl,
                 commission_paid=commission,
                 slippage_cost=slippage,
                 net_pnl=net_pnl,
-                return_pct=(net_pnl / (Decimal(str(record['entry_price'])) * Decimal(str(record['size'])))) * 100
+                return_pct=return_pct
             )
 
             trades.append(trade)
 
-        logger.info(f"Extracted {len(trades)} trades from portfolio")
+            # DEBUG: Log first 5 trades with PnL details
+            if i < 5:
+                logger.debug(
+                    f"Trade {i}: entry_time={entry_time}, exit_time={exit_time}, "
+                    f"entry={float(entry_price):.2f}, exit={float(exit_price):.2f}, size={float(size):.6f}, "
+                    f"pnl={float(net_pnl):.4f}, return={float(return_pct):.4f}%"
+                )
+
+        # DEBUG: Summary of all trades PnL
+        if trades:
+            all_net_pnl = [float(t.net_pnl) for t in trades]
+            total_pnl = sum(all_net_pnl)
+            positive = sum(1 for p in all_net_pnl if p > 0)
+            negative = sum(1 for p in all_net_pnl if p < 0)
+            zero = sum(1 for p in all_net_pnl if p == 0)
+            logger.info(
+                f"Extracted {len(trades)} trades: total_pnl={total_pnl:.2f}, "
+                f"avg={total_pnl/len(all_net_pnl):.4f}, min={min(all_net_pnl):.4f}, max={max(all_net_pnl):.4f}, "
+                f"positive={positive}, negative={negative}, zero={zero}"
+            )
+        else:
+            logger.info(f"Extracted {len(trades)} trades from portfolio")
 
         return trades
 
@@ -437,5 +668,5 @@ class VectorbtBacktester(BacktesterBase):
             'atr': 0.10,
             'obv': 0.10,
             'fear_greed': 0.05,
-            'user': 0.05
+            'user_indicator': 0.05
         }

@@ -41,12 +41,22 @@ def calculate_metrics(
         BacktestMetrics: Complete metrics object with all calculated values
     """
     logger.info(
-        "Calculating backtest metrics",
-        extra={
-            "total_trades": len(trades),
-            "initial_capital": float(config.initial_capital)
-        }
+        f"[METRICS] Starting calculation: trades={len(trades)}, "
+        f"initial_capital={float(config.initial_capital):.2f}, "
+        f"equity_curve_rows={len(equity_curve)}"
     )
+
+    # Log trade PnL summary
+    if trades:
+        all_pnl = [float(t.net_pnl) for t in trades]
+        total_pnl = sum(all_pnl)
+        positive = sum(1 for p in all_pnl if p > 0)
+        negative = sum(1 for p in all_pnl if p < 0)
+        logger.info(
+            f"[METRICS] Trade PnL summary: total={total_pnl:.2f}, "
+            f"positive={positive}, negative={negative}, "
+            f"min={min(all_pnl):.4f}, max={max(all_pnl):.4f}"
+        )
 
     metrics = BacktestMetrics()
 
@@ -151,13 +161,45 @@ def calculate_returns(equity_curve: pd.DataFrame) -> pd.Series:
         Series: Period returns (percentage change)
     """
     if equity_curve.empty or 'capital' not in equity_curve.columns:
+        logger.warning("[RETURNS] Empty equity curve or missing 'capital' column")
         return pd.Series(dtype=float)
+
+    # DEBUG: Log capital distribution before pct_change (inline values)
+    capital = equity_curve['capital']
+    capital_min = float(capital.min())
+    capital_max = float(capital.max())
+    capital_std = float(capital.std())
+    capital_unique = int(capital.nunique())
+
+    logger.info(
+        f"[RETURNS] Capital: min={capital_min:.2f}, max={capital_max:.2f}, "
+        f"std={capital_std:.6f}, unique={capital_unique}"
+    )
 
     # Calculate percentage change
     returns = equity_curve['capital'].pct_change()
 
     # Remove NaN (first row) and infinite values
     returns = returns.replace([np.inf, -np.inf], 0.0).fillna(0.0)
+
+    # DEBUG: Log returns distribution (inline values)
+    non_zero_count = int((returns != 0).sum())
+    zero_count = int((returns == 0).sum())
+    returns_mean = float(returns.mean())
+    returns_std = float(returns.std())
+    returns_min = float(returns.min())
+    returns_max = float(returns.max())
+
+    logger.info(
+        f"[RETURNS] Distribution: total={len(returns)}, non_zero={non_zero_count}, zero={zero_count}"
+    )
+    logger.info(
+        f"[RETURNS] Stats: mean={returns_mean:.12f}, std={returns_std:.12f}, "
+        f"min={returns_min:.12f}, max={returns_max:.12f}"
+    )
+
+    if non_zero_count == 0:
+        logger.warning("[RETURNS] WARNING: ALL returns are ZERO! Capital never changed.")
 
     return returns
 
@@ -180,17 +222,41 @@ def calculate_sharpe_ratio(returns: pd.Series, periods_per_year: int = 365 * 96)
         float: Annualized Sharpe ratio
     """
     if returns.empty or len(returns) < 2:
+        logger.warning(f"[SHARPE] Returning 0: insufficient returns data (len={len(returns)})")
         return 0.0
 
-    mean_return = returns.mean()
-    std_return = returns.std()
+    mean_return = float(returns.mean())
+    std_return = float(returns.std())
+    non_zero_count = int((returns != 0).sum())
+
+    # DEBUG: Log Sharpe calculation inputs (inline values)
+    logger.info(
+        f"[SHARPE] Inputs: mean={mean_return:.15f}, std={std_return:.15f}, "
+        f"non_zero_returns={non_zero_count}/{len(returns)}"
+    )
 
     # Check for zero or near-zero standard deviation (use small epsilon for floating point comparison)
-    if std_return == 0 or np.isclose(std_return, 0.0, atol=1e-10):
+    std_is_zero = std_return == 0
+    std_near_zero = bool(np.isclose(std_return, 0.0, atol=1e-10))
+
+    if std_is_zero or std_near_zero:
+        logger.warning(
+            f"[SHARPE] RETURNING 0: std={std_return:.15f} is {'zero' if std_is_zero else 'near-zero'}, "
+            f"mean={mean_return:.15f}"
+        )
+        logger.warning(
+            f"[SHARPE] ROOT CAUSE: {'No variance in returns' if non_zero_count == 0 else 'Extremely low variance'}"
+        )
         return 0.0
 
     # Annualize
-    sharpe = (mean_return - RISK_FREE_RATE) / std_return * np.sqrt(periods_per_year)
+    annualization_factor = np.sqrt(periods_per_year)
+    sharpe = (mean_return - RISK_FREE_RATE) / std_return * annualization_factor
+
+    logger.info(
+        f"[SHARPE] Result: sharpe={sharpe:.4f} "
+        f"(mean={mean_return:.12f}, std={std_return:.12f}, annualization={annualization_factor:.2f})"
+    )
 
     return float(sharpe)
 
@@ -291,7 +357,16 @@ def build_equity_curve(
     equity_curve.rename(columns={'close': 'price'}, inplace=True)
     equity_curve['capital'] = float(initial_capital)
 
+    # DEBUG: Log candle timestamp info (inline values for visibility)
+    first_ts = candles['timestamp'].iloc[0]
+    last_ts = candles['timestamp'].iloc[-1]
+    logger.info(
+        f"[EQUITY_CURVE] Candles: count={len(candles)}, "
+        f"ts_type={type(first_ts).__name__}, first={first_ts}, last={last_ts}"
+    )
+
     if not trades:
+        logger.warning("[EQUITY_CURVE] No trades provided - capital will be constant")
         return equity_curve
 
     # Build map of realized P&L by timestamp
@@ -303,19 +378,101 @@ def build_equity_curve(
         current_capital += float(trade.net_pnl)
         pnl_map[trade.exit_time] = current_capital
 
+    # DEBUG: Log pnl_map info (inline values for visibility)
+    if pnl_map:
+        exit_times = list(pnl_map.keys())
+        capitals = list(pnl_map.values())
+        capital_change = capitals[-1] - float(initial_capital)
+        logger.info(
+            f"[EQUITY_CURVE] PnL map: {len(pnl_map)} trades, "
+            f"initial={float(initial_capital):.2f}, final={capitals[-1]:.2f}, "
+            f"change={capital_change:.2f} ({capital_change/float(initial_capital)*100:.2f}%)"
+        )
+        # Log first and last exits for debugging
+        first_exit = exit_times[0]
+        last_exit = exit_times[-1]
+        logger.info(
+            f"[EQUITY_CURVE] Exit timestamps: first={first_exit} ({type(first_exit).__name__}), "
+            f"last={last_exit} ({type(last_exit).__name__})"
+        )
+
+    # Check if timestamps are comparable BEFORE applying
+    if pnl_map and len(equity_curve) > 0:
+        first_candle_ts = equity_curve['timestamp'].iloc[0]
+        last_candle_ts = equity_curve['timestamp'].iloc[-1]
+        first_exit_ts = list(pnl_map.keys())[0]
+        last_exit_ts = list(pnl_map.keys())[-1]
+
+        # Check if any exit falls within candle range
+        try:
+            exits_after_first_candle = first_exit_ts >= first_candle_ts
+            exits_before_last_candle = last_exit_ts <= last_candle_ts
+            logger.info(
+                f"[EQUITY_CURVE] Range check: candles=[{first_candle_ts}, {last_candle_ts}], "
+                f"exits=[{first_exit_ts}, {last_exit_ts}], "
+                f"exits_after_first={exits_after_first_candle}, exits_before_last={exits_before_last_candle}"
+            )
+        except TypeError as e:
+            logger.error(
+                f"[EQUITY_CURVE] TIMESTAMP COMPARISON FAILED: {e}"
+            )
+            logger.error(
+                f"[EQUITY_CURVE] Types: candle_ts={type(first_candle_ts).__name__}, "
+                f"exit_ts={type(first_exit_ts).__name__}"
+            )
+            # Try to show actual values for debugging
+            logger.error(f"[EQUITY_CURVE] candle_ts repr: {repr(first_candle_ts)}")
+            logger.error(f"[EQUITY_CURVE] exit_ts repr: {repr(first_exit_ts)}")
+
     # Apply realized P&L to equity curve
+    matches_found = 0
+    last_applied_capital = float(initial_capital)
+
     for i, row in equity_curve.iterrows():
         timestamp = row['timestamp']
 
         # Find the latest trade exit before or at this timestamp
-        applicable_pnl = initial_capital
+        applicable_pnl = float(initial_capital)
         for exit_time, capital in pnl_map.items():
-            if exit_time <= timestamp:
-                applicable_pnl = capital
-            else:
+            try:
+                if exit_time <= timestamp:
+                    applicable_pnl = capital
+                    matches_found += 1
+                else:
+                    break
+            except TypeError as e:
+                # Comparison failed - log once and break
+                if matches_found == 0:
+                    logger.error(
+                        f"[EQUITY_CURVE] Comparison failed at first attempt: {e}"
+                    )
                 break
 
         equity_curve.at[i, 'capital'] = applicable_pnl
+        if applicable_pnl != last_applied_capital:
+            last_applied_capital = applicable_pnl
+
+    # DEBUG: Log final equity curve stats (inline values for visibility)
+    capital_unique = int(equity_curve['capital'].nunique())
+    capital_min = float(equity_curve['capital'].min())
+    capital_max = float(equity_curve['capital'].max())
+    capital_first = float(equity_curve['capital'].iloc[0])
+    capital_last = float(equity_curve['capital'].iloc[-1])
+
+    logger.info(
+        f"[EQUITY_CURVE] RESULT: {len(equity_curve)} candles, {matches_found} match operations, "
+        f"unique_capitals={capital_unique}"
+    )
+    logger.info(
+        f"[EQUITY_CURVE] Capital: first={capital_first:.2f}, last={capital_last:.2f}, "
+        f"min={capital_min:.2f}, max={capital_max:.2f}"
+    )
+
+    if capital_unique == 1:
+        logger.warning(
+            f"[EQUITY_CURVE] WARNING: Capital is CONSTANT at {capital_first:.2f}! "
+            f"This will cause Sharpe=0 (zero returns variance)"
+        )
 
     return equity_curve
 

@@ -1,0 +1,398 @@
+"""
+Optimization runner.
+
+This module provides the OptimizationRunner class that orchestrates the complete
+optimization process including walk-forward analysis, Optuna study creation,
+and result persistence.
+"""
+
+import logging
+import time
+from typing import Optional
+from datetime import datetime
+from uuid import UUID
+import asyncpg
+import optuna
+
+from .types import (
+    OptimizationConfig,
+    StudyResult,
+    WalkForwardResult,
+    WeightsSearchSpace
+)
+from .config import validate_config, create_search_space
+from .walk_forward import generate_splits_from_db
+from .objective import create_objective_function, evaluate_weights
+from .db import save_weights_set, save_study_result
+
+# Structured logging
+logger = logging.getLogger(__name__)
+
+
+class OptimizationRunner:
+    """
+    Orchestrates the complete optimization process.
+
+    This class:
+    1. Validates configuration
+    2. Generates walk-forward splits
+    3. Runs Optuna optimization on each split
+    4. Evaluates best weights on test sets
+    5. Saves results to database
+    6. Generates comprehensive report
+
+    Attributes:
+        config: Optimization configuration
+        db_pool: Database connection pool
+        search_space: Weights search space
+        run_id: Optional run ID for linking to a specific run
+    """
+
+    def __init__(
+        self,
+        config: OptimizationConfig,
+        db_pool: asyncpg.Pool,
+        search_space: Optional[WeightsSearchSpace] = None,
+        run_id: Optional[UUID] = None
+    ):
+        """
+        Initialize optimization runner.
+
+        Args:
+            config: Optimization configuration
+            db_pool: Database connection pool
+            search_space: Optional custom search space (uses defaults if not provided)
+            run_id: Optional run ID to link results to
+        """
+        self.config = config
+        self.db_pool = db_pool
+        self.search_space = search_space or create_search_space()
+        self.run_id = run_id
+
+        # Validate configuration
+        validate_config(config)
+
+        logger.info(
+            "OptimizationRunner initialized",
+            extra={
+                "study_name": config.study_name,
+                "objective": config.objective.value,
+                "n_trials": config.n_trials,
+                "n_splits": config.n_splits,
+                "run_id": str(run_id) if run_id else None
+            }
+        )
+
+    async def run(self) -> StudyResult:
+        """
+        Run the complete optimization process.
+
+        This is the main entry point that:
+        1. Generates walk-forward splits
+        2. Optimizes on each training split
+        3. Evaluates on each test split
+        4. Aggregates results
+        5. Saves to database
+
+        Returns:
+            StudyResult with complete optimization results
+
+        Raises:
+            Exception: If optimization fails
+        """
+        logger.info(
+            "Starting optimization",
+            extra={"study_name": self.config.study_name}
+        )
+
+        start_time = time.time()
+        started_at = datetime.now()
+
+        try:
+            # Generate walk-forward splits
+            splits = await self._generate_splits()
+
+            # Run optimization on each split
+            walk_forward_results = []
+            best_overall_value = float('-inf')
+            best_overall_params = {}
+
+            for split in splits:
+                logger.info(
+                    f"Processing split {split.split_index + 1}/{len(splits)}",
+                    extra={"split_index": split.split_index}
+                )
+
+                # Optimize on training set
+                train_result = await self._optimize_split(split)
+
+                # Evaluate best params on test set
+                test_score = await evaluate_weights(
+                    weights=train_result["best_params"],
+                    config=self.config,
+                    split=split,
+                    db_pool=self.db_pool,
+                    is_test=True
+                )
+
+                # Create walk-forward result
+                wf_result = WalkForwardResult(
+                    split=split,
+                    train_score=train_result["best_value"],
+                    test_score=test_score,
+                    best_params=train_result["best_params"],
+                    n_trials=train_result["n_trials"],
+                    optimization_time_seconds=train_result["optimization_time"]
+                )
+                walk_forward_results.append(wf_result)
+
+                # Track overall best
+                if test_score > best_overall_value:
+                    best_overall_value = test_score
+                    best_overall_params = train_result["best_params"]
+
+                logger.info(
+                    f"Split {split.split_index + 1} completed",
+                    extra={
+                        "split_index": split.split_index,
+                        "train_score": train_result["best_value"],
+                        "test_score": test_score
+                    }
+                )
+
+            # Calculate total optimization time
+            end_time = time.time()
+            completed_at = datetime.now()
+            optimization_time = end_time - start_time
+
+            # Save best weights to database
+            weights_set_name = f"{self.config.study_name} - {started_at.strftime('%Y-%m-%d %H:%M')}"
+            weights_set_id = await save_weights_set(
+                db_pool=self.db_pool,
+                name=weights_set_name,
+                weights=best_overall_params,
+                optimization_score=best_overall_value,
+                source="optuna",
+                is_active=False  # Don't auto-activate, let user decide
+            )
+
+            # Create study result
+            study_result = StudyResult(
+                study_name=self.config.study_name,
+                run_id=self.run_id,
+                n_trials=sum(wf.n_trials for wf in walk_forward_results),
+                best_value=best_overall_value,
+                best_params=best_overall_params,
+                best_weights=best_overall_params,  # Already normalized by search space
+                weights_set_id=weights_set_id,
+                started_at=started_at,
+                completed_at=completed_at,
+                optimization_time_seconds=optimization_time,
+                walk_forward_results=walk_forward_results,
+                metadata=self.config.to_snapshot()
+            )
+
+            # Save study result to database
+            await save_study_result(self.db_pool, study_result)
+
+            logger.info(
+                "Optimization completed successfully",
+                extra={
+                    "study_name": self.config.study_name,
+                    "best_value": best_overall_value,
+                    "total_trials": study_result.n_trials,
+                    "optimization_time": optimization_time,
+                    "weights_set_id": str(weights_set_id)
+                }
+            )
+
+            return study_result
+
+        except Exception as e:
+            logger.error(
+                "Optimization failed",
+                extra={
+                    "study_name": self.config.study_name,
+                    "error": str(e)
+                },
+                exc_info=True
+            )
+            raise
+
+    async def _generate_splits(self):
+        """Generate walk-forward splits from database."""
+        logger.info("Generating walk-forward splits")
+
+        splits = await generate_splits_from_db(
+            db_pool=self.db_pool,
+            symbol=self.config.symbol,
+            timeframe=self.config.timeframe,
+            n_splits=self.config.n_splits,
+            train_ratio=self.config.train_ratio,
+            mode=self.config.walk_forward_mode,
+            start_date=self.config.start_date,
+            end_date=self.config.end_date
+        )
+
+        logger.info(
+            "Splits generated",
+            extra={"n_splits": len(splits)}
+        )
+
+        return splits
+
+    async def _optimize_split(self, split):
+        """
+        Optimize weights on a single training split.
+
+        Args:
+            split: WalkForwardSplit object
+
+        Returns:
+            Dict with best_value, best_params, n_trials, optimization_time
+        """
+        logger.info(
+            f"Starting optimization on split {split.split_index}",
+            extra={
+                "split_index": split.split_index,
+                "train_start": split.train_start.isoformat(),
+                "train_end": split.train_end.isoformat()
+            }
+        )
+
+        split_start_time = time.time()
+
+        # Create Optuna study
+        study = self._create_study()
+
+        # Create objective function for this split
+        objective_func = create_objective_function(
+            config=self.config,
+            split=split,
+            db_pool=self.db_pool,
+            search_space=self.search_space,
+            is_test=False
+        )
+
+        # Define async wrapper for Optuna (Optuna expects sync functions)
+        # Use nest_asyncio to allow nested event loops
+        def sync_objective(trial: optuna.Trial) -> float:
+            import asyncio
+            import nest_asyncio
+            nest_asyncio.apply()
+            loop = asyncio.get_event_loop()
+            return loop.run_until_complete(objective_func(trial))
+
+        # Run optimization
+        study.optimize(
+            sync_objective,
+            n_trials=self.config.n_trials,
+            show_progress_bar=True
+        )
+
+        split_end_time = time.time()
+        split_optimization_time = split_end_time - split_start_time
+
+        # Extract results
+        best_value = study.best_value
+        best_params = study.best_params
+
+        logger.info(
+            f"Split {split.split_index} optimization completed",
+            extra={
+                "split_index": split.split_index,
+                "best_value": best_value,
+                "n_trials": len(study.trials),
+                "optimization_time": split_optimization_time
+            }
+        )
+
+        return {
+            "best_value": best_value,
+            "best_params": best_params,
+            "n_trials": len(study.trials),
+            "optimization_time": split_optimization_time
+        }
+
+    def _create_study(self) -> optuna.Study:
+        """
+        Create Optuna study with configured sampler and pruner.
+
+        Returns:
+            optuna.Study object
+        """
+        # Create sampler
+        if self.config.sampler == "tpe":
+            sampler = optuna.samplers.TPESampler()
+        elif self.config.sampler == "random":
+            sampler = optuna.samplers.RandomSampler()
+        elif self.config.sampler == "grid":
+            # Grid sampler requires search space definition
+            # For simplicity, fall back to TPE
+            logger.warning("Grid sampler not fully supported, using TPE")
+            sampler = optuna.samplers.TPESampler()
+        elif self.config.sampler == "cmaes":
+            sampler = optuna.samplers.CmaEsSampler()
+        else:
+            logger.warning(f"Unknown sampler {self.config.sampler}, using TPE")
+            sampler = optuna.samplers.TPESampler()
+
+        # Create pruner
+        if self.config.pruner == "median":
+            pruner = optuna.pruners.MedianPruner()
+        elif self.config.pruner == "hyperband":
+            pruner = optuna.pruners.HyperbandPruner()
+        elif self.config.pruner == "none":
+            pruner = optuna.pruners.NopPruner()
+        else:
+            logger.warning(f"Unknown pruner {self.config.pruner}, using median")
+            pruner = optuna.pruners.MedianPruner()
+
+        # Create study
+        study = optuna.create_study(
+            study_name=self.config.study_name,
+            direction="maximize",  # Always maximize (Sharpe, Sortino, etc.)
+            sampler=sampler,
+            pruner=pruner,
+            storage=self.config.storage,  # Use storage if provided for persistence
+            load_if_exists=True  # Allow resuming existing studies
+        )
+
+        logger.info(
+            "Optuna study created",
+            extra={
+                "study_name": self.config.study_name,
+                "sampler": self.config.sampler,
+                "pruner": self.config.pruner,
+                "storage": self.config.storage or "in-memory"
+            }
+        )
+
+        return study
+
+
+async def run_optimization(
+    config: OptimizationConfig,
+    db_pool: asyncpg.Pool,
+    search_space: Optional[WeightsSearchSpace] = None,
+    run_id: Optional[UUID] = None
+) -> StudyResult:
+    """
+    Convenience function to run optimization.
+
+    Args:
+        config: Optimization configuration
+        db_pool: Database connection pool
+        search_space: Optional custom search space
+        run_id: Optional run ID to link results to
+
+    Returns:
+        StudyResult with complete optimization results
+    """
+    runner = OptimizationRunner(
+        config=config,
+        db_pool=db_pool,
+        search_space=search_space,
+        run_id=run_id
+    )
+    return await runner.run()
