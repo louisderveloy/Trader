@@ -1,0 +1,2 @@
+# This directory contains Docker volume data for local development
+# Subdirectories are ignored in .gitignore

@@ -1,0 +1,191 @@
+# ==========================================
+# Development docker-compose
+# Uses local bind mounts in ./volumes/ directory for most services
+# PostgreSQL uses named volume (Windows compatibility)
+# For production, use docker-compose.prod.yml
+# ==========================================
+
+# ==========================================
+# Networks
+# ==========================================
+networks:
+  trader-network:
+    driver: bridge
+
+# ==========================================
+# Volumes
+# ==========================================
+volumes:
+  postgres_data:  # Named volume for PostgreSQL (Windows compatibility)
+
+
+services:
+  # ==========================================
+  # PostgreSQL + TimescaleDB
+  # ==========================================
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    container_name: trader-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-trader_bot}
+      POSTGRES_USER: ${POSTGRES_USER:-trader}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev_password}
+      TIMESCALEDB_TELEMETRY: ${TIMESCALEDB_TELEMETRY:-off}
+    volumes:
+      # Named volume instead of bind mount (Windows compatibility)
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - trader-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-trader} -d ${POSTGRES_DB:-trader_bot}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================
+  # Redis
+  # ==========================================
+  redis:
+    image: redis:7-alpine
+    container_name: trader-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - ./volumes/redis:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - trader-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ==========================================
+  # Trading Bot (Python)
+  # ==========================================
+  bot:
+    container_name: trader-bot
+    build:
+      context: ./bot
+      dockerfile: Dockerfile
+      args:
+        INSTALL_DEV: "true"  # Install dev dependencies in dev environment
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-dev}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-trader}:${POSTGRES_PASSWORD:-dev_password}@postgres:5432/${POSTGRES_DB:-trader_bot}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./bot:/app
+      - ./db:/db
+      - ./tests:/tests  # Mount tests directory for running tests in container
+      - ./volumes/bot_logs:/var/log/trader-bot
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - trader-network
+    develop:
+      watch:
+        - path: ./bot
+          action: sync+restart
+          target: /app
+
+  # ==========================================
+  # API (FastAPI)
+  # ==========================================
+  api:
+    container_name: trader-api
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-dev}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-trader}:${POSTGRES_PASSWORD:-dev_password}@postgres:5432/${POSTGRES_DB:-trader_bot}
+      REDIS_URL: redis://redis:6379/0
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+    volumes:
+      - ./api:/app
+    ports:
+      - "8000:8000"  # Direct access in dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - trader-network
+    develop:
+      watch:
+        - path: ./api
+          action: sync+restart
+          target: /app
+
+  # ==========================================
+  # Dashboard (Vue.js)
+  # ==========================================
+  dashboard:
+    container_name: trader-dashboard
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+      VITE_GRAFANA_BASE_URL: http://localhost:3000
+    volumes:
+      - ./dashboard:/app
+      - /app/node_modules  # Prevent overwriting node_modules
+    ports:
+      - "5173:5173"  # Direct access in dev
+    networks:
+      - trader-network
+    develop:
+      watch:
+        - path: ./dashboard
+          action: sync
+          target: /app
+          ignore:
+            - node_modules/
+
+  # ==========================================
+  # Grafana
+  # ==========================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: trader-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_SERVER_ROOT_URL: http://localhost:3000
+      GF_AUTH_ANONYMOUS_ENABLED: ${GRAFANA_AUTH_ANONYMOUS_ENABLED:-false}
+      GF_AUTH_ANONYMOUS_ORG_ROLE: ${GRAFANA_AUTH_ANONYMOUS_ORG_ROLE:-Viewer}
+      GF_USERS_ALLOW_SIGN_UP: false
+      GF_INSTALL_PLUGINS: ''
+    volumes:
+      - ./volumes/grafana:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    ports:
+      - "3000:3000"  # Direct access in dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - trader-network

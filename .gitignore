@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Docker volumes (local development data)
+volumes/postgres/
+volumes/redis/
+volumes/grafana/
+volumes/traefik/
+volumes/bot_logs/
