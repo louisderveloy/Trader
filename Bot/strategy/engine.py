@@ -294,6 +294,8 @@ class StrategyEngine:
                 total_capital=total_capital,
                 indicator_results=indicator_results
             )
+            # Validate decision is complete with all required fields
+            decision.validate_complete()
 
         # Log decision to database
         await self._log_decision(decision)

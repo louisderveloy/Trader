@@ -97,8 +97,10 @@ def test_calculate_stop_loss_above_entry():
     """Test that stop-loss above entry raises error"""
     config = StopLossConfig(
         mode=StopLossMode.ATR,
-        atr_multiplier=-1.0  # This would put SL above entry
+        atr_multiplier=2.0  # Valid value initially
     )
+    # Bypass config validation by setting after initialization
+    object.__setattr__(config, 'atr_multiplier', -1.0)  # This would put SL above entry
 
     with pytest.raises(ValueError, match="Stop-loss must be below entry"):
         calculate_stop_loss(
@@ -175,8 +177,10 @@ def test_calculate_take_profit_below_entry():
     """Test that take-profit below entry raises error"""
     config = TakeProfitConfig(
         mode=TakeProfitMode.ATR,
-        atr_multiplier=-1.0  # This would put TP below entry
+        atr_multiplier=3.0  # Valid value initially
     )
+    # Bypass config validation by setting after initialization
+    object.__setattr__(config, 'atr_multiplier', -1.0)  # This would put TP below entry
 
     with pytest.raises(ValueError, match="Take-profit must be above entry"):
         calculate_take_profit(

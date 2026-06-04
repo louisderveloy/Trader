@@ -253,17 +253,20 @@ def test_trading_decision_entry_missing_price():
         indicators={"ema": {"signal": 0.75}}
     )
 
+    decision = TradingDecision(
+        decision_type=DecisionType.ENTRY_LONG,
+        timestamp=now,
+        symbol="BTCUSDT",
+        weighted_score=0.75,
+        weights_snapshot=weights_snapshot,
+        indicators_snapshot=indicators_snapshot,
+        decision_reason="Entry signal confirmed"
+        # Missing entry_price
+    )
+
+    # Validation should fail when calling validate_complete()
     with pytest.raises(ValueError, match="entry_price is required"):
-        TradingDecision(
-            decision_type=DecisionType.ENTRY_LONG,
-            timestamp=now,
-            symbol="BTCUSDT",
-            weighted_score=0.75,
-            weights_snapshot=weights_snapshot,
-            indicators_snapshot=indicators_snapshot,
-            decision_reason="Entry signal confirmed"
-            # Missing entry_price
-        )
+        decision.validate_complete()
 
 
 # --- ConfirmationState tests ---

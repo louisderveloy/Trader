@@ -593,6 +593,10 @@ async def test_make_decision_entry_long_after_confirmation(
     # Mock risk manager to allow trade
     mock_risk_manager.can_open_new_trade = AsyncMock(return_value=(True, "OK"))
 
+    # Adjust signals to be above entry threshold (0.6)
+    for indicator in sample_indicator_results:
+        sample_indicator_results[indicator].signal.value = 0.75  # High score for entry
+
     # First decision (pending confirmation)
     decision1 = await strategy_engine.make_decision(
         candles=[],
@@ -650,6 +654,10 @@ async def test_make_decision_entry_blocked_by_risk(
     mock_risk_manager.can_open_new_trade = AsyncMock(
         return_value=(False, "Daily quota reached")
     )
+
+    # Adjust signals to be above entry threshold (0.6)
+    for indicator in sample_indicator_results:
+        sample_indicator_results[indicator].signal.value = 0.75  # High score for entry
 
     # Confirm the signal first
     await strategy_engine._check_confirmation(

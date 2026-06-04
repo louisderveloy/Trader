@@ -73,11 +73,22 @@ class IndicatorSnapshot:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSONB storage."""
+        def serialize_value(value):
+            """Recursively serialize values, converting Decimal to float."""
+            if isinstance(value, Decimal):
+                return float(value)
+            elif isinstance(value, dict):
+                return {k: serialize_value(v) for k, v in value.items()}
+            elif isinstance(value, (list, tuple)):
+                return [serialize_value(v) for v in value]
+            else:
+                return value
+
         return {
             "timestamp": self.timestamp.isoformat(),
             "symbol": self.symbol,
             "candle_close": float(self.candle_close),
-            "indicators": self.indicators
+            "indicators": serialize_value(self.indicators)
         }
 
 
@@ -111,6 +122,15 @@ class TradingDecision:
         if not -1.0 <= self.weighted_score <= 1.0:
             raise ValueError(f"Weighted score must be in [-1, 1], got {self.weighted_score}")
 
+    def validate_complete(self):
+        """
+        Validate that decision is complete with all required fields.
+
+        Should be called after enhancement for ENTRY_LONG decisions.
+
+        Raises:
+            ValueError: If required fields are missing
+        """
         if self.decision_type == DecisionType.ENTRY_LONG:
             if self.entry_price is None:
                 raise ValueError("entry_price is required for ENTRY_LONG decisions")
