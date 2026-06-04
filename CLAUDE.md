@@ -2,7 +2,7 @@
 
 ## Vue d'ensemble du projet
 
-Bot de trading crypto automatisé pour Binance (BTC/USDT en v1), avec backtesting, optimisation des poids par Optuna, dashboard de configuration Vue.js et visualisation Grafana. Projet solo, mono-utilisateur v1.
+Bot de trading crypto automatisé pour Binance (BTC/USDT en v1), avec backtesting, optimisation des poids par Optuna, dashboard de configuration Vue.js. Projet solo, mono-utilisateur v1. Grafana hébergé séparément pour monitoring multi-projets.
 
 ---
 
@@ -10,18 +10,20 @@ Bot de trading crypto automatisé pour Binance (BTC/USDT en v1), avec backtestin
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         Traefik (reverse proxy + HTTPS)         │
-│              ForwardAuth JWT → auth unifiée Vue.js + Grafana    │
-└────────────┬───────────────────┬───────────────────┬────────────┘
-             │                   │                   │
-     bot.localhost        api.localhost     grafana.localhost
-     (Vue.js)             (FastAPI)         (Grafana)
+│                 Traefik (reverse proxy + HTTPS - prod)          │
+│                      JWT auth → Vue.js                           │
+└────────────┬───────────────────┬──────────────────────────────────┘
+             │                   │
+     bot.yourdomain.com    api.yourdomain.com
+     (Vue.js)              (FastAPI)
                                │
                           Redis pub/sub
                                │
                            Bot Python
                                │
-                    PostgreSQL + TimescaleDB
+                    PostgreSQL + TimescaleDB ─────► Grafana externe
+                               │                    (hébergé séparément
+                         (port 5432 exposé)         multi-projets)
 ```
 
 ### Règle fondamentale de communication
@@ -62,10 +64,10 @@ docker-compose.prod.yml     → production VPS
 | Bot trading | Python 3.13 |
 | Backend API | FastAPI |
 | Frontend dashboard | Vue 3 + Vite + Pinia + Vue Router + TailwindCSS |
-| Visualisation | Grafana (connecté PostgreSQL/TimescaleDB) |
+| Visualisation | Grafana (hébergé séparément, connecté PostgreSQL/TimescaleDB) |
 | Base de données | PostgreSQL + extension TimescaleDB |
 | Cache / messaging | Redis (pub/sub + queue) |
-| Reverse proxy | Traefik |
+| Reverse proxy | Traefik (production uniquement) |
 | Optimisation | Optuna |
 | Backtesting rapide | vectorbt |
 | Backtesting validation | custom event-driven |
@@ -198,12 +200,12 @@ Sharpe, Sortino, max drawdown, win rate, profit factor, exposition, comparaison 
 | Page | Contenu |
 |---|---|
 | Login | Auth JWT |
-| Accueil | État bot, P&L jour/semaine, dernière décision, iframe équity curve Grafana |
+| Accueil | État bot, P&L jour/semaine, dernière décision, lien optionnel vers Grafana externe |
 | Configuration | Tous les paramètres configurables, tooltips FR obligatoires |
 | Indicateur utilisateur | Sliders par crypto, note, expiration |
-| Runs | Liste backtests/optims/live, liens Grafana |
+| Runs | Liste backtests/optims/live, liens optionnels Grafana externe |
 | Optimisations | Lancer étude Optuna, voir résultats, activer set de poids |
-| Trades | Historique avec filtres, lien Grafana pour analyse |
+| Trades | Historique avec filtres, lien optionnel Grafana externe pour analyse |
 | Logs & erreurs | Visualisation rapide |
 
 ### Règle composants
@@ -215,9 +217,19 @@ Sharpe, Sortino, max drawdown, win rate, profit factor, exposition, comparaison 
 
 ## Grafana
 
-### Rôle
+### Architecture (hébergement externe)
+- **Grafana hébergé sur serveur séparé** pour monitoring multi-projets
+- Se connecte à PostgreSQL/TimescaleDB via port 5432 (exposé)
 - Visualisation et analyse uniquement (jamais de config ni d'actions)
-- Connecté directement à PostgreSQL/TimescaleDB
+- Les dashboards JSON sont versionnés dans `/grafana/` pour référence/export
+
+### Configuration de connexion externe
+Pour connecter Grafana externe à la base de données :
+- **Host** : `<ip-serveur>:5432`
+- **Database** : `${POSTGRES_DB}` (voir .env)
+- **User** : `${POSTGRES_USER}` (voir .env)
+- **Password** : `${POSTGRES_PASSWORD}` (voir .env)
+- **SSL Mode** : prefer ou require (production)
 
 ### Dashboards versionnés (JSON dans `/grafana/`)
 | Dashboard | Contenu |
@@ -230,44 +242,42 @@ Sharpe, Sortino, max drawdown, win rate, profit factor, exposition, comparaison 
 | Optimisations Optuna | Parallel coordinates, importance des paramètres |
 | Santé bot | Latence, erreurs, ordres rejetés |
 
-### Configuration
-- Provisionning automatique datasources + dashboards au démarrage Docker
-- **Mode anonyme** (auth gérée en amont par Traefik ForwardAuth)
-- Thème clair (cohérence avec Vue.js)
+### Import des dashboards
+- Exporter JSON depuis `/grafana/dashboards/`
+- Importer dans Grafana externe via UI
+- Configurer datasource PostgreSQL dans Grafana (voir `/grafana/provisioning/datasources/` pour référence)
 
 ---
 
 ## Authentification
 
-### Architecture actuelle (Option A)
+### Architecture actuelle
 ```
-Navigateur → Traefik ForwardAuth (vérifie JWT) → Vue.js / Grafana
+Navigateur → Traefik (prod) → Vue.js → API (FastAPI avec JWT)
 ```
 - JWT généré par FastAPI au login
-- Grafana en mode anonyme derrière Traefik ForwardAuth
-- Un seul login pour tout
-
-### Migration future (Option B — multi-comptes Grafana)
-- Traefik injecte header `X-Webauth-User` après vérif JWT
-- Grafana auth proxy lit le header et crée/connecte l'utilisateur
-- Procédure documentée dans `/docs/A5_auth_migration.md`
+- Traefik utilisé uniquement en production (pas en dev)
+- Grafana hébergé séparément avec sa propre authentification
+- Le dashboard peut optionnellement linker vers Grafana externe via `VITE_GRAFANA_BASE_URL`
 
 ---
 
 ## Environnements
 
 ### Dev local
-- Sous-domaines : `bot.localhost`, `api.localhost`, `grafana.localhost`
-- HTTPS local via mkcert
+- Accès direct par ports : `localhost:5173` (dashboard), `localhost:8000` (API), `localhost:5432` (PostgreSQL)
+- Pas de Traefik en dev
 - Binance testnet (`BINANCE_TESTNET=true`)
 - `docker-compose.yml`
+- PostgreSQL exposé sur port 5432 pour connexion Grafana externe
 
 ### Production VPS
-- Sous-domaines : `bot.tondomaine.fr`, `api.tondomaine.fr`, `grafana.tondomaine.fr`
+- Sous-domaines : `bot.tondomaine.fr`, `api.tondomaine.fr`
 - HTTPS via Traefik + Let's Encrypt (auto)
 - `docker-compose.prod.yml`
 - Secrets uniquement via variables d'environnement (jamais dans le repo)
 - Backups PostgreSQL automatiques (cron + dump compressé)
+- PostgreSQL exposé sur port 5432 pour connexion Grafana externe (protéger avec firewall)
 
 ---
 

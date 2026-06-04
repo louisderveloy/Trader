@@ -17,7 +17,6 @@ networks:
 volumes:
   postgres_data:
   redis_data:
-  grafana_data:
   traefik_certs:
   bot_logs:
 
@@ -166,7 +165,7 @@ services:
       dockerfile: Dockerfile.prod  # Production Dockerfile with nginx
       args:
         VITE_API_BASE_URL: https://${DOMAIN_API}
-        VITE_GRAFANA_BASE_URL: https://${DOMAIN_GRAFANA}
+        # VITE_GRAFANA_BASE_URL: Set externally if using external Grafana
     restart: unless-stopped
     networks:
       - trader-network
@@ -179,33 +178,15 @@ services:
       - "traefik.http.services.dashboard.loadbalancer.server.port=80"
 
   # ==========================================
-  # Grafana
+  # NOTE: Grafana has been moved to external hosting
   # ==========================================
-  grafana:
-    image: grafana/grafana:latest
-    container_name: trader-grafana
-    restart: unless-stopped
-    environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
-      GF_SERVER_ROOT_URL: https://${DOMAIN_GRAFANA}
-      GF_AUTH_ANONYMOUS_ENABLED: ${GRAFANA_AUTH_ANONYMOUS_ENABLED:-false}
-      GF_AUTH_ANONYMOUS_ORG_ROLE: ${GRAFANA_AUTH_ANONYMOUS_ORG_ROLE:-Viewer}
-      GF_USERS_ALLOW_SIGN_UP: false
-      GF_INSTALL_PLUGINS: ''
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./grafana/provisioning:/etc/grafana/provisioning
-      - ./grafana/dashboards:/var/lib/grafana/dashboards
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - trader-network
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.grafana.rule=Host(`${DOMAIN_GRAFANA}`)"
-      - "traefik.http.routers.grafana.entrypoints=websecure"
-      - "traefik.http.routers.grafana.tls=true"
-      - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
-      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+  # Grafana is now hosted on a separate server for multi-project monitoring.
+  # The PostgreSQL database remains exposed on port 5432 for external Grafana to connect.
+  # You will need to:
+  # 1. Configure external Grafana to connect to this database using:
+  #    Host: <your-server-ip>:5432
+  #    Database: ${POSTGRES_DB}
+  #    User: ${POSTGRES_USER}
+  #    Password: ${POSTGRES_PASSWORD}
+  # 2. Import dashboard JSON files from /grafana/dashboards/ into external Grafana
+  # 3. Configure datasource in external Grafana (see /grafana/provisioning/datasources/ for reference)

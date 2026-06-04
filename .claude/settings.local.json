@@ -8,7 +8,8 @@
       "Bash(docker exec:*)",
       "Bash(python -m pytest:*)",
       "Bash(docker compose exec:*)",
-      "Bash(docker compose logs:*)"
+      "Bash(docker compose logs:*)",
+      "Bash(docker compose:*)"
     ]
   }
 }

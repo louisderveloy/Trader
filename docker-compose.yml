@@ -147,7 +147,7 @@ services:
       - .env
     environment:
       VITE_API_BASE_URL: http://localhost:8000
-      VITE_GRAFANA_BASE_URL: http://localhost:3000
+      # VITE_GRAFANA_BASE_URL: Set externally if using external Grafana
     volumes:
       - ./dashboard:/app
       - /app/node_modules  # Prevent overwriting node_modules
@@ -164,28 +164,8 @@ services:
             - node_modules/
 
   # ==========================================
-  # Grafana
+  # NOTE: Grafana has been moved to external hosting
   # ==========================================
-  grafana:
-    image: grafana/grafana:latest
-    container_name: trader-grafana
-    restart: unless-stopped
-    environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
-      GF_SERVER_ROOT_URL: http://localhost:3000
-      GF_AUTH_ANONYMOUS_ENABLED: ${GRAFANA_AUTH_ANONYMOUS_ENABLED:-false}
-      GF_AUTH_ANONYMOUS_ORG_ROLE: ${GRAFANA_AUTH_ANONYMOUS_ORG_ROLE:-Viewer}
-      GF_USERS_ALLOW_SIGN_UP: false
-      GF_INSTALL_PLUGINS: ''
-    volumes:
-      - ./volumes/grafana:/var/lib/grafana
-      - ./grafana/provisioning:/etc/grafana/provisioning
-      - ./grafana/dashboards:/var/lib/grafana/dashboards
-    ports:
-      - "3000:3000"  # Direct access in dev
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - trader-network
+  # Grafana is now hosted on a separate server for multi-project monitoring.
+  # The PostgreSQL database remains exposed on port 5432 for external Grafana to connect.
+  # Dashboard JSON files are kept in /grafana/ folder for reference/export.

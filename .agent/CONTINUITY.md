@@ -90,6 +90,26 @@ Implementing Optuna-based optimization with walk-forward analysis for indicator 
 
 ## [DECISIONS]
 
+### 2026-06-04T22:00Z [USER] Architecture change: Grafana moved to external hosting
+- **Decision:** Move Grafana to separate external server for multi-project monitoring
+- **Rationale:** User wants to use one Grafana instance to monitor multiple projects, not just this trading bot
+- **Impact:**
+  - Removed Grafana service from docker-compose.yml (dev)
+  - Removed Grafana service from docker-compose.prod.yml (prod)
+  - Removed grafana_data volume from docker-compose.prod.yml
+  - Removed DOMAIN_GRAFANA from .env.example
+  - Updated CLAUDE.md architecture documentation
+  - PostgreSQL port 5432 remains exposed for external Grafana connection
+  - Dashboard JSON files kept in /grafana/ folder for reference/export
+  - Dashboard can optionally link to external Grafana via VITE_GRAFANA_BASE_URL
+- **Migration steps:**
+  1. Stop and remove Grafana container
+  2. Remove Grafana image from host
+  3. Configure external Grafana to connect to PostgreSQL (host:5432)
+  4. Import dashboard JSON files from /grafana/dashboards/ into external Grafana
+  5. Set VITE_GRAFANA_BASE_URL in .env if dashboard should link to external Grafana
+- **Result:** Cleaner separation of concerns, one Grafana for multiple projects
+
 ### 2026-06-03T18:45Z [CODE] Python version mismatch detected
 - Dockerfile uses Python 3.14-slim, but CLAUDE.md specifies 3.13
 - **Decision:** Will standardize on Python 3.13 as per spec
