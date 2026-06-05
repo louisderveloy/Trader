@@ -106,10 +106,22 @@ app.add_middleware(
 from .auth.routes import router as auth_router
 from .routes.health import router as health_router
 from .routes.runs import router as runs_router
+from .routes.trades import router as trades_router
+from .routes.signals import router as signals_router
+from .routes.orders import router as orders_router
+from .routes.weights import router as weights_router
+from .routes.optimizations import router as optimizations_router
+from .routes.config import router as config_router
 
 app.include_router(health_router, tags=["health"])
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
 app.include_router(runs_router, prefix="/runs", tags=["runs"])
+app.include_router(trades_router, prefix="/trades", tags=["trades"])
+app.include_router(signals_router, prefix="/signals", tags=["signals"])
+app.include_router(orders_router, prefix="/orders", tags=["orders"])
+app.include_router(weights_router, prefix="/weights", tags=["weights"])
+app.include_router(optimizations_router, prefix="/optimizations", tags=["optimizations"])
+app.include_router(config_router, prefix="/config", tags=["config"])
 
 
 @app.get("/")

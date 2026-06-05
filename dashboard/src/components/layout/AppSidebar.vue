@@ -111,31 +111,31 @@ const navItems = computed(() => [
     path: '/configuration',
     label: 'Configuration',
     icon: ConfigIcon,
-    disabled: true, // Wave 2
+    disabled: false, // Wave 2 ✅ ACTIVE
   },
   {
     path: '/user-indicator',
     label: 'Indicateur Utilisateur',
     icon: ChartIcon,
-    disabled: true, // Wave 2
+    disabled: false, // Wave 2 ✅ ACTIVE
   },
   {
     path: '/optimizations',
     label: 'Optimisations',
     icon: ChartIcon,
-    disabled: true, // Wave 3
+    disabled: false, // Wave 3 ✅ ACTIVE
   },
   {
     path: '/trades',
     label: 'Trades',
     icon: ChartIcon,
-    disabled: true, // Wave 3
+    disabled: false, // Wave 3 ✅ ACTIVE
   },
   {
     path: '/logs',
     label: 'Logs',
     icon: ChartIcon,
-    disabled: true, // Wave 3
+    disabled: false, // Wave 3 ✅ ACTIVE
   },
 ])
 

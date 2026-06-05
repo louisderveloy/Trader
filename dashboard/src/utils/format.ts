@@ -13,6 +13,13 @@ export function formatDate(date: string | Date): string {
 }
 
 /**
+ * Format date with time (alias for formatDate)
+ */
+export function formatDateTime(date: string | Date): string {
+  return format(new Date(date), 'dd/MM/yyyy HH:mm', { locale: fr })
+}
+
+/**
  * Format date as dd/MM/yyyy (short)
  */
 export function formatDateShort(date: string | Date): string {

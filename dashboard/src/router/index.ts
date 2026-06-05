@@ -26,36 +26,37 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/RunsView.vue'),
     meta: { requiresAuth: true },
   },
-  // Placeholder routes for future waves (Wave 2-3)
+  // Wave 2: Configuration & User Indicator
   {
     path: '/configuration',
     name: 'configuration',
-    component: () => import('@/views/PlaceholderView.vue'),
-    meta: { requiresAuth: true, comingSoon: true },
+    component: () => import('@/views/ConfigurationView.vue'),
+    meta: { requiresAuth: true },
   },
   {
     path: '/user-indicator',
     name: 'user-indicator',
-    component: () => import('@/views/PlaceholderView.vue'),
-    meta: { requiresAuth: true, comingSoon: true },
+    component: () => import('@/views/UserIndicatorView.vue'),
+    meta: { requiresAuth: true },
   },
+  // Wave 3: Optimizations, Trades, Logs
   {
     path: '/optimizations',
     name: 'optimizations',
-    component: () => import('@/views/PlaceholderView.vue'),
-    meta: { requiresAuth: true, comingSoon: true },
+    component: () => import('@/views/OptimizationsView.vue'),
+    meta: { requiresAuth: true },
   },
   {
     path: '/trades',
     name: 'trades',
-    component: () => import('@/views/PlaceholderView.vue'),
-    meta: { requiresAuth: true, comingSoon: true },
+    component: () => import('@/views/TradesView.vue'),
+    meta: { requiresAuth: true },
   },
   {
     path: '/logs',
     name: 'logs',
-    component: () => import('@/views/PlaceholderView.vue'),
-    meta: { requiresAuth: true, comingSoon: true },
+    component: () => import('@/views/LogsView.vue'),
+    meta: { requiresAuth: true },
   },
 ]
 
