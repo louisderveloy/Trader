@@ -303,6 +303,7 @@ class WeightsSearchSpace:
         min_weight: Minimum weight value
         max_weight: Maximum weight value
         normalize: Whether to normalize weights to sum to 1.0
+        fixed_weights: Dict of indicator names to fixed weight values (not optimized)
     """
 
     indicators: List[str] = field(default_factory=lambda: [
@@ -311,6 +312,9 @@ class WeightsSearchSpace:
     min_weight: float = 0.0
     max_weight: float = 1.0
     normalize: bool = True
+    fixed_weights: Dict[str, float] = field(default_factory=lambda: {
+        "user_indicator": 0.05  # Fixed to 5% - only a boost, not main decision driver
+    })
 
     def __post_init__(self):
         """Validate search space."""
@@ -325,6 +329,9 @@ class WeightsSearchSpace:
         """
         Suggest indicator weights using Optuna trial.
 
+        Fixed weights (from fixed_weights dict) are not optimized and keep their fixed values.
+        The remaining weights are optimized and normalized together.
+
         Args:
             trial: Optuna trial object
 
@@ -332,13 +339,26 @@ class WeightsSearchSpace:
             Dict mapping indicator names to weights
         """
         weights = {}
-        for indicator in self.indicators:
+
+        # Separate indicators into fixed and optimizable
+        optimizable_indicators = [
+            ind for ind in self.indicators
+            if ind not in self.fixed_weights
+        ]
+
+        # Suggest weights for optimizable indicators only
+        for indicator in optimizable_indicators:
             weight = trial.suggest_float(
                 f"weight_{indicator}",
                 self.min_weight,
                 self.max_weight
             )
             weights[indicator] = weight
+
+        # Add fixed weights (these are not optimized)
+        for indicator, fixed_value in self.fixed_weights.items():
+            if indicator in self.indicators:
+                weights[indicator] = fixed_value
 
         # Normalize if requested
         if self.normalize and weights:

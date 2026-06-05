@@ -1276,11 +1276,13 @@ User should verify:
 10. ⏳ Manual testing checklist completion (user action required)
 
 **Next Phase:**
-- Phase 10: Grafana dashboards (external hosting, JSON files versioned in /grafana/)
 - Phase 11: Discord notifications
 - Phase 12: Automated tests
-- Dashboard Wave 2: Configuration + User Indicator (blocked on Phase 8 endpoints)
-- Dashboard Wave 3: Optimizations + Trades + Logs (blocked on Phase 8 endpoints)
+- Phase 13: VPS production deployment
+- Phase 14: Paper trading (4-8 weeks minimum)
+- Phase 15: Live trading
+
+**Note:** Phase 10 (Grafana dashboards) removed from scope - Grafana is hosted externally for monitoring multiple projects, not part of this bot's core deliverables.
 
 ### 2026-06-05T[CURRENT] [CODE] Phase 9 — Dashboard Real Data Integration & Enhancements Complete ✅
 
