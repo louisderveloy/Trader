@@ -186,22 +186,26 @@ async def get_recent_errors(
         asyncpg.PostgresError: Database error
     """
     conditions = []
-    params = {}
+    params = []
+    param_idx = 1
 
     if run_id is not None:
-        conditions.append("run_id = :run_id")
-        params["run_id"] = run_id
+        conditions.append(f"run_id = ${param_idx}")
+        params.append(run_id)
+        param_idx += 1
 
     if severity is not None:
-        conditions.append("severity = :severity")
-        params["severity"] = severity.value
+        conditions.append(f"severity = ${param_idx}")
+        params.append(severity.value)
+        param_idx += 1
 
     if category is not None:
-        conditions.append("category = :category")
-        params["category"] = category.value
+        conditions.append(f"category = ${param_idx}")
+        params.append(category.value)
+        param_idx += 1
 
     where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
-    params["limit"] = limit
+    params.append(limit)
 
     query = f"""
         SELECT
@@ -211,11 +215,11 @@ async def get_recent_errors(
         FROM errors_log
         {where_clause}
         ORDER BY timestamp DESC
-        LIMIT :limit
+        LIMIT ${param_idx}
     """
 
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch(query, **params)
+        rows = await conn.fetch(query, *params)
 
     errors = [dict(row) for row in rows]
     logger.debug(f"Retrieved {len(errors)} recent errors")
@@ -244,19 +248,23 @@ async def count_errors(
         asyncpg.PostgresError: Database error
     """
     conditions = []
-    params = {}
+    params = []
+    param_idx = 1
 
     if run_id is not None:
-        conditions.append("run_id = :run_id")
-        params["run_id"] = run_id
+        conditions.append(f"run_id = ${param_idx}")
+        params.append(run_id)
+        param_idx += 1
 
     if severity is not None:
-        conditions.append("severity = :severity")
-        params["severity"] = severity.value
+        conditions.append(f"severity = ${param_idx}")
+        params.append(severity.value)
+        param_idx += 1
 
     if category is not None:
-        conditions.append("category = :category")
-        params["category"] = category.value
+        conditions.append(f"category = ${param_idx}")
+        params.append(category.value)
+        param_idx += 1
 
     where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
 
@@ -267,7 +275,7 @@ async def count_errors(
     """
 
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(query, **params)
+        row = await conn.fetchrow(query, *params)
 
     count = row["count"]
     return count

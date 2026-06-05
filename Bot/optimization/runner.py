@@ -9,7 +9,8 @@ and result persistence.
 import logging
 import time
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
+from decimal import Decimal
 from uuid import UUID
 import asyncpg
 import optuna
@@ -24,6 +25,11 @@ from .config import validate_config, create_search_space
 from .walk_forward import generate_splits_from_db
 from .objective import create_objective_function, evaluate_weights
 from .db import save_weights_set, save_study_result
+
+from runs.types import RunConfig, RunType, RunEnvironment, RunResult
+from runs.context import create_run, run_context
+from runs.manager import RunManager
+from runs.errors import log_exception, ErrorCategory, ErrorSeverity
 
 # Structured logging
 logger = logging.getLogger(__name__)
@@ -88,11 +94,13 @@ class OptimizationRunner:
         Run the complete optimization process.
 
         This is the main entry point that:
-        1. Generates walk-forward splits
-        2. Optimizes on each training split
-        3. Evaluates on each test split
-        4. Aggregates results
-        5. Saves to database
+        1. Creates run record if not provided
+        2. Generates walk-forward splits
+        3. Optimizes on each training split
+        4. Evaluates on each test split
+        5. Aggregates results
+        6. Saves to database
+        7. Updates run status
 
         Returns:
             StudyResult with complete optimization results
@@ -105,8 +113,33 @@ class OptimizationRunner:
             extra={"study_name": self.config.study_name}
         )
 
+        # Create run record if not provided
+        if self.run_id is None:
+            run_config = RunConfig(
+                run_type=RunType.OPTIMIZATION,
+                environment=RunEnvironment.DEV,
+                symbol=self.config.symbol,
+                timeframe=self.config.timeframe,
+                start_date=self.config.start_date,
+                end_date=self.config.end_date,
+                initial_capital=Decimal("10000"),  # Default, not used in optimization
+                strategy_config=self.config.to_snapshot(),
+                optimization_config=self.config.to_snapshot(),
+            )
+
+            async with create_run(self.db_pool, run_config) as run:
+                async with run_context(run):
+                    self.run_id = run.id
+                    logger.info(f"Created optimization run with ID: {run.id}")
+                    return await self._run_optimization()
+        else:
+            # Run with provided run_id (don't create new run)
+            return await self._run_optimization()
+
+    async def _run_optimization(self) -> StudyResult:
+        """Internal optimization logic."""
         start_time = time.time()
-        started_at = datetime.now()
+        started_at = datetime.now(timezone.utc)
 
         try:
             # Generate walk-forward splits
@@ -162,7 +195,7 @@ class OptimizationRunner:
 
             # Calculate total optimization time
             end_time = time.time()
-            completed_at = datetime.now()
+            completed_at = datetime.now(timezone.utc)
             optimization_time = end_time - start_time
 
             # Save best weights to database
@@ -193,7 +226,15 @@ class OptimizationRunner:
             )
 
             # Save study result to database
-            await save_study_result(self.db_pool, study_result)
+            study_db_id = await save_study_result(self.db_pool, study_result)
+
+            # Link run to optuna study if we have a run_id
+            if self.run_id and study_db_id:
+                try:
+                    manager = RunManager(self.db_pool)
+                    await manager.link_optuna_study(self.run_id, study_db_id)
+                except Exception as e:
+                    logger.warning(f"Failed to link run to optuna study: {e}")
 
             logger.info(
                 "Optimization completed successfully",
@@ -209,6 +250,19 @@ class OptimizationRunner:
             return study_result
 
         except Exception as e:
+            # Log error to database
+            try:
+                await log_exception(
+                    self.db_pool,
+                    e,
+                    severity=ErrorSeverity.HIGH,
+                    category=ErrorCategory.STRATEGY,
+                    context={"study_name": self.config.study_name},
+                    run_id=self.run_id,
+                )
+            except Exception as log_err:
+                logger.warning(f"Failed to log exception: {log_err}")
+
             logger.error(
                 "Optimization failed",
                 extra={

@@ -35,6 +35,10 @@ from strategy.types import DecisionType, TradingDecision
 # Import indicators for signal calculation
 from indicators.types import CandleData
 
+# Import error logging
+from runs.errors import log_exception, ErrorCategory, ErrorSeverity
+from runs.context import get_current_run_id
+
 # Structured logging
 logger = logging.getLogger(__name__)
 
@@ -159,6 +163,23 @@ class EventDrivenBacktester(BacktesterBase):
             )
             result.success = False
             result.error_message = str(e)
+
+            # Log error to database if db_pool is available
+            if self.db_pool:
+                try:
+                    await log_exception(
+                        self.db_pool, e,
+                        severity=ErrorSeverity.HIGH,
+                        category=ErrorCategory.STRATEGY,
+                        context={
+                            "symbol": self.config.symbol,
+                            "timeframe": self.config.timeframe,
+                            "engine": "event_driven",
+                        },
+                        run_id=get_current_run_id(),
+                    )
+                except Exception as log_err:
+                    logger.warning(f"Failed to log exception to database: {log_err}")
 
         result.execution_time_seconds = time.time() - start_time
 

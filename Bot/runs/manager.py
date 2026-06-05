@@ -4,6 +4,7 @@ Run manager for CRUD operations on runs table.
 This module provides the RunManager class for creating, updating, and querying
 trading runs in the database.
 """
+import json
 
 import asyncpg
 import logging
@@ -60,7 +61,14 @@ class RunManager:
         """
         now = datetime.now(timezone.utc)
 
+        def _normalize_run_config(_run_config: dict) -> dict:
+            _run_config["weights_set_id"] =str(_run_config["weights_set_id"])
+            return _run_config
+
+
         async with self.db_pool.acquire() as conn:
+            logger.debug(f"Creating new run, run_config: {run_config.to_dict()}")
+            logger.debug(f"Creating new run, run_config type: {[(iten[0], type(iten[1])) for iten in run_config.to_dict().items()]}")
             row = await conn.fetchrow(
                 """
                 INSERT INTO runs (
@@ -84,7 +92,7 @@ class RunManager:
                 run_config.timeframe,
                 run_config.start_date,
                 run_config.end_date,
-                run_config.to_dict(),
+                json.dumps(_normalize_run_config(run_config.to_dict())),
                 run_config.weights_set_id,
                 now,
             )
@@ -278,12 +286,12 @@ class RunManager:
         logger.info(f"Linked run {run_id} to Optuna study {study_id}")
         return updated_run
 
-    async def query_runs(self, filter: RunFilter) -> list[Run]:
+    async def query_runs(self, run_filter: RunFilter) -> list[Run]:
         """
         Query runs with filtering.
 
         Args:
-            filter: Filter criteria
+            run_filter: Filter criteria
 
         Returns:
             List of matching runs
@@ -291,13 +299,65 @@ class RunManager:
         Raises:
             asyncpg.PostgresError: Database error
         """
-        # Build WHERE clause
-        conditions, params = filter.to_sql_conditions()
+        # Build WHERE clause with positional parameters
+        conditions = []
+        params = []
+        param_idx = 1
+
+        if run_filter.run_type:
+            conditions.append(f"run_type = ${param_idx}")
+            params.append(run_filter.run_type.value)
+            param_idx += 1
+
+        if run_filter.status:
+            conditions.append(f"status = ${param_idx}")
+            params.append(run_filter.status.value)
+            param_idx += 1
+
+        if run_filter.environment:
+            conditions.append(f"environment = ${param_idx}")
+            params.append(run_filter.environment.value)
+            param_idx += 1
+
+        if run_filter.symbol:
+            conditions.append(f"symbol = ${param_idx}")
+            params.append(run_filter.symbol)
+            param_idx += 1
+
+        if run_filter.timeframe:
+            conditions.append(f"timeframe = ${param_idx}")
+            params.append(run_filter.timeframe)
+            param_idx += 1
+
+        if run_filter.created_after:
+            conditions.append(f"created_at >= ${param_idx}")
+            params.append(run_filter.created_after)
+            param_idx += 1
+
+        if run_filter.created_before:
+            conditions.append(f"created_at <= ${param_idx}")
+            params.append(run_filter.created_before)
+            param_idx += 1
+
+        if run_filter.weights_set_id:
+            conditions.append(f"weights_set_id = ${param_idx}")
+            params.append(run_filter.weights_set_id)
+            param_idx += 1
+
+        if run_filter.optuna_study_id:
+            conditions.append(f"optuna_study_id = ${param_idx}")
+            params.append(run_filter.optuna_study_id)
+            param_idx += 1
+
         where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
 
-        # Add limit and offset to params
-        params["limit"] = filter.limit
-        params["offset"] = filter.offset
+        # Add limit and offset
+        limit_param = f"${param_idx}"
+        params.append(run_filter.limit)
+        param_idx += 1
+
+        offset_param = f"${param_idx}"
+        params.append(run_filter.offset)
 
         query = f"""
             SELECT
@@ -309,22 +369,22 @@ class RunManager:
             FROM runs
             {where_clause}
             ORDER BY created_at DESC
-            LIMIT :limit OFFSET :offset
+            LIMIT {limit_param} OFFSET {offset_param}
         """
 
         async with self.db_pool.acquire() as conn:
-            rows = await conn.fetch(query, **params)
+            rows = await conn.fetch(query, *params)
 
         runs = [Run(**dict(row)) for row in rows]
         logger.debug(f"Query returned {len(runs)} runs")
         return runs
 
-    async def count_runs(self, filter: RunFilter) -> int:
+    async def count_runs(self, run_filter: RunFilter) -> int:
         """
         Count runs matching filter.
 
         Args:
-            filter: Filter criteria
+            run_filter: Filter criteria
 
         Returns:
             Number of matching runs
@@ -332,7 +392,56 @@ class RunManager:
         Raises:
             asyncpg.PostgresError: Database error
         """
-        conditions, params = filter.to_sql_conditions()
+        # Build WHERE clause with positional parameters
+        conditions = []
+        params = []
+        param_idx = 1
+
+        if run_filter.run_type:
+            conditions.append(f"run_type = ${param_idx}")
+            params.append(run_filter.run_type.value)
+            param_idx += 1
+
+        if run_filter.status:
+            conditions.append(f"status = ${param_idx}")
+            params.append(run_filter.status.value)
+            param_idx += 1
+
+        if run_filter.environment:
+            conditions.append(f"environment = ${param_idx}")
+            params.append(run_filter.environment.value)
+            param_idx += 1
+
+        if run_filter.symbol:
+            conditions.append(f"symbol = ${param_idx}")
+            params.append(run_filter.symbol)
+            param_idx += 1
+
+        if run_filter.timeframe:
+            conditions.append(f"timeframe = ${param_idx}")
+            params.append(run_filter.timeframe)
+            param_idx += 1
+
+        if run_filter.created_after:
+            conditions.append(f"created_at >= ${param_idx}")
+            params.append(run_filter.created_after)
+            param_idx += 1
+
+        if run_filter.created_before:
+            conditions.append(f"created_at <= ${param_idx}")
+            params.append(run_filter.created_before)
+            param_idx += 1
+
+        if run_filter.weights_set_id:
+            conditions.append(f"weights_set_id = ${param_idx}")
+            params.append(run_filter.weights_set_id)
+            param_idx += 1
+
+        if run_filter.optuna_study_id:
+            conditions.append(f"optuna_study_id = ${param_idx}")
+            params.append(run_filter.optuna_study_id)
+            param_idx += 1
+
         where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
 
         query = f"""
@@ -342,7 +451,7 @@ class RunManager:
         """
 
         async with self.db_pool.acquire() as conn:
-            row = await conn.fetchrow(query, **params)
+            row = await conn.fetchrow(query, *params)
 
         count = row["count"]
         logger.debug(f"Count query returned {count} runs")
@@ -390,10 +499,10 @@ class RunManager:
         Raises:
             asyncpg.PostgresError: Database error
         """
-        filter = RunFilter(run_type=run_type, limit=1000)
+        run_filter = RunFilter(run_type=run_type, limit=1000)
 
         # Get all runs and filter for active status
-        all_runs = await self.query_runs(filter)
+        all_runs = await self.query_runs(run_filter)
         active_runs = [
             run
             for run in all_runs

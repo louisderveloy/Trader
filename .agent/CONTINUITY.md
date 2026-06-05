@@ -1537,3 +1537,99 @@ docker compose exec bot python -m main live --symbol BTCUSDT
   - Troubleshooting guide
   - Docker commands reference
 
+### 2026-06-05T23:30Z [CODE] Database Logging Integration — All 8 Phases Complete ✅
+
+**Status:** ✅ Complete
+
+**Summary:**
+Implemented comprehensive database logging for all events that should be persisted but weren't. This includes run lifecycle, order tracking, error logging, notifications, and indicator values.
+
+**Files created:**
+1. `db/migrations/versions/003_update_errors_log_schema.py` - Migration to fix errors_log schema mismatch
+2. `bot/runs/orders.py` (~200 lines) - Complete order lifecycle logging module
+3. `bot/runs/indicators.py` (~320 lines) - Indicator values logging module with batch support
+4. `bot/notifications/__init__.py` - Package init
+5. `bot/notifications/discord.py` (~250 lines) - Discord webhook notifications with rate limiting
+
+**Files modified:**
+1. `bot/runs/errors.py` - Fixed asyncpg parameter syntax (named → positional $1, $2)
+2. `bot/runs/manager.py` - Fixed asyncpg parameter syntax in query_runs() and count_runs()
+3. `bot/scripts/backtest.py` - Integrated run lifecycle with create_run() context manager
+4. `bot/optimization/runner.py` - Added run lifecycle management and error logging
+5. `bot/optimization/db.py` - Changed save_study_result() to return study_id
+6. `bot/scripts/trading.py` - Added order logging, error logging, fixed run_id type (UUID → int)
+7. `bot/backtesting/event_driven.py` - Added error logging in exception handlers
+8. `bot/backtesting/vectorbt_engine.py` - Added error logging in exception handlers
+
+**Key features implemented:**
+
+**Phase 1: Schema Migration**
+- Added `severity` column (VARCHAR 20)
+- Renamed columns: error_type→category, message→error_message, stack_trace→error_traceback, metadata→context, occurred_at→timestamp
+
+**Phase 2: Backtest Integration**
+- Wrapped backtest execution with `create_run()` context manager
+- Added `_execute_backtest()` and `_save_backtest_result()` helper functions
+- Added `weights_set_id` parameter for linking
+
+**Phase 3: Optimization Runner**
+- Added run lifecycle management with automatic run creation
+- Created internal `_run_optimization()` method
+- Added error logging on failures
+- Updated db.py to return study_id
+
+**Phase 4: Order Logging Module**
+- `create_order()` - Create pending order
+- `update_order_submitted()` - Mark as submitted to exchange
+- `update_order_filled()` - Update when filled
+- `update_order_cancelled()` - Update when cancelled
+- `update_order_rejected()` - Update when rejected
+- `get_order()` - Retrieve order by ID
+- `get_orders_by_run()` - Get all orders for a run
+
+**Phase 5: Trading Bot Integration**
+- Changed run_id from UUID to int (matches database schema)
+- Modified `_log_signal()` to return signal_id
+- Modified `_execute_entry()` to create order records and handle fills
+- Modified `_execute_exit()` to create order records and link to trades
+- Modified `_log_trade()` to include entry_order_id and exit_order_id
+- Added error logging to exception handlers
+
+**Phase 6: Error Logging Calls**
+- Added error logging to `bot/backtesting/event_driven.py`
+- Added error logging to `bot/backtesting/vectorbt_engine.py`
+- Uses ErrorCategory.STRATEGY and ErrorSeverity.HIGH for critical errors
+
+**Phase 7: Notifications Module**
+- `DiscordNotifier` class with rate limiting (5s default)
+- `send()` - Send message and log to notifications_log table
+- `notify_trade_opened()` - Trade open notification with details
+- `notify_trade_closed()` - Trade close with P&L
+- `notify_error()` - Error notification (critical flag)
+- `notify_optimization_complete()` - Optimization results
+- `notify_bot_started()` / `notify_bot_stopped()` - Bot lifecycle
+
+**Phase 8: Indicator Values Logging**
+- `save_indicator_value()` - Single indicator value
+- `save_indicators_batch()` - Batch insert for efficiency
+- `get_indicator_values()` - Query with filters
+- `get_latest_indicator_values()` - Latest values for all indicators
+- `IndicatorLogger` class with rate limiting (log_every_n)
+
+**Bug fixes during implementation:**
+- Fixed asyncpg parameter syntax from named (`:param`) to positional (`$1`, `$2`)
+- Fixed run_id type mismatch in trading.py (UUID → int)
+- Fixed `_create_run_record()` to use `RETURNING id`
+
+**Verification steps (user responsibility):**
+1. Run `alembic upgrade head` to apply migration 003
+2. Test backtest logging by running a backtest with `--save` flag
+3. Test order logging with paper trading
+4. Verify error logging by triggering an error
+5. Configure Discord webhook and test notifications
+
+**Dependencies:**
+- Phase 1 (schema) → Phase 6 (error logging calls)
+- Phase 4 (orders module) → Phase 5 (trading integration)
+- Phase 7 (notifications) → Trading/optimization integration
+

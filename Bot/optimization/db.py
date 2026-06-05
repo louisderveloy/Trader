@@ -122,13 +122,16 @@ async def save_weights_set(
 async def save_study_result(
     db_pool: asyncpg.Pool,
     result: StudyResult
-) -> None:
+) -> int:
     """
     Save Optuna study result to optuna_studies table.
 
     Args:
         db_pool: Database connection pool
         result: StudyResult object with optimization results
+
+    Returns:
+        Database ID of the created study record
 
     Raises:
         Exception: If database operation fails
@@ -157,13 +160,14 @@ async def save_study_result(
         best_value = None
 
     async with db_pool.acquire() as conn:
-        await conn.execute(
+        row = await conn.fetchrow(
             """
             INSERT INTO optuna_studies (
                 study_name, run_id, n_trials, best_value, best_params,
                 weights_set_id, started_at, completed_at, metadata
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            RETURNING id
             """,
             result.study_name,
             result.run_id,
@@ -176,10 +180,13 @@ async def save_study_result(
             json.dumps(metadata)
         )
 
+    study_id = row["id"]
     logger.info(
         "Study result saved successfully",
-        extra={"study_name": result.study_name}
+        extra={"study_name": result.study_name, "study_id": study_id}
     )
+
+    return study_id
 
 
 async def get_active_weights(db_pool: asyncpg.Pool) -> Optional[Dict[str, Any]]:

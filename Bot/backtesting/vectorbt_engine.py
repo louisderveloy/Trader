@@ -30,6 +30,10 @@ from .types import (
 )
 from .metrics import calculate_metrics, build_equity_curve
 
+# Import error logging
+from runs.errors import log_exception, ErrorCategory, ErrorSeverity
+from runs.context import get_current_run_id
+
 # Note: Indicator signals are computed inline (vectorized) for backtesting performance
 # rather than using the real-time indicator modules which return single values.
 
@@ -145,6 +149,23 @@ class VectorbtBacktester(BacktesterBase):
             )
             result.success = False
             result.error_message = str(e)
+
+            # Log error to database if db_pool is available
+            if self.db_pool:
+                try:
+                    await log_exception(
+                        self.db_pool, e,
+                        severity=ErrorSeverity.HIGH,
+                        category=ErrorCategory.STRATEGY,
+                        context={
+                            "symbol": self.config.symbol,
+                            "timeframe": self.config.timeframe,
+                            "engine": "vectorbt",
+                        },
+                        run_id=get_current_run_id(),
+                    )
+                except Exception as log_err:
+                    logger.warning(f"Failed to log exception to database: {log_err}")
 
         result.execution_time_seconds = time.time() - start_time
 

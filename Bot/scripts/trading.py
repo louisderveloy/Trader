@@ -38,7 +38,7 @@ import json
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from typing import Optional, Dict, Any
-from uuid import uuid4
+from uuid import uuid4, UUID
 
 import asyncpg
 import redis.asyncio as redis
@@ -49,6 +49,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from exchanges import BinanceExchange
 from exchanges.exceptions import ExchangeError
+from runs.orders import (
+    create_order,
+    update_order_filled,
+    update_order_cancelled,
+    update_order_rejected,
+)
+from runs.errors import log_exception, ErrorCategory, ErrorSeverity
 
 # Setup logging
 logging.basicConfig(
@@ -105,7 +112,7 @@ class TradingBot:
         self.redis_client: Optional[redis.Redis] = None
 
         # State
-        self.run_id = uuid4()
+        self.run_id: Optional[int] = None  # Set when run record is created
         self.capital = initial_capital
         self.position: Optional[Dict[str, Any]] = None  # Current position
         self.weights: Dict[str, float] = {}
@@ -129,7 +136,6 @@ class TradingBot:
         logger.info("=" * 80)
         logger.info("STARTING TRADING BOT")
         logger.info("=" * 80)
-        logger.info(f"Run ID: {self.run_id}")
         logger.info(f"Mode: {self.mode.upper()}")
         logger.info(f"Symbol: {self.symbol}")
         logger.info(f"Timeframe: {self.timeframe}")
@@ -252,12 +258,9 @@ class TradingBot:
         if self.mode == "paper":
             environment = "paper"
 
-        query = """
-            INSERT INTO runs (
-                id, run_type, environment, status, symbol, timeframe,
-                initial_capital, config_snapshot, started_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        """
+        # Get current time for both start_date and end_date (live runs are open-ended)
+        now = datetime.now(timezone.utc)
+
         config_snapshot = {
             "mode": self.mode,
             "testnet": self.testnet,
@@ -266,22 +269,33 @@ class TradingBot:
             "exit_threshold": self.exit_threshold,
             "confirmation_candles": self.confirmation_candles,
             "max_trades_per_day": self.max_trades_per_day,
-            "cooldown_minutes": self.cooldown_minutes
+            "cooldown_minutes": self.cooldown_minutes,
+            "initial_capital": str(self.initial_capital),
         }
 
+        query = """
+            INSERT INTO runs (
+                run_type, environment, status, symbol, timeframe,
+                start_date, end_date, config_snapshot, started_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            RETURNING id
+        """
+
         async with self.db_pool.acquire() as conn:
-            await conn.execute(
+            row = await conn.fetchrow(
                 query,
-                self.run_id,
                 "live" if self.mode == "live" else "paper",
                 environment,
                 "running",
                 self.symbol,
                 self.timeframe,
-                self.initial_capital,
+                now,  # start_date
+                now,  # end_date (will be updated on completion)
                 json.dumps(config_snapshot),
-                datetime.now(timezone.utc)
+                now   # started_at
             )
+            self.run_id = row["id"]
+
         logger.info(f"Created run record: {self.run_id}")
 
     async def _update_run_status(self, status: str):
@@ -317,9 +331,23 @@ class TradingBot:
 
             except ExchangeError as e:
                 logger.error(f"Exchange error: {e}")
+                await log_exception(
+                    self.db_pool, e,
+                    severity=ErrorSeverity.HIGH,
+                    category=ErrorCategory.EXCHANGE_API,
+                    context={"symbol": self.symbol},
+                    run_id=self.run_id,
+                )
                 await asyncio.sleep(30)  # Wait before retry
             except Exception as e:
                 logger.error(f"Error in trading loop: {e}", exc_info=True)
+                await log_exception(
+                    self.db_pool, e,
+                    severity=ErrorSeverity.HIGH,
+                    category=ErrorCategory.SYSTEM,
+                    context={"symbol": self.symbol, "phase": "trading_loop"},
+                    run_id=self.run_id,
+                )
                 await asyncio.sleep(10)
 
             # Sleep until next check
@@ -568,6 +596,23 @@ class TradingBot:
         logger.info(f"Stop-loss: {stop_loss:.2f} | Take-profit: {take_profit:.2f}")
         logger.info("=" * 60)
 
+        # Log signal to database and get signal_id
+        signal_id = await self._log_signal("entry", price, score, signals)
+
+        # Create order record in database
+        db_order_id = await create_order(
+            db_pool=self.db_pool,
+            run_id=self.run_id,
+            symbol=self.symbol,
+            side="buy",
+            order_type="limit" if self.mode == "live" else "market",
+            quantity=quantity,
+            price=price,
+            signal_id=signal_id,
+            metadata={"score": score, "mode": self.mode},
+        )
+
+        exchange_order_id = None
         if self.mode == "live":
             # Place real order
             try:
@@ -577,14 +622,43 @@ class TradingBot:
                     quantity=quantity,
                     price=price
                 )
-                order_id = order.get("orderId")
-                logger.info(f"Order placed: {order_id}")
+                exchange_order_id = str(order.get("orderId"))
+                logger.info(f"Order placed: {exchange_order_id}")
+
+                # Update order as filled (simplified - real implementation would track fills)
+                await update_order_filled(
+                    db_pool=self.db_pool,
+                    order_id=db_order_id,
+                    filled_quantity=quantity,
+                    filled_price=price,
+                    commission=quantity * price * Decimal("0.001"),  # 0.1% fee estimate
+                    exchange_order_id=exchange_order_id,
+                )
+
             except ExchangeError as e:
                 logger.error(f"Failed to place order: {e}")
+                await update_order_rejected(self.db_pool, db_order_id, str(e))
+                await log_exception(
+                    self.db_pool, e,
+                    severity=ErrorSeverity.HIGH,
+                    category=ErrorCategory.ORDER,
+                    context={"symbol": self.symbol, "side": "buy"},
+                    run_id=self.run_id,
+                )
                 return
         else:
-            order_id = f"paper_{uuid4().hex[:8]}"
-            logger.info(f"[PAPER] Simulated order: {order_id}")
+            exchange_order_id = f"paper_{uuid4().hex[:8]}"
+            logger.info(f"[PAPER] Simulated order: {exchange_order_id}")
+
+            # Mark paper order as filled
+            await update_order_filled(
+                db_pool=self.db_pool,
+                order_id=db_order_id,
+                filled_quantity=quantity,
+                filled_price=price,
+                commission=quantity * price * Decimal("0.001"),
+                exchange_order_id=exchange_order_id,
+            )
 
         # Update state
         self.position = {
@@ -593,15 +667,13 @@ class TradingBot:
             "quantity": quantity,
             "stop_loss": stop_loss,
             "take_profit": take_profit,
-            "order_id": order_id,
+            "order_id": exchange_order_id,
+            "entry_order_id": db_order_id,  # Store DB order ID for trade linking
             "entry_score": score,
             "entry_signals": signals.copy()
         }
         self.trades_today += 1
         self.last_trade_time = datetime.now(timezone.utc)
-
-        # Log to database
-        await self._log_signal("entry", price, score, signals)
 
         # Publish to Redis
         await self._publish_trade_event("entry", price, quantity)
@@ -628,6 +700,23 @@ class TradingBot:
         logger.info(f"P&L: {pnl:.2f} USDT ({pnl_pct:.2f}%)")
         logger.info("=" * 60)
 
+        # Log signal to database
+        signal_id = await self._log_signal("exit", price, score, signals)
+
+        # Create order record in database
+        db_order_id = await create_order(
+            db_pool=self.db_pool,
+            run_id=self.run_id,
+            symbol=self.symbol,
+            side="sell",
+            order_type="market",
+            quantity=quantity,
+            price=price,
+            signal_id=signal_id,
+            metadata={"score": score, "reason": reason, "mode": self.mode},
+        )
+
+        exchange_order_id = None
         if self.mode == "live":
             # Place real order
             try:
@@ -636,23 +725,53 @@ class TradingBot:
                     side="sell",
                     quantity=quantity
                 )
-                order_id = order.get("orderId")
-                logger.info(f"Exit order placed: {order_id}")
+                exchange_order_id = str(order.get("orderId"))
+                logger.info(f"Exit order placed: {exchange_order_id}")
+
+                # Update order as filled
+                await update_order_filled(
+                    db_pool=self.db_pool,
+                    order_id=db_order_id,
+                    filled_quantity=quantity,
+                    filled_price=price,
+                    commission=quantity * price * Decimal("0.001"),
+                    exchange_order_id=exchange_order_id,
+                )
+
             except ExchangeError as e:
                 logger.error(f"Failed to place exit order: {e}")
+                await update_order_rejected(self.db_pool, db_order_id, str(e))
+                await log_exception(
+                    self.db_pool, e,
+                    severity=ErrorSeverity.CRITICAL,  # Exit failure is critical
+                    category=ErrorCategory.ORDER,
+                    context={"symbol": self.symbol, "side": "sell", "reason": reason},
+                    run_id=self.run_id,
+                )
                 return
         else:
-            order_id = f"paper_{uuid4().hex[:8]}"
-            logger.info(f"[PAPER] Simulated exit: {order_id}")
+            exchange_order_id = f"paper_{uuid4().hex[:8]}"
+            logger.info(f"[PAPER] Simulated exit: {exchange_order_id}")
+
+            # Mark paper order as filled
+            await update_order_filled(
+                db_pool=self.db_pool,
+                order_id=db_order_id,
+                filled_quantity=quantity,
+                filled_price=price,
+                commission=quantity * price * Decimal("0.001"),
+                exchange_order_id=exchange_order_id,
+            )
 
         # Update capital
         self.capital += pnl
 
-        # Log trade to database
-        await self._log_trade(price, reason, pnl, pnl_pct, score, signals)
-
-        # Log to database
-        await self._log_signal("exit", price, score, signals)
+        # Log trade to database with order IDs
+        await self._log_trade(
+            price, reason, pnl, pnl_pct, score, signals,
+            entry_order_id=self.position.get("entry_order_id"),
+            exit_order_id=db_order_id,
+        )
 
         # Publish to Redis
         await self._publish_trade_event("exit", price, quantity, pnl)
@@ -687,16 +806,17 @@ class TradingBot:
         price: Decimal,
         score: float,
         signals: Dict[str, float]
-    ):
-        """Log signal to database."""
+    ) -> Optional[UUID]:
+        """Log signal to database and return signal ID."""
         query = """
             INSERT INTO signals (
                 run_id, time, symbol, signal_type, weighted_score,
                 decision, weights_snapshot, indicators_snapshot
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING id
         """
         async with self.db_pool.acquire() as conn:
-            await conn.execute(
+            row = await conn.fetchrow(
                 query,
                 self.run_id,
                 datetime.now(timezone.utc),
@@ -707,6 +827,7 @@ class TradingBot:
                 json.dumps(self.weights),
                 json.dumps(signals)
             )
+        return row["id"] if row else None
 
     async def _log_trade(
         self,
@@ -715,16 +836,21 @@ class TradingBot:
         pnl: Decimal,
         pnl_pct: float,
         exit_score: float,
-        exit_signals: Dict[str, float]
+        exit_signals: Dict[str, float],
+        entry_order_id: Optional[UUID] = None,
+        exit_order_id: Optional[UUID] = None,
     ):
         """Log completed trade to database."""
-        query = """
-            INSERT INTO trades (
-                run_id, symbol, side, opened_at, closed_at,
-                entry_price, exit_price, quantity, pnl, pnl_pct,
-                exit_reason, metadata
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-        """
+        # Calculate duration
+        entry_time = self.position["entry_time"]
+        exit_time = datetime.now(timezone.utc)
+        duration_seconds = int((exit_time - entry_time).total_seconds())
+
+        # Calculate commission (estimate 0.1% per side = 0.2% total)
+        quantity = self.position["quantity"]
+        entry_price = self.position["entry_price"]
+        commission_total = (quantity * entry_price + quantity * exit_price) * Decimal("0.001")
+
         metadata = {
             "entry_score": self.position["entry_score"],
             "exit_score": exit_score,
@@ -732,20 +858,32 @@ class TradingBot:
             "exit_signals": exit_signals
         }
 
+        query = """
+            INSERT INTO trades (
+                run_id, symbol, side, entry_order_id, exit_order_id,
+                opened_at, closed_at, duration_seconds,
+                entry_price, exit_price, quantity,
+                pnl, pnl_percent, commission_total, metadata
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        """
+
         async with self.db_pool.acquire() as conn:
             await conn.execute(
                 query,
                 self.run_id,
                 self.symbol,
                 "long",
-                self.position["entry_time"],
-                datetime.now(timezone.utc),
-                self.position["entry_price"],
+                entry_order_id,
+                exit_order_id,
+                entry_time,
+                exit_time,
+                duration_seconds,
+                entry_price,
                 exit_price,
-                self.position["quantity"],
+                quantity,
                 pnl,
                 pnl_pct,
-                exit_reason,
+                commission_total,
                 json.dumps(metadata)
             )
 
