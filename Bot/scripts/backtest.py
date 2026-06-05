@@ -66,10 +66,22 @@ async def get_active_weights(pool: asyncpg.Pool) -> Optional[dict]:
     async with pool.acquire() as conn:
         row = await conn.fetchrow(query)
         if row:
+            weights = row["weights"]
+            # Parse JSON string if needed
+            if isinstance(weights, str):
+                weights = json.loads(weights)
+
+            # Remove 'weight_' prefix from keys if present
+            # Database stores as "weight_ema", but strategy expects "ema"
+            weights = {
+                k.replace('weight_', ''): v
+                for k, v in weights.items()
+            }
+
             return {
                 "id": row["id"],
                 "name": row["name"],
-                "weights": row["weights"],
+                "weights": weights,
                 "score": row["optimization_score"]
             }
     return None
@@ -85,10 +97,22 @@ async def get_weights_by_id(pool: asyncpg.Pool, weights_set_id: UUID) -> Optiona
     async with pool.acquire() as conn:
         row = await conn.fetchrow(query, weights_set_id)
         if row:
+            weights = row["weights"]
+            # Parse JSON string if needed
+            if isinstance(weights, str):
+                weights = json.loads(weights)
+
+            # Remove 'weight_' prefix from keys if present
+            # Database stores as "weight_ema", but strategy expects "ema"
+            weights = {
+                k.replace('weight_', ''): v
+                for k, v in weights.items()
+            }
+
             return {
                 "id": row["id"],
                 "name": row["name"],
-                "weights": row["weights"],
+                "weights": weights,
                 "score": row["optimization_score"]
             }
     return None

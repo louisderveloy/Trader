@@ -117,6 +117,23 @@ Implementing Optuna-based optimization with walk-forward analysis for indicator 
 - **Impact:** Home page now primary analytics dashboard instead of simple status display
 - **Result:** Users can quickly analyze performance across different timeframes and assets
 
+### 2026-06-05T21:25Z [CODE] Fixed weights loading from database in backtest and trading scripts
+- **Problem:** Backtester crashed with `AttributeError: 'str' object has no attribute 'get'` when loading weights from database
+- **Root cause:**
+  1. Weights stored in database as JSON/JSONB but retrieved as string instead of dict
+  2. Database stores weights with "weight_" prefix (e.g., "weight_ema") but strategy engine expects keys without prefix (e.g., "ema")
+- **Implementation:**
+  - Modified `get_active_weights()` and `get_weights_by_id()` in `scripts/backtest.py`:
+    - Added JSON parsing if weights are returned as string
+    - Strip "weight_" prefix from all keys using dict comprehension
+  - Modified `_load_weights()` in `scripts/trading.py`:
+    - Added same JSON parsing and prefix stripping logic
+- **Impact:**
+  - Backtests now run successfully with weights from database
+  - Paper/live trading can load weights correctly
+  - Consistent key naming between database storage and runtime usage
+- **Result:** Weights loaded from database are properly formatted and usable by strategy engine
+
 ### 2026-06-05T20:05Z [USER] Changed optimize best command to use optimization-id instead of study-name
 - **Decision:** Replace `--study-name` parameter with `--optimization-id` (UUID) for the `optimize best` command
 - **Problem:** Study names are not unique in the database, leading to ambiguity when retrieving specific optimization results

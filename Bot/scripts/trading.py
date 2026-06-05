@@ -225,7 +225,17 @@ class TradingBot:
         async with self.db_pool.acquire() as conn:
             row = await conn.fetchrow(query)
             if row:
-                self.weights = row["weights"]
+                weights = row["weights"]
+                # Parse JSON string if needed
+                if isinstance(weights, str):
+                    weights = json.loads(weights)
+
+                # Remove 'weight_' prefix from keys if present
+                # Database stores as "weight_ema", but strategy expects "ema"
+                self.weights = {
+                    k.replace('weight_', ''): v
+                    for k, v in weights.items()
+                }
                 logger.info(f"Loaded active weights: {json.dumps(self.weights, indent=2)}")
             else:
                 # Default weights
