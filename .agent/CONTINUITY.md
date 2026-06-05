@@ -117,6 +117,42 @@ Implementing Optuna-based optimization with walk-forward analysis for indicator 
 - **Impact:** Home page now primary analytics dashboard instead of simple status display
 - **Result:** Users can quickly analyze performance across different timeframes and assets
 
+### 2026-06-05T20:05Z [USER] Changed optimize best command to use optimization-id instead of study-name
+- **Decision:** Replace `--study-name` parameter with `--optimization-id` (UUID) for the `optimize best` command
+- **Problem:** Study names are not unique in the database, leading to ambiguity when retrieving specific optimization results
+- **Rationale:**
+  - Optimization IDs (UUIDs) are unique and unambiguous
+  - Users can obtain the optimization ID from the `optimize list` command
+  - Prevents accidentally retrieving the wrong study when multiple studies share the same name
+- **Implementation:**
+  - Added `get_study_by_id()` function to `optimization/db.py`
+  - Modified `cmd_best()` in `optimization/cli.py` to accept `--optimization-id` instead of `--study-name`
+  - Updated `optimize list` command to display the optimization ID for each study
+  - Updated argument parsers in both `optimization/cli.py` and `main.py`
+  - Updated README with usage examples and note about using optimization ID from list command
+- **Impact:**
+  - Users must now use the UUID from `optimize list` when viewing best results
+  - More reliable and unambiguous study selection
+- **Result:** Clearer, more reliable optimization result retrieval using unique identifiers
+
+### 2026-06-05T[CURRENT] [USER] Status and docker_entry commands for container lifecycle management
+- **Decision:** Add `status` and `docker_entry` commands to main.py CLI
+- **Problem:** Container was restarting in a loop because main.py was a CLI tool that exits immediately, but Docker needs a long-running process
+- **Implementation:**
+  - `status` command: Check health of PostgreSQL, Redis, and environment variables, then exit (for manual health checks)
+  - `docker_entry` command: Same health check but then keeps container alive with infinite sleep loop (for Docker ENTRYPOINT)
+  - Updated Dockerfile ENTRYPOINT to use `python -m main docker_entry`
+  - Added comprehensive health check logging with colored status indicators
+- **Rationale:**
+  - Container needs to stay running to accept `docker compose exec` commands
+  - Users need a way to verify system health before running commands
+  - Separation of concerns: manual check vs container entrypoint
+- **Impact:**
+  - Container no longer restarts in a loop
+  - Users can run `docker compose exec bot python -m main status` to check health
+  - Container logs show clear health status on startup
+- **Result:** Stable container with proper lifecycle management and health visibility
+
 ### 2026-06-05T[CURRENT] [USER] Logs tab removal from dashboard navigation
 - **Decision:** Remove Logs tab entirely from sidebar navigation
 - **Rationale:** Logs functionality incomplete, not ready for user-facing dashboard
@@ -1419,4 +1455,68 @@ Added helpful tooltips to explain each environment option:
 - Update CONTINUITY.md (this file) with session summary ✅
 - Manual testing of all features (user responsibility)
 - Prepare for Phase 10 (Grafana dashboards) or continue with other enhancements
+
+### 2026-06-05T21:00Z [CODE] Bot CLI & Trading Loop Implementation Complete ✅
+
+**Status:** ✅ Complete
+
+**Summary:**
+Implemented unified CLI entry point and all trading modes (fetch, backtest, optimize, paper, live).
+
+**Files created:**
+1. `bot/main.py` (~350 lines) - Unified CLI entry point with all commands
+2. `bot/scripts/backtest.py` (~250 lines) - Standalone backtest CLI
+3. `bot/scripts/trading.py` (~650 lines) - Paper and live trading loop
+4. `bot/scripts/__init__.py` - Module initialization
+5. `bot/README.md` (~500 lines) - Comprehensive French documentation
+
+**Changes to optimization:**
+- Modified `bot/optimization/types.py`:
+  - Added `fixed_weights` parameter to `WeightsSearchSpace` (default: `{"user_indicator": 0.05}`)
+  - Modified `suggest_weights()` to skip optimization for fixed indicators
+  - `user_indicator` is now fixed at 5% and not optimized
+
+**Available commands:**
+```bash
+# Fetch historical data
+docker compose exec bot python -m main fetch --symbol BTCUSDT --start-date 2024-01-01 --end-date 2024-12-31
+
+# Run backtest
+docker compose exec bot python -m main backtest --symbol BTCUSDT --start-date 2024-01-01 --end-date 2024-06-01
+
+# Run optimization
+docker compose exec bot python -m main optimize run --study-name my_study --n-trials 100
+
+# Paper trading (simulation)
+docker compose exec bot python -m main paper --symbol BTCUSDT
+
+# Live trading (testnet)
+docker compose exec bot python -m main live --symbol BTCUSDT --testnet
+
+# Live trading (mainnet - REAL MONEY)
+docker compose exec bot python -m main live --symbol BTCUSDT
+```
+
+**Trading loop features:**
+- Connects to Binance (testnet or mainnet)
+- Fetches latest candles and stores in database
+- Calculates all 9 indicator signals inline (vectorized)
+- Computes weighted score
+- Entry/exit based on thresholds with anti-repainting confirmation
+- Logs signals and trades to database
+- Publishes events to Redis (heartbeat, trades)
+- Graceful shutdown on SIGINT/SIGTERM
+
+**Import verification:**
+- ✅ main.py imports correctly
+- ✅ scripts/backtest.py imports correctly
+- ✅ scripts/trading.py imports correctly
+
+**Documentation:**
+- Complete README.md in French with:
+  - All commands with examples
+  - Configuration options
+  - Recommended workflow (6 phases)
+  - Troubleshooting guide
+  - Docker commands reference
 

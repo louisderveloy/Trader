@@ -23,4 +23,5 @@ RUN if [ "$INSTALL_DEV" = "true" ]; then \
 
 COPY . .
 
-ENTRYPOINT [ "python", "/app/main.py" ]
+# Use docker_entry command as entrypoint to keep container alive
+ENTRYPOINT [ "python", "-m", "main", "docker_entry" ]

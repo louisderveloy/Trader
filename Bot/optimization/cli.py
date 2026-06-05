@@ -168,7 +168,8 @@ async def cmd_list(args):
 
         for study in studies:
             print(f"\nStudy: {study['study_name']}")
-            print(f"  Best value: {study['best_value']:.4f}")
+            print(f"  Optimization ID: {study['id']}")
+            print(f"  Best value: {study['best_value'] if study['best_value'] is not None else 0}")
             print(f"  N trials: {study['n_trials']}")
             print(f"  Started: {study['started_at']}")
             print(f"  Completed: {study['completed_at']}")
@@ -182,18 +183,23 @@ async def cmd_list(args):
 
 async def cmd_best(args):
     """Show best results command."""
+    from uuid import UUID
+
     db_pool = await get_db_pool()
 
     try:
-        study = await get_study_by_name(db_pool, args.study_name)
+        from .db import get_study_by_id
+
+        study = await get_study_by_id(db_pool, UUID(args.optimization_id))
 
         if not study:
-            print(f"Study not found: {args.study_name}")
+            print(f"Study not found: {args.optimization_id}")
             return
 
         print("\n" + "=" * 80)
         print(f"STUDY: {study['study_name']}")
         print("=" * 80)
+        print(f"Optimization ID: {study['id']}")
         print(f"Best value: {study['best_value']:.4f}")
         print(f"N trials: {study['n_trials']}")
         print(f"Started: {study['started_at']}")
@@ -244,10 +250,11 @@ async def cmd_weights(args):
 
         for ws in weights_sets:
             active_marker = "[ACTIVE]" if ws['is_active'] else ""
+            score_str = f"{ws['optimization_score']:.4f}" if ws['optimization_score'] else "N/A"
             print(f"\nName: {ws['name']} {active_marker}")
             print(f"  ID: {ws['id']}")
             print(f"  Source: {ws['source']}")
-            print(f"  Score: {ws['optimization_score']:.4f if ws['optimization_score'] else 'N/A'}")
+            print(f"  Score: {score_str}")
             print(f"  Created: {ws['created_at']}")
 
             if args.show_weights:
@@ -313,7 +320,7 @@ def main():
 
     # Best command
     best_parser = subparsers.add_parser('best', help='Show best results for a study')
-    best_parser.add_argument('--study-name', required=True, help='Study name')
+    best_parser.add_argument('--optimization-id', required=True, help='Optimization ID (UUID)')
 
     # Weights command
     weights_parser = subparsers.add_parser('weights', help='List weights sets')

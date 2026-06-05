@@ -299,6 +299,72 @@ async def list_weights_sets(
         return weights_sets
 
 
+async def get_study_by_id(
+    db_pool: asyncpg.Pool,
+    study_id: UUID
+) -> Optional[Dict[str, Any]]:
+    """
+    Get optimization study by ID.
+
+    Args:
+        db_pool: Database connection pool
+        study_id: UUID of the study
+
+    Returns:
+        Study dictionary or None if not found
+
+    Raises:
+        Exception: If database operation fails
+    """
+    logger.debug(
+        "Fetching study by ID",
+        extra={"study_id": str(study_id)}
+    )
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id, study_name, run_id, n_trials, best_value, best_params,
+                   weights_set_id, started_at, completed_at, metadata, created_at
+            FROM optuna_studies
+            WHERE id = $1
+            """,
+            study_id
+        )
+
+        if not row:
+            logger.warning(
+                "Study not found",
+                extra={"study_id": str(study_id)}
+            )
+            return None
+
+        study = {
+            "id": row["id"],
+            "study_name": row["study_name"],
+            "run_id": row["run_id"],
+            "n_trials": row["n_trials"],
+            "best_value": float(row["best_value"]) if row["best_value"] else None,
+            "best_params": json.loads(row["best_params"]) if row["best_params"] else {},
+            "weights_set_id": row["weights_set_id"],
+            "started_at": row["started_at"],
+            "completed_at": row["completed_at"],
+            "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
+            "created_at": row["created_at"]
+        }
+
+        logger.info(
+            "Study retrieved",
+            extra={
+                "study_id": str(study_id),
+                "study_name": study["study_name"],
+                "best_value": study["best_value"]
+            }
+        )
+
+        return study
+
+
 async def get_study_by_name(
     db_pool: asyncpg.Pool,
     study_name: str
