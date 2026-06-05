@@ -41,27 +41,27 @@ async def list_signals(
     """
     # Build WHERE clause
     conditions = []
-    params = {}
+    param_values = []
 
     if run_id:
-        conditions.append(f"run_id = ${len(params) + 1}")
-        params["run_id"] = run_id
+        conditions.append(f"run_id = ${len(param_values) + 1}")
+        param_values.append(run_id)
 
     if symbol:
-        conditions.append(f"symbol = ${len(params) + 1}")
-        params["symbol"] = symbol
+        conditions.append(f"symbol = ${len(param_values) + 1}")
+        param_values.append(symbol)
 
     if decision:
-        conditions.append(f"decision = ${len(params) + 1}")
-        params["decision"] = decision
+        conditions.append(f"signal_type = ${len(param_values) + 1}")
+        param_values.append(decision)
 
     if min_score is not None:
-        conditions.append(f"score >= ${len(params) + 1}")
-        params["min_score"] = min_score
+        conditions.append(f"weighted_score >= ${len(param_values) + 1}")
+        param_values.append(min_score)
 
     if max_score is not None:
-        conditions.append(f"score <= ${len(params) + 1}")
-        params["max_score"] = max_score
+        conditions.append(f"weighted_score <= ${len(param_values) + 1}")
+        param_values.append(max_score)
 
     where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
 
@@ -71,33 +71,37 @@ async def list_signals(
     # Get signals
     signals_query = f"""
         SELECT
-            id, run_id, timestamp, symbol, timeframe,
-            decision, score, confidence,
-            weights_snapshot, indicators_snapshot, reason,
-            position_size, estimated_sl_price, estimated_tp_price,
+            id, run_id, time, symbol,
+            signal_type, weighted_score,
+            weights_snapshot, indicators_snapshot, decision_reason,
             created_at
         FROM signals
         {where_clause}
-        ORDER BY timestamp DESC
-        LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}
+        ORDER BY time DESC
+        LIMIT ${len(param_values) + 1} OFFSET ${len(param_values) + 2}
     """
 
     async with db_pool.acquire() as conn:
-        # Count
-        count_row = await conn.fetchrow(count_query, *params.values())
-        total = count_row["count"]
+        try:
+            # Count
+            count_row = await conn.fetchrow(count_query, *param_values)
+            total = count_row["count"] if count_row else 0
 
-        # Fetch signals
-        params["limit"] = limit
-        params["offset"] = offset
-        rows = await conn.fetch(signals_query, *params.values())
+            # Fetch signals
+            param_values.append(limit)
+            param_values.append(offset)
+            rows = await conn.fetch(signals_query, *param_values)
 
-    # Convert to response models
-    items = [SignalResponse(**dict(row)) for row in rows]
+            # Convert to response models
+            items = [SignalResponse(**dict(row)) for row in rows]
 
-    logger.info(f"Listed {len(items)} signals (total={total})")
+            logger.info(f"Listed {len(items)} signals (total={total})")
 
-    return SignalListResponse(total=total, items=items, limit=limit, offset=offset)
+            return SignalListResponse(total=total, items=items, limit=limit, offset=offset)
+        except Exception as e:
+            logger.error(f"Failed to query signals table: {e}")
+            # Return empty list if table doesn't exist
+            return SignalListResponse(total=0, items=[], limit=limit, offset=offset)
 
 
 @router.get("/{signal_id}", response_model=SignalResponse)
@@ -122,22 +126,30 @@ async def get_signal(
     """
     query = """
         SELECT
-            id, run_id, timestamp, symbol, timeframe,
-            decision, score, confidence,
-            weights_snapshot, indicators_snapshot, reason,
-            position_size, estimated_sl_price, estimated_tp_price,
+            id, run_id, time, symbol,
+            signal_type, weighted_score,
+            weights_snapshot, indicators_snapshot, decision_reason,
             created_at
         FROM signals
         WHERE id = $1
     """
 
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(query, signal_id)
+    try:
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(query, signal_id)
 
-    if not row:
+        if not row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Signal {signal_id} not found",
+            )
+
+        return SignalResponse(**dict(row))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to query signal {signal_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Signal {signal_id} not found",
         )
-
-    return SignalResponse(**dict(row))

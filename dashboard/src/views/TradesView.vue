@@ -35,7 +35,35 @@
 
       <!-- Filters -->
       <div class="bg-white rounded-lg shadow p-4 mb-6">
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
+          <div>
+            <div class="flex items-center gap-1 mb-1">
+              <label class="block text-sm font-medium text-gray-700">Réseau</label>
+              <div class="group relative">
+                <svg class="w-4 h-4 text-gray-400 cursor-help" fill="currentColor" viewBox="0 0 20 20">
+                  <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd" />
+                </svg>
+                <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block bg-gray-900 text-white text-xs rounded py-2 px-3 whitespace-nowrap z-10">
+                  <div class="font-semibold mb-1">Filtrer par environnement</div>
+                  <div>• Testnet: Binance testnet</div>
+                  <div>• Live: Trading réel</div>
+                  <div>• Paper: Simulation</div>
+                  <div>• Backtest: Historique</div>
+                </div>
+              </div>
+            </div>
+            <select
+              :value="filters.environment || ''"
+              class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+              @change="updateFilter('environment', ($event.target.value as 'testnet' | 'live' | 'paper' | 'backtest') || undefined)"
+            >
+              <option value="">Tous</option>
+              <option value="testnet">Testnet</option>
+              <option value="live">Live</option>
+              <option value="paper">Paper</option>
+              <option value="backtest">Backtest</option>
+            </select>
+          </div>
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">Symbole</label>
             <input
@@ -47,11 +75,11 @@
             />
           </div>
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Direction</label>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Side</label>
             <select
-              :value="filters.direction || ''"
+              :value="filters.side || ''"
               class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
-              @change="updateFilter('direction', ($event.target.value as 'long' | 'short') || undefined)"
+              @change="updateFilter('side', ($event.target.value as 'long' | 'short') || undefined)"
             >
               <option value="">Tous</option>
               <option value="long">Long</option>
@@ -93,12 +121,12 @@
           <thead class="bg-gray-100 border-b">
             <tr>
               <th class="px-4 py-3 text-left font-semibold text-gray-900">Symbole</th>
-              <th class="px-4 py-3 text-left font-semibold text-gray-900">Direction</th>
+              <th class="px-4 py-3 text-left font-semibold text-gray-900">Side</th>
               <th class="px-4 py-3 text-right font-semibold text-gray-900">Entrée</th>
               <th class="px-4 py-3 text-right font-semibold text-gray-900">Sortie</th>
               <th class="px-4 py-3 text-right font-semibold text-gray-900">P&L</th>
               <th class="px-4 py-3 text-center font-semibold text-gray-900">%</th>
-              <th class="px-4 py-3 text-left font-semibold text-gray-900">Raison</th>
+              <th class="px-4 py-3 text-right font-semibold text-gray-900">Durée</th>
             </tr>
           </thead>
           <tbody class="divide-y">
@@ -108,25 +136,27 @@
                 <span
                   :class="[
                     'px-2 py-1 rounded text-xs font-medium',
-                    trade.direction === 'long' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                    trade.side === 'long' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
                   ]"
                 >
-                  {{ trade.direction.toUpperCase() }}
+                  {{ trade.side.toUpperCase() }}
                 </span>
               </td>
               <td class="px-4 py-3 text-right text-gray-700">
                 {{ Number(trade.entry_price).toFixed(2) }}
               </td>
               <td class="px-4 py-3 text-right text-gray-700">
-                {{ trade.exit_price ? Number(trade.exit_price).toFixed(2) : '—' }}
+                {{ Number(trade.exit_price).toFixed(2) }}
               </td>
               <td class="px-4 py-3 text-right font-semibold" :class="getPnlColor(Number(trade.pnl))">
-                {{ trade.pnl ? Number(trade.pnl).toFixed(2) : '—' }} USDT
+                {{ Number(trade.pnl).toFixed(2) }} USDT
               </td>
-              <td class="px-4 py-3 text-center font-semibold" :class="getPnlColor(Number(trade.pnl_percent))">
-                {{ trade.pnl_percent ? (Number(trade.pnl_percent) * 100).toFixed(2) : '—' }}%
+              <td class="px-4 py-3 text-center font-semibold" :class="getPnlColor(Number(trade.pnl_percent) * 100)">
+                {{ (Number(trade.pnl_percent) * 100).toFixed(2) }}%
               </td>
-              <td class="px-4 py-3 text-gray-700 text-xs">{{ trade.exit_reason || '—' }}</td>
+              <td class="px-4 py-3 text-gray-700 text-sm">
+                {{ formatDuration(trade.duration_seconds) }}
+              </td>
             </tr>
           </tbody>
         </table>
@@ -209,5 +239,20 @@ function getPnlColor(pnl: number | null | undefined): string {
   if (pnl === null || pnl === undefined) return 'text-gray-700'
   const numPnl = Number(pnl)
   return numPnl >= 0 ? 'text-green-600' : 'text-red-600'
+}
+
+function formatDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return '—'
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const secs = seconds % 60
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`
+  } else if (minutes > 0) {
+    return `${minutes}m ${secs}s`
+  } else {
+    return `${secs}s`
+  }
 }
 </script>

@@ -23,32 +23,25 @@ class OptimizationTrialResponse(BaseModel):
 class OptimizationResponse(BaseModel):
     """Optimization study response model."""
 
-    id: int = Field(..., description="Study ID")
-    run_id: str = Field(..., description="Associated run ID")
-    name: str = Field(..., description="Study name")
-    direction: str = Field(..., description="Optimization direction: maximize or minimize")
-    objective: str = Field(..., description="Objective metric: sharpe, sortino, profit_factor")
+    id: str = Field(..., description="Study ID (UUID)")
+    run_id: Optional[int] = Field(None, description="Associated run ID")
+    study_name: str = Field(..., description="Study name")
 
     # Study configuration
-    n_trials: int = Field(..., description="Number of trials completed")
-    n_jobs: int = Field(..., description="Number of parallel jobs")
-    sampler: str = Field(..., description="Sampler type: TPE, Random, Grid")
-    pruner: str = Field(..., description="Pruner type: MedianPruner, HyperbandPruner")
+    n_trials: int = Field(..., description="Number of trials")
 
     # Results
     best_value: Optional[float] = Field(None, description="Best objective value found")
     best_params: Optional[dict[str, Any]] = Field(None, description="Best parameters found")
-    best_trial: Optional[OptimizationTrialResponse] = Field(None, description="Best trial details")
+    weights_set_id: Optional[str] = Field(None, description="Associated weights set ID")
 
-    # Walk-forward configuration
-    walk_forward_splits: int = Field(..., description="Number of walk-forward splits")
-    walk_forward_train_ratio: float = Field(..., description="Train/test ratio for splits")
-
-    # Status
-    status: str = Field(..., description="Status: running, completed, failed, stopped")
-    created_at: datetime = Field(..., description="Study creation timestamp")
+    # Timestamps
     started_at: Optional[datetime] = Field(None, description="Study start timestamp")
     completed_at: Optional[datetime] = Field(None, description="Study completion timestamp")
+    created_at: datetime = Field(..., description="Study creation timestamp")
+
+    # Additional data
+    metadata: Optional[dict[str, Any]] = Field(None, description="Additional metadata")
 
     class Config:
         """Pydantic config."""

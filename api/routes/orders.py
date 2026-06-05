@@ -21,9 +21,9 @@ router = APIRouter()
 
 @router.get("", response_model=OrderListResponse)
 async def list_orders(
-    run_id: Annotated[str | None, Query(description="Filter by run ID")] = None,
+    run_id: Annotated[int | None, Query(description="Filter by run ID")] = None,
     symbol: Annotated[str | None, Query(description="Filter by symbol")] = None,
-    side: Annotated[str | None, Query(description="Filter by side (BUY/SELL)")] = None,
+    side: Annotated[str | None, Query(description="Filter by side (buy/sell)")] = None,
     status_filter: Annotated[str | None, Query(alias="status", description="Filter by status")] = None,
     limit: Annotated[int, Query(ge=1, le=1000, description="Maximum results")] = 100,
     offset: Annotated[int, Query(ge=0, description="Offset for pagination")] = 0,
@@ -41,23 +41,23 @@ async def list_orders(
     try:
         # Build WHERE clause
         conditions = []
-        params = {}
+        param_values = []
 
-        if run_id:
-            conditions.append(f"run_id = ${len(params) + 1}")
-            params["run_id"] = run_id
+        if run_id is not None:
+            conditions.append(f"run_id = ${len(param_values) + 1}")
+            param_values.append(run_id)
 
         if symbol:
-            conditions.append(f"symbol = ${len(params) + 1}")
-            params["symbol"] = symbol
+            conditions.append(f"symbol = ${len(param_values) + 1}")
+            param_values.append(symbol)
 
         if side:
-            conditions.append(f"side = ${len(params) + 1}")
-            params["side"] = side
+            conditions.append(f"side = ${len(param_values) + 1}")
+            param_values.append(side)
 
         if status_filter:
-            conditions.append(f"status = ${len(params) + 1}")
-            params["status"] = status_filter
+            conditions.append(f"status = ${len(param_values) + 1}")
+            param_values.append(status_filter)
 
         where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
 
@@ -71,24 +71,23 @@ async def list_orders(
                 symbol, side, order_type,
                 quantity, price,
                 status, filled_quantity, filled_price,
-                commission, commission_asset,
-                created_at, submitted_at, filled_at,
-                rejected_reason, metadata
+                commission, placed_at, filled_at,
+                cancelled_at, metadata
             FROM orders
             {where_clause}
-            ORDER BY created_at DESC
-            LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}
+            ORDER BY placed_at DESC
+            LIMIT ${len(param_values) + 1} OFFSET ${len(param_values) + 2}
         """
 
         async with db_pool.acquire() as conn:
             # Count
-            count_row = await conn.fetchrow(count_query, *params.values())
-            total = count_row["count"]
+            count_row = await conn.fetchrow(count_query, *param_values)
+            total = count_row["count"] if count_row else 0
 
             # Fetch orders
-            params["limit"] = limit
-            params["offset"] = offset
-            rows = await conn.fetch(orders_query, *params.values())
+            param_values.append(limit)
+            param_values.append(offset)
+            rows = await conn.fetch(orders_query, *param_values)
 
         # Convert to response models
         items = [OrderResponse(**dict(row)) for row in rows]
@@ -97,8 +96,9 @@ async def list_orders(
 
         return OrderListResponse(total=total, items=items, limit=limit, offset=offset)
     except Exception as e:
-        logger.warning(f"Failed to query orders table, using mock data: {e}")
-        return get_mock_orders(limit, offset)
+        logger.error(f"Failed to query orders table: {e}")
+        # Return empty list instead of mock data when table doesn't exist
+        return OrderListResponse(total=0, items=[], limit=limit, offset=offset)
 
 
 @router.get("/{order_id}", response_model=OrderResponse)
@@ -128,9 +128,8 @@ async def get_order(
                 symbol, side, order_type,
                 quantity, price,
                 status, filled_quantity, filled_price,
-                commission, commission_asset,
-                created_at, submitted_at, filled_at,
-                rejected_reason, metadata
+                commission, placed_at, filled_at,
+                cancelled_at, metadata
             FROM orders
             WHERE id = $1
         """
@@ -148,93 +147,8 @@ async def get_order(
     except HTTPException:
         raise
     except Exception as e:
-        logger.warning(f"Failed to query order {order_id}, using mock data: {e}")
-        mock_orders = get_mock_orders_list()
-        for order in mock_orders:
-            if order["id"] == order_id:
-                return OrderResponse(**order)
+        logger.error(f"Failed to query order {order_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Order {order_id} not found",
         )
-
-
-def get_mock_orders_list() -> list[dict]:
-    """Get mock orders for development."""
-    from datetime import datetime, timedelta, timezone
-    from decimal import Decimal
-
-    now = datetime.now(timezone.utc)
-    return [
-        {
-            "id": "order-1",
-            "run_id": "run-001",
-            "exchange_order_id": "1234567890",
-            "symbol": "BTCUSDT",
-            "side": "BUY",
-            "order_type": "LIMIT",
-            "quantity": Decimal("0.5"),
-            "price": Decimal("45000.00"),
-            "status": "filled",
-            "filled_quantity": Decimal("0.5"),
-            "filled_price": Decimal("45005.50"),
-            "commission": Decimal("24.00"),
-            "commission_asset": "USDT",
-            "created_at": (now - timedelta(days=2, hours=3)).isoformat(),
-            "submitted_at": (now - timedelta(days=2, hours=3)).isoformat(),
-            "filled_at": (now - timedelta(days=2, hours=2, minutes=45)).isoformat(),
-            "rejected_reason": None,
-            "metadata": {},
-        },
-        {
-            "id": "order-2",
-            "run_id": "run-001",
-            "exchange_order_id": "1234567891",
-            "symbol": "BTCUSDT",
-            "side": "SELL",
-            "order_type": "LIMIT",
-            "quantity": Decimal("0.5"),
-            "price": Decimal("46200.00"),
-            "status": "filled",
-            "filled_quantity": Decimal("0.5"),
-            "filled_price": Decimal("46195.50"),
-            "commission": Decimal("23.10"),
-            "commission_asset": "USDT",
-            "created_at": (now - timedelta(days=1, hours=5)).isoformat(),
-            "submitted_at": (now - timedelta(days=1, hours=5)).isoformat(),
-            "filled_at": (now - timedelta(days=1, hours=4, minutes=30)).isoformat(),
-            "rejected_reason": None,
-            "metadata": {},
-        },
-        {
-            "id": "order-3",
-            "run_id": "run-001",
-            "exchange_order_id": "1234567892",
-            "symbol": "BTCUSDT",
-            "side": "BUY",
-            "order_type": "LIMIT",
-            "quantity": Decimal("0.3"),
-            "price": Decimal("45800.00"),
-            "status": "partial",
-            "filled_quantity": Decimal("0.2"),
-            "filled_price": Decimal("45805.50"),
-            "commission": Decimal("9.16"),
-            "commission_asset": "USDT",
-            "created_at": (now - timedelta(hours=12)).isoformat(),
-            "submitted_at": (now - timedelta(hours=12)).isoformat(),
-            "filled_at": (now - timedelta(hours=11, minutes=30)).isoformat(),
-            "rejected_reason": None,
-            "metadata": {},
-        },
-    ]
-
-
-def get_mock_orders(limit: int = 100, offset: int = 0) -> OrderListResponse:
-    """Get paginated mock orders."""
-    items = get_mock_orders_list()
-    return OrderListResponse(
-        total=len(items),
-        items=[OrderResponse(**item) for item in items[offset : offset + limit]],
-        limit=limit,
-        offset=offset,
-    )

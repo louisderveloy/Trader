@@ -39,7 +39,7 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/UserIndicatorView.vue'),
     meta: { requiresAuth: true },
   },
-  // Wave 3: Optimizations, Trades, Logs
+  // Wave 3: Optimizations, Trades
   {
     path: '/optimizations',
     name: 'optimizations',
@@ -52,11 +52,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/TradesView.vue'),
     meta: { requiresAuth: true },
   },
+  // Catch-all for 404
   {
-    path: '/logs',
-    name: 'logs',
-    component: () => import('@/views/LogsView.vue'),
-    meta: { requiresAuth: true },
+    path: '/:pathMatch(.*)*',
+    name: 'not-found',
+    component: () => import('@/views/NotFoundView.vue'),
+    meta: { requiresAuth: false },
   },
 ]
 

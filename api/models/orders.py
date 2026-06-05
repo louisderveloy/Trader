@@ -15,33 +15,31 @@ class OrderResponse(BaseModel):
     """Order response model."""
 
     id: str = Field(..., description="Order ID (UUID)")
-    run_id: str = Field(..., description="Run ID")
-    exchange_order_id: str = Field(..., description="Exchange order ID (from Binance)")
+    run_id: int = Field(..., description="Run ID")
+    exchange_order_id: Optional[str] = Field(None, description="Exchange order ID (from Binance)")
 
     symbol: str = Field(..., description="Trading symbol")
-    side: str = Field(..., description="Order side: BUY, SELL")
-    order_type: str = Field(..., description="Order type: LIMIT, MARKET")
+    side: str = Field(..., description="Order side: buy, sell")
+    order_type: str = Field(..., description="Order type: limit, market")
 
     # Quantities
     quantity: Decimal = Field(..., description="Order quantity")
-    price: Optional[Decimal] = Field(None, description="Limit price (if LIMIT order)")
+    price: Optional[Decimal] = Field(None, description="Limit price (if limit order)")
 
     # Execution
-    status: str = Field(..., description="Order status: pending, filled, partial, cancelled, rejected")
+    status: str = Field(..., description="Order status: pending, filled, cancelled, rejected")
     filled_quantity: Decimal = Field(..., description="Filled quantity")
     filled_price: Optional[Decimal] = Field(None, description="Average filled price")
 
-    # Fees and costs
-    commission: Decimal = Field(..., description="Commission paid")
-    commission_asset: str = Field(default="USDT", description="Commission asset")
+    # Fees
+    commission: Optional[Decimal] = Field(None, description="Commission paid")
 
     # Timestamps
-    created_at: datetime = Field(..., description="Order creation timestamp")
-    submitted_at: Optional[datetime] = Field(None, description="Order submission to exchange")
+    placed_at: datetime = Field(..., description="Order placement timestamp")
     filled_at: Optional[datetime] = Field(None, description="Order fill timestamp")
+    cancelled_at: Optional[datetime] = Field(None, description="Order cancellation timestamp")
 
     # Additional data
-    rejected_reason: Optional[str] = Field(None, description="Reason if order was rejected")
     metadata: Optional[dict[str, Any]] = Field(None, description="Additional metadata")
 
     class Config:
@@ -53,13 +51,10 @@ class OrderResponse(BaseModel):
 class OrderFilter(BaseModel):
     """Order filter query parameters."""
 
-    run_id: Optional[str] = Field(None, description="Filter by run ID")
+    run_id: Optional[int] = Field(None, description="Filter by run ID")
     symbol: Optional[str] = Field(None, description="Filter by symbol")
-    side: Optional[str] = Field(None, description="Filter by side (BUY/SELL)")
+    side: Optional[str] = Field(None, description="Filter by side (buy/sell)")
     status: Optional[str] = Field(None, description="Filter by status")
-
-    date_from: Optional[datetime] = Field(None, description="Order from date")
-    date_to: Optional[datetime] = Field(None, description="Order to date")
 
     limit: int = Field(default=100, ge=1, le=1000, description="Maximum results")
     offset: int = Field(default=0, ge=0, description="Offset for pagination")

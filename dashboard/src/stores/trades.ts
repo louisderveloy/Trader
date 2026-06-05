@@ -42,9 +42,9 @@ export const useTradesStore = defineStore('trades', () => {
 
     // Ensure pnl values are numbers (convert from Decimal if needed)
     const pnlValues = trades.value.map(t => {
-      const pnl = t.pnl
-      if (typeof pnl === 'number') return pnl
-      if (typeof pnl === 'string') return parseFloat(pnl)
+      if (!t.pnl) return 0
+      if (typeof t.pnl === 'number') return t.pnl
+      if (typeof t.pnl === 'string') return parseFloat(t.pnl)
       return 0
     })
 

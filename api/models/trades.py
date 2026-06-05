@@ -17,25 +17,21 @@ class TradeResponse(BaseModel):
     id: str = Field(..., description="Trade ID (UUID)")
     run_id: int = Field(..., description="Run ID")
     symbol: str = Field(..., description="Trading symbol")
-    direction: str = Field(..., description="Trade direction: long, short")
+    side: str = Field(..., description="Trade side: long, short")
+    environment: str = Field(..., description="Environment: testnet, live, paper, backtest")
 
     entry_price: Decimal = Field(..., description="Entry price")
-    entry_time: datetime = Field(..., description="Entry timestamp")
-    entry_size: Decimal = Field(..., description="Position size")
+    exit_price: Decimal = Field(..., description="Exit price")
+    quantity: Decimal = Field(..., description="Position size")
 
-    exit_price: Optional[Decimal] = Field(None, description="Exit price")
-    exit_time: Optional[datetime] = Field(None, description="Exit timestamp")
+    pnl: Decimal = Field(..., description="Profit/Loss in USDT")
+    pnl_percent: Decimal = Field(..., description="P&L as percentage")
 
-    pnl: Optional[Decimal] = Field(None, description="Profit/Loss in USDT")
-    pnl_percent: Optional[float] = Field(None, description="P&L as percentage")
+    commission_total: Decimal = Field(..., description="Total commission paid")
 
-    fees: Decimal = Field(..., description="Total fees paid")
-    slippage: Optional[Decimal] = Field(None, description="Slippage amount")
-
-    stop_loss_price: Optional[Decimal] = Field(None, description="Stop-loss price")
-    take_profit_price: Optional[Decimal] = Field(None, description="Take-profit price")
-
-    exit_reason: Optional[str] = Field(None, description="Exit reason: signal, stop_loss, take_profit")
+    opened_at: datetime = Field(..., description="Entry timestamp")
+    closed_at: datetime = Field(..., description="Exit timestamp")
+    duration_seconds: int = Field(..., description="Trade duration in seconds")
 
     created_at: datetime = Field(..., description="Creation timestamp")
 
@@ -50,13 +46,11 @@ class TradeFilter(BaseModel):
 
     run_id: Optional[int] = Field(None, description="Filter by run ID")
     symbol: Optional[str] = Field(None, description="Filter by symbol")
-    direction: Optional[str] = Field(None, description="Filter by direction")
+    side: Optional[str] = Field(None, description="Filter by side (long/short)")
+    environment: Optional[str] = Field(None, description="Filter by environment (testnet/live/paper/backtest)")
 
     min_pnl: Optional[Decimal] = Field(None, description="Minimum P&L")
     max_pnl: Optional[Decimal] = Field(None, description="Maximum P&L")
-
-    date_from: Optional[datetime] = Field(None, description="Entry date from")
-    date_to: Optional[datetime] = Field(None, description="Entry date to")
 
     limit: int = Field(default=100, ge=1, le=1000, description="Maximum results")
     offset: int = Field(default=0, ge=0, description="Offset for pagination")

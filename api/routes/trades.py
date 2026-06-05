@@ -21,9 +21,10 @@ router = APIRouter()
 
 @router.get("", response_model=TradeListResponse)
 async def list_trades(
-    run_id: Annotated[str | None, Query(description="Filter by run ID")] = None,
+    run_id: Annotated[int | None, Query(description="Filter by run ID")] = None,
     symbol: Annotated[str | None, Query(description="Filter by symbol")] = None,
-    direction: Annotated[str | None, Query(description="Filter by direction (long/short)")] = None,
+    side: Annotated[str | None, Query(description="Filter by side (long/short)")] = None,
+    environment: Annotated[str | None, Query(description="Filter by environment (testnet/live)")] = None,
     min_pnl: Annotated[float | None, Query(description="Minimum P&L")] = None,
     max_pnl: Annotated[float | None, Query(description="Maximum P&L")] = None,
     limit: Annotated[int, Query(ge=1, le=1000, description="Maximum results")] = 100,
@@ -42,57 +43,65 @@ async def list_trades(
     try:
         # Build WHERE clause
         conditions = []
-        params = {}
+        param_values = []
 
-        if run_id:
-            conditions.append(f"run_id = ${len(params) + 1}")
-            params["run_id"] = run_id
+        if run_id is not None:
+            conditions.append(f"t.run_id = ${len(param_values) + 1}")
+            param_values.append(run_id)
 
         if symbol:
-            conditions.append(f"symbol = ${len(params) + 1}")
-            params["symbol"] = symbol
+            conditions.append(f"t.symbol = ${len(param_values) + 1}")
+            param_values.append(symbol)
 
-        if direction:
-            conditions.append(f"direction = ${len(params) + 1}")
-            params["direction"] = direction
+        if side:
+            conditions.append(f"t.side = ${len(param_values) + 1}")
+            param_values.append(side)
+
+        if environment:
+            conditions.append(f"r.environment = ${len(param_values) + 1}")
+            param_values.append(environment)
 
         if min_pnl is not None:
-            conditions.append(f"pnl >= ${len(params) + 1}")
-            params["min_pnl"] = min_pnl
+            conditions.append(f"t.pnl >= ${len(param_values) + 1}")
+            param_values.append(min_pnl)
 
         if max_pnl is not None:
-            conditions.append(f"pnl <= ${len(params) + 1}")
-            params["max_pnl"] = max_pnl
+            conditions.append(f"t.pnl <= ${len(param_values) + 1}")
+            param_values.append(max_pnl)
 
         where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
 
         # Count total
-        count_query = f"SELECT COUNT(*) as count FROM trades {where_clause}"
+        count_query = f"""
+            SELECT COUNT(*) as count FROM trades t
+            JOIN runs r ON t.run_id = r.id
+            {where_clause}
+        """
 
         # Get trades
         trades_query = f"""
             SELECT
-                id, run_id, symbol, direction,
-                entry_price, entry_time, entry_size,
-                exit_price, exit_time,
-                pnl, pnl_percent, fees, slippage,
-                stop_loss_price, take_profit_price, exit_reason,
-                created_at
-            FROM trades
+                t.id, t.run_id, t.symbol, t.side, r.environment,
+                t.entry_price, t.exit_price, t.quantity,
+                t.pnl, t.pnl_percent, t.commission_total,
+                t.opened_at, t.closed_at, t.duration_seconds,
+                t.created_at
+            FROM trades t
+            JOIN runs r ON t.run_id = r.id
             {where_clause}
-            ORDER BY entry_time DESC
-            LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}
+            ORDER BY t.closed_at DESC
+            LIMIT ${len(param_values) + 1} OFFSET ${len(param_values) + 2}
         """
 
         async with db_pool.acquire() as conn:
             # Count
-            count_row = await conn.fetchrow(count_query, *params.values())
-            total = count_row["count"]
+            count_row = await conn.fetchrow(count_query, *param_values)
+            total = count_row["count"] if count_row else 0
 
             # Fetch trades
-            params["limit"] = limit
-            params["offset"] = offset
-            rows = await conn.fetch(trades_query, *params.values())
+            param_values.append(limit)
+            param_values.append(offset)
+            rows = await conn.fetch(trades_query, *param_values)
 
         # Convert to response models
         items = [TradeResponse(**dict(row)) for row in rows]
@@ -101,8 +110,9 @@ async def list_trades(
 
         return TradeListResponse(total=total, items=items, limit=limit, offset=offset)
     except Exception as e:
-        logger.warning(f"Failed to query trades table, using mock data: {e}")
-        return get_mock_trades(limit, offset)
+        logger.error(f"Failed to query trades table: {e}")
+        # Return empty list instead of mock data when table doesn't exist
+        return TradeListResponse(total=0, items=[], limit=limit, offset=offset)
 
 
 @router.get("/{trade_id}", response_model=TradeResponse)
@@ -128,14 +138,14 @@ async def get_trade(
     try:
         query = """
             SELECT
-                id, run_id, symbol, direction,
-                entry_price, entry_time, entry_size,
-                exit_price, exit_time,
-                pnl, pnl_percent, fees, slippage,
-                stop_loss_price, take_profit_price, exit_reason,
-                created_at
-            FROM trades
-            WHERE id = $1
+                t.id, t.run_id, t.symbol, t.side, r.environment,
+                t.entry_price, t.exit_price, t.quantity,
+                t.pnl, t.pnl_percent, t.commission_total,
+                t.opened_at, t.closed_at, t.duration_seconds,
+                t.created_at
+            FROM trades t
+            JOIN runs r ON t.run_id = r.id
+            WHERE t.id = $1
         """
 
         async with db_pool.acquire() as conn:
@@ -151,90 +161,8 @@ async def get_trade(
     except HTTPException:
         raise
     except Exception as e:
-        logger.warning(f"Failed to query trade {trade_id}, using mock data: {e}")
-        mock_trades = get_mock_trades_list()
-        for trade in mock_trades:
-            if trade["id"] == trade_id:
-                return TradeResponse(**trade)
+        logger.error(f"Failed to query trade {trade_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Trade {trade_id} not found",
         )
-
-
-def get_mock_trades_list() -> list[dict]:
-    """Get mock trades for development."""
-    from datetime import datetime, timedelta, timezone
-    from decimal import Decimal
-
-    now = datetime.now(timezone.utc)
-    return [
-        {
-            "id": "trade-1",
-            "run_id": 1,
-            "symbol": "BTCUSDT",
-            "direction": "long",
-            "entry_price": Decimal("45000.00"),
-            "entry_time": (now - timedelta(days=2, hours=3)).isoformat(),
-            "entry_size": Decimal("0.5"),
-            "exit_price": Decimal("46200.00"),
-            "exit_time": (now - timedelta(days=1, hours=5)).isoformat(),
-            "pnl": Decimal("600.00"),
-            "pnl_percent": 0.0267,
-            "fees": Decimal("24.00"),
-            "slippage": Decimal("5.50"),
-            "stop_loss_price": Decimal("44100.00"),
-            "take_profit_price": Decimal("47300.00"),
-            "exit_reason": "signal",
-            "created_at": (now - timedelta(days=2, hours=3)).isoformat(),
-        },
-        {
-            "id": "trade-2",
-            "run_id": 1,
-            "symbol": "BTCUSDT",
-            "direction": "long",
-            "entry_price": Decimal("46200.00"),
-            "entry_time": (now - timedelta(days=1, hours=5)).isoformat(),
-            "entry_size": Decimal("0.3"),
-            "exit_price": Decimal("45800.00"),
-            "exit_time": (now - timedelta(hours=12)).isoformat(),
-            "pnl": Decimal("-139.20"),
-            "pnl_percent": -0.0086,
-            "fees": Decimal("13.80"),
-            "slippage": Decimal("3.20"),
-            "stop_loss_price": Decimal("45378.00"),
-            "take_profit_price": Decimal("47886.00"),
-            "exit_reason": "stop_loss",
-            "created_at": (now - timedelta(days=1, hours=5)).isoformat(),
-        },
-        {
-            "id": "trade-3",
-            "run_id": 1,
-            "symbol": "BTCUSDT",
-            "direction": "long",
-            "entry_price": Decimal("45800.00"),
-            "entry_time": (now - timedelta(hours=12)).isoformat(),
-            "entry_size": Decimal("0.8"),
-            "exit_price": Decimal("46850.00"),
-            "exit_time": (now - timedelta(hours=2)).isoformat(),
-            "pnl": Decimal("840.00"),
-            "pnl_percent": 0.0228,
-            "fees": Decimal("37.60"),
-            "slippage": Decimal("8.40"),
-            "stop_loss_price": Decimal("45092.00"),
-            "take_profit_price": Decimal("48016.00"),
-            "exit_reason": "take_profit",
-            "created_at": (now - timedelta(hours=12)).isoformat(),
-        },
-    ]
-
-
-def get_mock_trades(limit: int = 100, offset: int = 0) -> TradeListResponse:
-    """Get paginated mock trades."""
-    items = get_mock_trades_list()
-    return TradeListResponse(
-        total=len(items),
-        items=[TradeResponse(**item) for item in items[offset : offset + limit]],
-        limit=limit,
-        offset=offset,
-    )

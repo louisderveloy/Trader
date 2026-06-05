@@ -8,21 +8,19 @@ import { apiClient } from './client'
 
 export interface Trade {
   id: string
-  run_id: string
+  run_id: number
   symbol: string
-  direction: 'long' | 'short'
+  side: 'long' | 'short'
+  environment: 'testnet' | 'live' | 'paper' | 'backtest'
   entry_price: number
-  entry_time: string
-  entry_size: number
-  exit_price: number | null
-  exit_time: string | null
-  pnl: number | null
-  pnl_percent: number | null
-  fees: number
-  slippage: number | null
-  stop_loss_price: number | null
-  take_profit_price: number | null
-  exit_reason: string | null
+  exit_price: number
+  quantity: number
+  pnl: number
+  pnl_percent: number
+  commission_total: number
+  opened_at: string
+  closed_at: string
+  duration_seconds: number
   created_at: string
 }
 
@@ -34,9 +32,10 @@ export interface TradeListResponse {
 }
 
 export interface TradeFilters {
-  run_id?: string
+  run_id?: number
   symbol?: string
-  direction?: 'long' | 'short'
+  side?: 'long' | 'short'
+  environment?: 'testnet' | 'live' | 'paper' | 'backtest'
   min_pnl?: number
   max_pnl?: number
   limit?: number
@@ -52,7 +51,8 @@ export async function getTrades(filters: TradeFilters = {}): Promise<TradeListRe
     offset: filters.offset || 0,
     ...(filters.run_id && { run_id: filters.run_id }),
     ...(filters.symbol && { symbol: filters.symbol }),
-    ...(filters.direction && { direction: filters.direction }),
+    ...(filters.side && { side: filters.side }),
+    ...(filters.environment && { environment: filters.environment }),
     ...(filters.min_pnl !== undefined && { min_pnl: filters.min_pnl }),
     ...(filters.max_pnl !== undefined && { max_pnl: filters.max_pnl })
   }

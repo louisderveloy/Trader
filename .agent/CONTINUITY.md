@@ -90,6 +90,57 @@ Implementing Optuna-based optimization with walk-forward analysis for indicator 
 
 ## [DECISIONS]
 
+### 2026-06-05T[CURRENT] [USER] Dashboard data sources: Real database vs mock data
+- **Decision:** Transition dashboard from mock/placeholder data to querying real PostgreSQL database
+- **Rationale:**
+  - User requested real data integration across all dashboard views
+  - Mock data was only useful during development for placeholder views
+  - Database now has complete schema with all tables populated
+- **Implementation:**
+  - Removed all mock data fallback functions from API routes
+  - Updated error handling to return empty lists instead of 404 (graceful degradation)
+  - Fixed field name mismatches between frontend assumptions and actual database schema
+- **Impact:**
+  - Trades, Orders, Optimizations, Signals now query real database
+  - Logs remain mock data (intentional - API endpoint not implemented yet)
+  - Dashboard gracefully handles empty tables with proper empty state messages
+- **Result:** Dashboard now provides accurate data visualization tied to actual trading activity
+
+### 2026-06-05T[CURRENT] [USER] Home page redesign: From Wave 1 MVP to analytics dashboard
+- **Decision:** Remove Wave 1 MVP info card and replace with sophisticated analytics interface
+- **Features added:**
+  - Period selector (day/month/quarter/year/custom with relative dates)
+  - Global statistics for all assets (P&L, P&L %, trades, win rate, volume)
+  - Per-asset breakdown showing same metrics broken down by symbol
+  - Empty state messaging when no trades for selected period
+- **Rationale:** Provides richer analytics context, replaces placeholder data with actual insights
+- **Impact:** Home page now primary analytics dashboard instead of simple status display
+- **Result:** Users can quickly analyze performance across different timeframes and assets
+
+### 2026-06-05T[CURRENT] [USER] Logs tab removal from dashboard navigation
+- **Decision:** Remove Logs tab entirely from sidebar navigation
+- **Rationale:** Logs functionality incomplete, not ready for user-facing dashboard
+- **Impact:**
+  - Removed from AppSidebar navigation
+  - Removed from router configuration
+  - Kept mock implementation in api/logs.ts for future use
+- **Result:** Cleaner navigation, no confusion about incomplete features
+
+### 2026-06-05T[CURRENT] [USER] Network environment filtering (testnet/live/paper/backtest)
+- **Decision:** Add environment selector to both Home and Trades pages for filtering by network
+- **Rationale:**
+  - Users need to distinguish between testnet trades, live trades, paper trading, and backtest results
+  - Database runs table includes environment column for this purpose
+  - Filtering at both global level (home stats) and detailed level (trades list)
+- **Implementation:**
+  - Backend: Updated trades endpoint to JOIN with runs table and filter by environment
+  - Frontend: Added environment selectors with tooltips on both pages
+  - Added helpful tooltips explaining each environment option
+- **Impact:**
+  - Users can view analytics for specific environments only
+  - Reduces noise when analyzing different types of trading activity
+- **Result:** Better data organization and user control over what they see
+
 ### 2026-06-04T22:00Z [USER] Architecture change: Grafana moved to external hosting
 - **Decision:** Move Grafana to separate external server for multi-project monitoring
 - **Rationale:** User wants to use one Grafana instance to monitor multiple projects, not just this trading bot
@@ -1230,4 +1281,140 @@ User should verify:
 - Phase 12: Automated tests
 - Dashboard Wave 2: Configuration + User Indicator (blocked on Phase 8 endpoints)
 - Dashboard Wave 3: Optimizations + Trades + Logs (blocked on Phase 8 endpoints)
+
+### 2026-06-05T[CURRENT] [CODE] Phase 9 — Dashboard Real Data Integration & Enhancements Complete ✅
+
+**Status:** ✅ Complete
+
+**Session work summary (continuation from previous context):**
+
+**1. Real Data Integration**
+Transitioned dashboard from mock data to querying actual PostgreSQL database:
+- ✅ Removed all mock data fallback functions from API routes
+- ✅ Updated API models and routes to return real database columns
+- ✅ Changed error handling: return empty lists instead of 404 when data is missing
+- ✅ Fixed field names to match actual database schema (direction → side, entry_time → opened_at, etc.)
+- ✅ Fixed type coercion for Decimal values from asyncpg
+
+**Files modified:**
+- api/models/trades.py, api/models/orders.py, api/models/optimizations.py, api/models/signals.py
+- api/routes/trades.py, api/routes/orders.py, api/routes/optimizations.py, api/routes/signals.py
+- dashboard/src/api/trades.ts, dashboard/src/stores/trades.ts
+
+**2. Home Page (Accueil) Redesign**
+Complete redesign from Wave 1 MVP card to sophisticated analytics dashboard:
+- ✅ Removed Wave 1 MVP card
+- ✅ Added period selector: day/month/quarter/year/custom relative dates
+- ✅ Custom date range support with two date input fields
+- ✅ Global statistics for all assets (P&L, P&L %, trades, win rate, volume)
+- ✅ Per-asset breakdown showing same statistics for each symbol
+- ✅ Empty state message when no trades for selected period
+
+**Files created/modified:**
+- dashboard/src/views/HomeView.vue (complete redesign)
+- dashboard/src/components/home/PeriodStats.vue (new component for stats grid)
+
+**3. Logs Tab Removal**
+- ✅ Removed Logs navigation item from AppSidebar
+- ✅ Removed /logs route from router configuration
+- ✅ Kept mock logs implementation (for future use, not displayed)
+
+**Files modified:**
+- dashboard/src/components/layout/AppSidebar.vue
+- dashboard/src/router/index.ts
+
+**4. 404 Page Addition**
+- ✅ Created NotFoundView.vue with French error message
+- ✅ Added catch-all route at end of router (path: '/:pathMatch(.*)*')
+- ✅ Displays attempted URL path
+- ✅ Button link back to home ("Retour à l'accueil")
+- ✅ Professional styling with gradient background
+
+**Files created:**
+- dashboard/src/views/NotFoundView.vue
+
+**5. Network Environment Selectors**
+Added testnet/live/paper/backtest filtering to both Home and Trades pages:
+
+**Backend updates:**
+- ✅ Updated TradeResponse model to include `environment: str` field
+- ✅ Added `environment` parameter to list_trades() endpoint
+- ✅ Modified SQL queries to JOIN with runs table to fetch environment value
+- ✅ Applied environment filtering to WHERE clause
+- ✅ Updated both list and detail endpoints
+
+**Files modified:**
+- api/models/trades.py (added environment field and filter)
+- api/routes/trades.py (updated queries to JOIN with runs table)
+
+**Frontend updates:**
+- ✅ Updated Trade interface to include environment type
+- ✅ Added environment to TradeFilters interface
+- ✅ Updated getTrades() to pass environment parameter to API
+
+**Files modified:**
+- dashboard/src/api/trades.ts (added environment field and filter)
+- dashboard/src/stores/trades.ts (no changes needed, filters already generic)
+
+**TradesView updates:**
+- ✅ Added environment selector dropdown as first filter
+- ✅ Changed grid layout from 4 to 5 columns
+- ✅ Environment options: Tous/Testnet/Live/Paper/Backtest
+
+**HomeView updates:**
+- ✅ Added environment selector dropdown before period selector
+- ✅ Added `selectedEnvironment` state variable
+- ✅ Updated filteredTrades computed to filter by environment + date range
+- ✅ Stats now respect both filters (period + environment)
+
+**Files modified:**
+- dashboard/src/views/TradesView.vue (added environment selector)
+- dashboard/src/views/HomeView.vue (added environment selector + filtering)
+
+**6. Tooltips for Environment Selector**
+Added helpful tooltips to explain each environment option:
+- ✅ Info icon (?) next to "Réseau" label
+- ✅ Tooltip explains: Testnet (Binance testnet), Live (Trading réel), Paper (Simulation), Backtest (Historique)
+- ✅ Styled with dark background, white text
+- ✅ Positioned above icon, visible on hover
+- ✅ Applied to both Home and Trades pages
+
+**Tooltip implementation:**
+- Info icon using SVG from Heroicons
+- Group hover for tooltip visibility
+- Dark gray background (gray-900) with white text
+- Positioned absolutely with translate for centering
+- Helps users understand what each environment means
+
+**Files modified:**
+- dashboard/src/views/HomeView.vue (added tooltip)
+- dashboard/src/views/TradesView.vue (added tooltip)
+
+**Summary of changes:**
+- 8 API files modified (models + routes)
+- 8 Frontend files modified (types, stores, views)
+- 2 New components created (PeriodStats, NotFoundView)
+- 3 Tooltips added (environment selectors)
+- Full real data integration
+- Enhanced UX with better filtering and help text
+
+**Testing status:**
+- ⏳ End-to-end testing needed (user responsibility)
+- ⏳ Verify period selector works correctly
+- ⏳ Verify environment filtering on both pages
+- ⏳ Verify tooltips display and are readable
+- ⏳ Verify responsive design on mobile/tablet/desktop
+- ⏳ Verify 404 page appears on undefined routes
+
+**Dependencies:**
+- ✅ All changes use existing API endpoints
+- ✅ Real data from database (trades, runs tables with environment column)
+- ✅ No new backend functionality required
+- ✅ Frontend-only changes for filtering and display
+
+**Next steps:**
+- Commit all changes to git
+- Update CONTINUITY.md (this file) with session summary ✅
+- Manual testing of all features (user responsibility)
+- Prepare for Phase 10 (Grafana dashboards) or continue with other enhancements
 

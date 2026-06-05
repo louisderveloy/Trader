@@ -131,12 +131,6 @@ const navItems = computed(() => [
     icon: ChartIcon,
     disabled: false, // Wave 3 ✅ ACTIVE
   },
-  {
-    path: '/logs',
-    label: 'Logs',
-    icon: ChartIcon,
-    disabled: false, // Wave 3 ✅ ACTIVE
-  },
 ])
 
 function handleNavClick(item: any) {
