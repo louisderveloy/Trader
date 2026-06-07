@@ -26,7 +26,7 @@ jobs:
 
       - name: Run tests
         working-directory: Bot
-        run: pytest tests/pytest.ini
+        run: python -m pytest tests/test_backtesting_coherence.py
 
   # ==========================================
   # Security: Check for secrets in code
