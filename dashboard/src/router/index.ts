@@ -52,6 +52,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/TradesView.vue'),
     meta: { requiresAuth: true },
   },
+  {
+    path: '/logs',
+    name: 'logs',
+    component: () => import('@/views/LogsView.vue'),
+    meta: { requiresAuth: true },
+  },
   // Catch-all for 404
   {
     path: '/:pathMatch(.*)*',

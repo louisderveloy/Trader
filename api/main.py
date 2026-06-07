@@ -112,6 +112,7 @@ from .routes.orders import router as orders_router
 from .routes.weights import router as weights_router
 from .routes.optimizations import router as optimizations_router
 from .routes.config import router as config_router
+from .routes.logs import router as logs_router
 
 app.include_router(health_router, tags=["health"])
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
@@ -122,6 +123,7 @@ app.include_router(orders_router, prefix="/orders", tags=["orders"])
 app.include_router(weights_router, prefix="/weights", tags=["weights"])
 app.include_router(optimizations_router, prefix="/optimizations", tags=["optimizations"])
 app.include_router(config_router, prefix="/config", tags=["config"])
+app.include_router(logs_router, prefix="/logs", tags=["errors"])
 
 
 @app.get("/")

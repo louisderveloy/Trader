@@ -1,58 +1,63 @@
 <template>
   <AppLayout>
-    <div class="max-w-7xl mx-auto">
+    <div class="space-y-6">
       <!-- Page Header -->
-      <div class="mb-6 flex items-center justify-between">
+      <div class="flex items-center justify-between">
         <div>
-          <h1 class="text-3xl font-bold text-gray-900">Logs</h1>
-          <p class="mt-2 text-gray-600">Journaux système et erreurs</p>
+          <h1 class="text-3xl font-bold text-gray-900">Logs & Erreurs</h1>
+          <p class="mt-2 text-gray-600">Journaux système et erreurs du bot de trading</p>
         </div>
-        <button
-          @click="toggleAutoRefresh"
-          :class="[
-            'px-4 py-2 rounded-md transition-colors',
-            isAutoRefreshing
-              ? 'bg-green-600 text-white hover:bg-green-700'
-              : 'bg-gray-300 text-gray-700 hover:bg-gray-400'
-          ]"
-        >
-          {{ isAutoRefreshing ? 'Auto-refresh ON' : 'Auto-refresh OFF' }}
-        </button>
       </div>
 
-      <!-- Log Summary -->
-      <div v-if="!isLoading && logs.length > 0" class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-        <div class="bg-blue-50 rounded-lg p-3">
-          <p class="text-xs text-blue-700 font-semibold">DEBUG</p>
-          <p class="text-2xl font-bold text-blue-900">{{ logSummary.debug }}</p>
+      <!-- Statistics Cards -->
+      <div v-if="!isLoading && logs.length > 0" class="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <div class="bg-white rounded-lg shadow p-4">
+          <p class="text-xs text-gray-600 mb-1">DEBUG</p>
+          <p class="text-2xl font-bold text-blue-600">{{ logSummary.debug }}</p>
         </div>
-        <div class="bg-green-50 rounded-lg p-3">
-          <p class="text-xs text-green-700 font-semibold">INFO</p>
-          <p class="text-2xl font-bold text-green-900">{{ logSummary.info }}</p>
+        <div class="bg-white rounded-lg shadow p-4">
+          <p class="text-xs text-gray-600 mb-1">INFO</p>
+          <p class="text-2xl font-bold text-green-600">{{ logSummary.info }}</p>
         </div>
-        <div class="bg-yellow-50 rounded-lg p-3">
-          <p class="text-xs text-yellow-700 font-semibold">WARNING</p>
-          <p class="text-2xl font-bold text-yellow-900">{{ logSummary.warning }}</p>
+        <div class="bg-white rounded-lg shadow p-4">
+          <p class="text-xs text-gray-600 mb-1">WARNING</p>
+          <p class="text-2xl font-bold text-yellow-600">{{ logSummary.warning }}</p>
         </div>
-        <div class="bg-orange-50 rounded-lg p-3">
-          <p class="text-xs text-orange-700 font-semibold">ERROR</p>
-          <p class="text-2xl font-bold text-orange-900">{{ logSummary.error }}</p>
+        <div class="bg-white rounded-lg shadow p-4">
+          <p class="text-xs text-gray-600 mb-1">ERROR</p>
+          <p class="text-2xl font-bold text-orange-600">{{ logSummary.error }}</p>
         </div>
-        <div class="bg-red-50 rounded-lg p-3">
-          <p class="text-xs text-red-700 font-semibold">CRITICAL</p>
-          <p class="text-2xl font-bold text-red-900">{{ logSummary.critical }}</p>
+        <div class="bg-white rounded-lg shadow p-4">
+          <p class="text-xs text-gray-600 mb-1">CRITICAL</p>
+          <p class="text-2xl font-bold text-red-600">{{ logSummary.critical }}</p>
         </div>
       </div>
 
       <!-- Filters -->
-      <div class="bg-white rounded-lg shadow p-4 mb-6">
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="bg-white rounded-lg shadow p-4">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <!-- Level Filter -->
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Niveau</label>
+            <div class="flex items-center gap-1 mb-1">
+              <label class="block text-sm font-medium text-gray-700">Niveau</label>
+              <div class="group relative">
+                <svg class="w-4 h-4 text-gray-400 cursor-help" fill="currentColor" viewBox="0 0 20 20">
+                  <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd" />
+                </svg>
+                <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block bg-gray-900 text-white text-xs rounded py-2 px-3 whitespace-nowrap z-10">
+                  <div class="font-semibold mb-1">Filtrer par niveau de log</div>
+                  <div>• DEBUG: Informations détaillées</div>
+                  <div>• INFO: Messages informatifs</div>
+                  <div>• WARNING: Avertissements</div>
+                  <div>• ERROR: Erreurs</div>
+                  <div>• CRITICAL: Erreurs critiques</div>
+                </div>
+              </div>
+            </div>
             <select
               :value="filters.level || ''"
-              class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
-              @change="setLevelFilter(($event.target.value as string) || undefined)"
+              class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+              @change="setLevelFilter(($event.target as HTMLSelectElement).value || undefined)"
             >
               <option value="">Tous</option>
               <option value="DEBUG">DEBUG</option>
@@ -62,40 +67,46 @@
               <option value="CRITICAL">CRITICAL</option>
             </select>
           </div>
+
+          <!-- Logger Filter -->
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">Logger</label>
             <input
               :value="filters.logger || ''"
               type="text"
               placeholder="Ex: bot.exchange"
-              class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
-              @input="filters.logger = $event.target.value || undefined"
+              class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+              @input="filters.logger = ($event.target as HTMLInputElement).value || undefined"
             />
           </div>
+
+          <!-- Search Filter -->
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">Recherche</label>
             <input
               :value="filters.search || ''"
               type="text"
               placeholder="Rechercher dans les messages..."
-              class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
-              @input="setSearchFilter($event.target.value || undefined)"
+              class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+              @input="setSearchFilter(($event.target as HTMLInputElement).value || undefined)"
             />
           </div>
-        </div>
-        <div class="mt-3 flex gap-2">
-          <button
-            @click="applyFilters"
-            class="px-4 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700"
-          >
-            Filtrer
-          </button>
-          <button
-            @click="clearFilters"
-            class="px-4 py-2 bg-gray-300 text-gray-700 rounded-md text-sm hover:bg-gray-400"
-          >
-            Réinitialiser
-          </button>
+
+          <!-- Action Buttons -->
+          <div class="flex items-end gap-2">
+            <button
+              @click="applyFilters"
+              class="flex-1 px-4 py-2 bg-primary-600 text-white rounded-md text-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500"
+            >
+              Filtrer
+            </button>
+            <button
+              @click="clearFilters"
+              class="px-4 py-2 border border-gray-300 text-gray-700 rounded-md text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500"
+            >
+              Réinitialiser
+            </button>
+          </div>
         </div>
       </div>
 
@@ -105,93 +116,106 @@
       <!-- Error Alert -->
       <ErrorAlert v-if="error" :message="error" @dismiss="error = null" />
 
-      <!-- Logs List -->
-      <div v-else-if="logs.length > 0" class="space-y-3">
-        <div
-          v-for="log in logs"
-          :key="log.id"
-          :class="[
-            'rounded-lg p-4 border-l-4',
-            log.level === 'DEBUG'
-              ? 'bg-blue-50 border-blue-400'
-              : log.level === 'INFO'
-              ? 'bg-green-50 border-green-400'
-              : log.level === 'WARNING'
-              ? 'bg-yellow-50 border-yellow-400'
-              : log.level === 'ERROR'
-              ? 'bg-orange-50 border-orange-400'
-              : 'bg-red-50 border-red-400'
-          ]"
-        >
-          <div class="flex items-start justify-between gap-4">
-            <div class="flex-1">
-              <div class="flex items-center gap-2 mb-1">
+      <!-- Empty State -->
+      <EmptyState
+        v-else-if="logs.length === 0"
+        title="Aucun log trouvé"
+        message="Aucun log ne correspond aux filtres sélectionnés."
+      />
+
+      <!-- Logs Table -->
+      <div v-else class="bg-white rounded-lg shadow overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-100 border-b">
+            <tr>
+              <th class="px-4 py-3 text-left font-semibold text-gray-900">Niveau</th>
+              <th class="px-4 py-3 text-left font-semibold text-gray-900">Logger</th>
+              <th class="px-4 py-3 text-left font-semibold text-gray-900">Message</th>
+              <th class="px-4 py-3 text-left font-semibold text-gray-900">Source</th>
+              <th class="px-4 py-3 text-left font-semibold text-gray-900">Timestamp</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y">
+            <tr
+              v-for="log in logs"
+              :key="log.id"
+              class="hover:bg-gray-50"
+            >
+              <!-- Level -->
+              <td class="px-4 py-3">
                 <span
                   :class="[
-                    'px-2 py-1 rounded text-xs font-bold',
+                    'px-2 py-1 rounded text-xs font-semibold',
                     log.level === 'DEBUG'
-                      ? 'bg-blue-200 text-blue-800'
+                      ? 'bg-blue-100 text-blue-800'
                       : log.level === 'INFO'
-                      ? 'bg-green-200 text-green-800'
+                      ? 'bg-green-100 text-green-800'
                       : log.level === 'WARNING'
-                      ? 'bg-yellow-200 text-yellow-800'
+                      ? 'bg-yellow-100 text-yellow-800'
                       : log.level === 'ERROR'
-                      ? 'bg-orange-200 text-orange-800'
-                      : 'bg-red-200 text-red-800'
+                      ? 'bg-orange-100 text-orange-800'
+                      : 'bg-red-100 text-red-800'
                   ]"
                 >
                   {{ log.level }}
                 </span>
-                <span class="text-xs font-mono text-gray-700">{{ log.logger }}</span>
-              </div>
-              <p class="text-sm text-gray-900 mb-2">{{ log.message }}</p>
-              <div class="flex flex-wrap gap-2 text-xs text-gray-600">
-                <span v-if="log.source" class="bg-gray-200 px-2 py-1 rounded">
-                  Source: {{ log.source }}
-                </span>
-                <span v-if="log.run_id" class="bg-gray-200 px-2 py-1 rounded">
-                  Run: {{ log.run_id }}
-                </span>
-                <span class="bg-gray-200 px-2 py-1 rounded">
-                  {{ formatDateTime(log.timestamp) }}
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
+              </td>
+
+              <!-- Logger -->
+              <td class="px-4 py-3 font-mono text-xs text-gray-700">
+                {{ log.logger }}
+              </td>
+
+              <!-- Message -->
+              <td class="px-4 py-3 text-gray-900 max-w-md">
+                <div class="truncate" :title="log.message">
+                  {{ log.message }}
+                </div>
+              </td>
+
+              <!-- Source -->
+              <td class="px-4 py-3 text-gray-600 text-xs">
+                {{ log.source || '-' }}
+              </td>
+
+              <!-- Timestamp -->
+              <td class="px-4 py-3 text-gray-600 text-xs whitespace-nowrap">
+                {{ formatDateTime(log.timestamp) }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
-      <!-- Empty State -->
-      <EmptyState v-else title="Aucun log" description="Aucun log disponible" />
-
       <!-- Pagination -->
-      <div v-if="logs.length > 0" class="flex items-center justify-between mt-6">
-        <p class="text-sm text-gray-600">
-          Page {{ currentPage }} de {{ totalPages }} ({{ total }} logs)
-        </p>
-        <div class="flex gap-2">
-          <button
-            @click="handlePreviousPage"
-            :disabled="offset === 0"
-            class="px-4 py-2 border border-gray-300 rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
-          >
-            Précédent
-          </button>
-          <button
-            @click="handleNextPage"
-            :disabled="!hasMore"
-            class="px-4 py-2 border border-gray-300 rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
-          >
-            Suivant
-          </button>
-        </div>
+      <div v-if="logs.length > 0" class="flex items-center justify-center space-x-4">
+        <button
+          @click="handlePreviousPage"
+          :disabled="offset === 0"
+          class="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Précédent
+        </button>
+
+        <span class="text-sm text-gray-700">
+          Page {{ currentPage }} / {{ totalPages }}
+          <span class="text-gray-500">({{ total }} logs)</span>
+        </span>
+
+        <button
+          @click="handleNextPage"
+          :disabled="!hasMore"
+          class="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Suivant
+        </button>
       </div>
     </div>
   </AppLayout>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useLogsStore } from '@/stores/logs'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
@@ -215,20 +239,12 @@ const offset = computed(() => logsStore.offset)
 
 onMounted(async () => {
   await logsStore.fetchLogs()
-  logsStore.startAutoRefresh(5000)
+  logsStore.startAutoRefresh(10000) // Auto-refresh every 10 seconds
 })
 
 onBeforeUnmount(() => {
   logsStore.stopAutoRefresh()
 })
-
-function toggleAutoRefresh(): void {
-  if (isAutoRefreshing.value) {
-    logsStore.stopAutoRefresh()
-  } else {
-    logsStore.startAutoRefresh(5000)
-  }
-}
 
 function setLevelFilter(level: string | undefined): void {
   logsStore.setLevelFilter(level)
