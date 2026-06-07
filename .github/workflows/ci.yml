@@ -18,29 +18,11 @@ jobs:
       - name: Get file architecture
         run: ls -R
 
-      - name: Build bot Docker image
-        working-directory: Bot
-        run: |
-          docker build \
-            --build-arg INSTALL_DEV=true \
-            -t trader-bot:test \
-            .
+      - name: install dev dependencies
+        run: pip install Bot/requirements-dev.txt
 
-      - name: Run pytest in bot container
-        run: |
-          docker run --rm \
-            -v ${{ github.workspace }}/tests:/tests \
-            -v ${{ github.workspace }}/Bot:/app \
-            trader-bot:test \
-            sh -c "cd /tests && python -m pytest /tests -v --cov=bot --cov=api --cov-report=xml:/tests/coverage.xml --cov-report=term"
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          files: ./tests/coverage.xml
-          flags: unittests
-          name: codecov-umbrella
-          fail_ci_if_error: false
+      - name: Run tests
+        run: pytest /tests
 
   # ==========================================
   # Security: Check for secrets in code
