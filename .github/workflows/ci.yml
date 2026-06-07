@@ -22,7 +22,7 @@ jobs:
         run: pip install -r Bot/requirements-dev.txt
 
       - name: Run tests
-        run: pytest /tests
+        run: pytest tests
 
   # ==========================================
   # Security: Check for secrets in code
