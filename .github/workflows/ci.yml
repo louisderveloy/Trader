@@ -19,7 +19,7 @@ jobs:
         run: ls -R
 
       - name: install dev dependencies
-        run: pip install Bot/requirements-dev.txt
+        run: pip install -r Bot/requirements-dev.txt
 
       - name: Run tests
         run: pytest /tests
