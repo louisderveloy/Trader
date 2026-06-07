@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build bot Docker image
-        working-directory: ./bot
+        working-directory: bot
         run: |
           docker build \
             --build-arg INSTALL_DEV=true \
