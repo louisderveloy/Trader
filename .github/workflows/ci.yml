@@ -15,48 +15,28 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Create .env file for CI
+      - name: Build bot Docker image
         run: |
-          cat > .env << 'EOF'
-          POSTGRES_DB=trader_bot_test
-          POSTGRES_USER=trader
-          POSTGRES_PASSWORD=test_password
-          TIMESCALEDB_TELEMETRY=off
-          ENVIRONMENT=test
-          BYBIT_TESTNET=true
-          JWT_SECRET_KEY=test_secret_key_for_ci
-          EOF
-
-      - name: Start docker-compose services
-        run: docker-compose up -d postgres redis bot
-
-      - name: Wait for services to be healthy
-        run: |
-          echo "Waiting for PostgreSQL..."
-          timeout 60 bash -c 'until docker-compose exec -T postgres pg_isready -U trader -d trader_bot_test; do sleep 2; done'
-          echo "Waiting for Redis..."
-          timeout 60 bash -c 'until docker-compose exec -T redis redis-cli ping | grep -q PONG; do sleep 2; done'
-          echo "Services are ready!"
+          docker build \
+            --build-arg INSTALL_DEV=true \
+            -t trader-bot:test \
+            ./bot
 
       - name: Run pytest in bot container
         run: |
-          docker-compose exec -T bot sh -c "cd /tests && python -m pytest /tests -v --cov=bot --cov=api --cov-report=xml --cov-report=term"
-
-      - name: Copy coverage report from container
-        run: |
-          docker cp trader-bot:/tests/coverage.xml ./coverage.xml
+          docker run --rm \
+            -v ${{ github.workspace }}/tests:/tests \
+            -v ${{ github.workspace }}/bot:/app \
+            trader-bot:test \
+            sh -c "cd /tests && python -m pytest /tests -v --cov=bot --cov=api --cov-report=xml:/tests/coverage.xml --cov-report=term"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
-          files: ./coverage.xml
+          files: ./tests/coverage.xml
           flags: unittests
           name: codecov-umbrella
           fail_ci_if_error: false
-
-      - name: Cleanup
-        if: always()
-        run: docker-compose down -v
 
   # ==========================================
   # Security: Check for secrets in code
