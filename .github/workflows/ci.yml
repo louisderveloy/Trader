@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [ main, dev ]
   pull_request:
-    branches: [main, dev]
+    branches: [ main, dev ]
   workflow_dispatch:
 
 jobs:
@@ -18,10 +18,14 @@ jobs:
       - name: Get file architecture
         run: ls -R
 
-      - name: install dev dependencies
-        run: pip install -r Bot/requirements-dev.txt
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: 'pip'  # Active le cache pip
+          pip-install: -r Bot/requirements-dev.txt
 
       - name: Run tests
+        working-directory: Bot
         run: pytest tests
 
   # ==========================================
@@ -47,7 +51,7 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [python-test, secrets-scan]
+    needs: [ python-test, secrets-scan ]
     if: always()
     steps:
       - name: Check all jobs
