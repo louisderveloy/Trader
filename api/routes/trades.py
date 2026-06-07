@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..auth import User, get_current_user
 from ..database import get_db_pool
+from ..models.enums import TradeSide, TradeEnvironment
 from ..models.trades import TradeFilter, TradeListResponse, TradeResponse
 
 logger = logging.getLogger(__name__)
@@ -22,9 +23,9 @@ router = APIRouter()
 @router.get("", response_model=TradeListResponse)
 async def list_trades(
     run_id: Annotated[int | None, Query(description="Filter by run ID")] = None,
-    symbol: Annotated[str | None, Query(description="Filter by symbol")] = None,
-    side: Annotated[str | None, Query(description="Filter by side (long/short)")] = None,
-    environment: Annotated[str | None, Query(description="Filter by environment (testnet/live)")] = None,
+    symbol: Annotated[str | None, Query(max_length=20, description="Filter by symbol (max 20 chars)")] = None,
+    side: Annotated[TradeSide | None, Query(description="Filter by side (buy/sell/long/short)")] = None,
+    environment: Annotated[TradeEnvironment | None, Query(description="Filter by environment (testnet/live/paper/backtest)")] = None,
     min_pnl: Annotated[float | None, Query(description="Minimum P&L")] = None,
     max_pnl: Annotated[float | None, Query(description="Maximum P&L")] = None,
     limit: Annotated[int, Query(ge=1, le=1000, description="Maximum results")] = 100,

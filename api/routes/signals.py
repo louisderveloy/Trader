@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..auth import User, get_current_user
 from ..database import get_db_pool
+from ..models.enums import SignalDecision
 from ..models.signals import SignalFilter, SignalListResponse, SignalResponse
 
 logger = logging.getLogger(__name__)
@@ -22,10 +23,10 @@ router = APIRouter()
 @router.get("", response_model=SignalListResponse)
 async def list_signals(
     run_id: Annotated[str | None, Query(description="Filter by run ID")] = None,
-    symbol: Annotated[str | None, Query(description="Filter by symbol")] = None,
-    decision: Annotated[str | None, Query(description="Filter by decision (buy/sell/hold)")] = None,
-    min_score: Annotated[float | None, Query(description="Minimum score [-1, 1]")] = None,
-    max_score: Annotated[float | None, Query(description="Maximum score [-1, 1]")] = None,
+    symbol: Annotated[str | None, Query(max_length=20, description="Filter by symbol (max 20 chars)")] = None,
+    decision: Annotated[SignalDecision | None, Query(description="Filter by decision (entry_long/entry_short/exit/skip)")] = None,
+    min_score: Annotated[float | None, Query(ge=-1.0, le=1.0, description="Minimum score [-1, 1]")] = None,
+    max_score: Annotated[float | None, Query(ge=-1.0, le=1.0, description="Maximum score [-1, 1]")] = None,
     limit: Annotated[int, Query(ge=1, le=1000, description="Maximum results")] = 100,
     offset: Annotated[int, Query(ge=0, description="Offset for pagination")] = 0,
     user: User = Depends(get_current_user),

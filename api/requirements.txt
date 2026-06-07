@@ -18,6 +18,10 @@ python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
 python-multipart>=0.0.17
 
+# Security
+slowapi>=0.1.9
+fastapi_csrf_protect>=1.0.7
+
 # HTTP client
 httpx>=0.28.0
 

@@ -293,6 +293,304 @@ docker-compose up -d
 
 ---
 
+## Configuration Firewall PostgreSQL (Production)
+
+### Contexte
+
+En production, PostgreSQL est exposé sur `127.0.0.1:5432` (localhost uniquement) pour des raisons de sécurité.
+Pour permettre à un serveur Grafana externe de se connecter, il faut configurer le firewall (ufw) pour autoriser UNIQUEMENT l'adresse IP du serveur Grafana.
+
+### Configuration initiale du firewall
+
+```bash
+# Installer ufw si nécessaire
+sudo apt-get update
+sudo apt-get install ufw
+
+# Activer ufw au démarrage
+sudo systemctl enable ufw
+
+# Autoriser SSH (IMPORTANT: à faire AVANT d'activer ufw)
+sudo ufw allow 22/tcp
+```
+
+### Autoriser uniquement le serveur Grafana
+
+```bash
+# Remplacer <grafana-ip> par l'adresse IP réelle du serveur Grafana
+sudo ufw allow from <grafana-ip> to any port 5432 comment 'Grafana PostgreSQL access'
+
+# Bloquer tout autre accès au port 5432
+sudo ufw deny 5432 comment 'Block all other PostgreSQL access'
+
+# Activer le firewall
+sudo ufw enable
+```
+
+### Vérifier la configuration
+
+```bash
+# Afficher toutes les règles
+sudo ufw status numbered
+
+# Exemple de sortie attendue:
+#      To                         Action      From
+#      --                         ------      ----
+# [ 1] 22/tcp                     ALLOW IN    Anywhere
+# [ 2] 5432                       ALLOW IN    <grafana-ip>              # Grafana PostgreSQL access
+# [ 3] 5432                       DENY IN     Anywhere                  # Block all other PostgreSQL access
+```
+
+### Tester la connexion depuis Grafana
+
+Depuis le serveur Grafana :
+
+```bash
+# Tester la connexion PostgreSQL
+psql -h <your-server-ip> -p 5432 -U trader -d trader_bot
+
+# Devrait demander le mot de passe et se connecter avec succès
+```
+
+Depuis un autre serveur (non autorisé) :
+
+```bash
+# Cette commande devrait échouer (connection refused / timeout)
+psql -h <your-server-ip> -p 5432 -U trader -d trader_bot
+```
+
+### Modifier la liste des IPs autorisées
+
+```bash
+# Supprimer l'ancienne règle (utiliser le numéro de la règle)
+sudo ufw status numbered
+sudo ufw delete 2  # Numéro de la règle Grafana
+
+# Ajouter la nouvelle IP
+sudo ufw allow from <nouvelle-grafana-ip> to any port 5432 comment 'Grafana PostgreSQL access'
+
+# Recharger le firewall
+sudo ufw reload
+```
+
+### Désactiver temporairement le firewall (DEBUG UNIQUEMENT)
+
+```bash
+# ATTENTION: Désactive toute protection firewall
+sudo ufw disable
+
+# Pour réactiver après debug
+sudo ufw enable
+```
+
+### Logs du firewall
+
+```bash
+# Activer les logs ufw
+sudo ufw logging on
+
+# Voir les logs
+sudo tail -f /var/log/ufw.log
+
+# Logs des tentatives de connexion bloquées sur port 5432
+sudo grep "DPT=5432" /var/log/ufw.log
+```
+
+### Règles supplémentaires pour production
+
+```bash
+# Autoriser HTTP/HTTPS pour Traefik
+sudo ufw allow 80/tcp comment 'HTTP'
+sudo ufw allow 443/tcp comment 'HTTPS'
+
+# Bloquer tous les autres ports par défaut
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+```
+
+### Checklist configuration firewall
+
+- [ ] SSH (port 22) autorisé AVANT d'activer ufw
+- [ ] IP du serveur Grafana autorisée sur port 5432
+- [ ] Tous les autres accès au port 5432 bloqués
+- [ ] HTTP (80) et HTTPS (443) autorisés pour Traefik
+- [ ] Firewall activé et persistant au redémarrage
+- [ ] Configuration testée depuis le serveur Grafana
+- [ ] Configuration testée depuis un serveur non autorisé (doit échouer)
+
+---
+
+## Réponse aux Incidents de Sécurité
+
+### Suspicion de Compromission
+
+En cas de suspicion de compromission (accès non autorisé, comportement anormal, tentatives de connexion suspectes) :
+
+#### Actions immédiates
+
+```bash
+# 1. Arrêter le bot (stoppe le trading)
+docker-compose -f docker-compose.prod.yml stop bot
+
+# 2. Vérifier les logs d'authentification récents
+docker logs trader-api | grep -i "failed login\|unauthorized" | tail -100
+
+# 3. Vérifier les erreurs récentes en base de données
+docker exec trader-postgres psql -U trader -d trader_bot -c \
+  "SELECT * FROM errors_log WHERE occurred_at > NOW() - INTERVAL '24 hours' ORDER BY occurred_at DESC LIMIT 50;"
+
+# 4. Vérifier les trades récents pour détecter toute activité anormale
+docker exec trader-postgres psql -U trader -d trader_bot -c \
+  "SELECT * FROM trades WHERE created_at > NOW() - INTERVAL '24 hours' ORDER BY created_at DESC;"
+```
+
+#### Rotation des secrets
+
+Si une compromission est confirmée ou suspectée :
+
+```bash
+# 1. Générer de nouveaux secrets
+openssl rand -hex 32 > jwt_secret.txt
+openssl rand -base64 24 > db_password.txt
+cat jwt_secret.txt
+cat db_password.txt
+
+# 2. Mettre à jour le fichier .env
+vim .env
+# Modifier JWT_SECRET_KEY et POSTGRES_PASSWORD
+
+# 3. Changer le mot de passe PostgreSQL
+docker exec -it trader-postgres psql -U trader -d trader_bot
+# Dans psql :
+ALTER USER trader WITH PASSWORD '<nouveau_mot_de_passe>';
+\q
+
+# 4. Redémarrer tous les services (invalide toutes les sessions)
+docker-compose -f docker-compose.prod.yml down
+docker-compose -f docker-compose.prod.yml up -d
+
+# 5. Vérifier que les services redémarrent correctement
+docker-compose -f docker-compose.prod.yml logs -f
+
+# 6. Se reconnecter au dashboard avec les nouvelles credentials
+```
+
+#### Vérification de l'intégrité
+
+```bash
+# Vérifier qu'il n'y a pas de modifications non autorisées du code
+git status
+git diff
+
+# Vérifier les conteneurs en cours d'exécution
+docker ps -a
+
+# Vérifier les connexions réseau actives
+docker exec trader-api netstat -tuln
+
+# Vérifier les règles firewall
+sudo ufw status numbered
+```
+
+### Tentatives de Connexion Suspectes
+
+Si le rate limiting bloque de nombreuses tentatives :
+
+```bash
+# Voir les tentatives de connexion bloquées (rate limit exceeded)
+docker logs trader-api | grep -i "rate limit exceeded\|429" | tail -50
+
+# Identifier les IPs sources
+docker logs trader-api | grep "Failed login" | awk '{print $NF}' | sort | uniq -c | sort -nr
+
+# Si nécessaire, bloquer une IP spécifique via le firewall
+sudo ufw deny from <ip-malveillante>
+```
+
+### Audit de Sécurité Régulier
+
+Commandes à exécuter régulièrement (hebdomadaire recommandé) :
+
+```bash
+# 1. Vérifier les dépendances vulnérables (Python)
+cd /path/to/trader
+source venv/bin/activate  # Si environnement virtuel
+pip-audit
+
+# 2. Vérifier les dépendances vulnérables (Node.js)
+cd dashboard
+npm audit
+
+# 3. Vérifier les règles firewall
+sudo ufw status verbose
+
+# 4. Vérifier les logs d'erreurs récents
+docker-compose -f docker-compose.prod.yml logs --tail=100 | grep -i "error\|critical"
+
+# 5. Vérifier que les secrets n'ont pas été commités par erreur
+git log -p | grep -i "jwt_secret\|postgres_password\|api_key"
+```
+
+### Réinitialisation Admin Password
+
+**Note**: L'authentification actuelle utilise un mot de passe en clair (phase de test uniquement).
+Migration vers Authelia prévue pour la production.
+
+```bash
+# Phase actuelle (mot de passe en clair)
+# 1. Modifier .env
+vim .env
+# Changer ADMIN_PASSWORD=nouveau_mot_de_passe
+
+# 2. Redémarrer l'API
+docker-compose -f docker-compose.prod.yml restart api
+
+# Phase future (après migration Authelia)
+# Utiliser le flow de réinitialisation Authelia
+```
+
+### Sauvegarde d'Urgence
+
+En cas d'incident critique, créer immédiatement un backup complet :
+
+```bash
+# Backup complet de la base de données
+docker exec trader-postgres pg_dump -U trader trader_bot | gzip > emergency_backup_$(date +%Y%m%d_%H%M%S).sql.gz
+
+# Copier les logs actuels
+docker-compose -f docker-compose.prod.yml logs --no-color > logs_$(date +%Y%m%d_%H%M%S).txt
+
+# Backup de la configuration
+cp .env .env.backup_$(date +%Y%m%d_%H%M%S)
+```
+
+### Restauration depuis un Backup
+
+Si les données ont été compromises :
+
+```bash
+# 1. Arrêter le bot
+docker-compose -f docker-compose.prod.yml stop bot
+
+# 2. Restaurer le backup
+gunzip -c emergency_backup_20241231_150000.sql.gz | \
+  docker exec -i trader-postgres psql -U trader -d trader_bot
+
+# 3. Vérifier l'intégrité des données restaurées
+docker exec trader-postgres psql -U trader -d trader_bot -c \
+  "SELECT COUNT(*) FROM trades; SELECT COUNT(*) FROM orders;"
+
+# 4. Redémarrer le bot
+docker-compose -f docker-compose.prod.yml start bot
+```
+
+### Contact en Cas d'Urgence
+
+- **Binance Support** : https://www.binance.com/en/support
+- **Logs à collecter** : API logs, error logs, firewall logs (`/var/log/ufw.log`)
+
+---
+
 ## Mise à Jour du Code
 
 ### Déploiement continu (recommandé)

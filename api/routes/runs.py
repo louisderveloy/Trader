@@ -9,10 +9,12 @@ import json
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from ..auth import User, get_current_user
+from ..csrf_helper import validate_csrf_token
 from ..database import get_db_pool
+from ..models.enums import RunStatus, TradeEnvironment
 from ..models.runs import RunFilter, RunListResponse, RunResponse, RunStatusUpdate
 
 logger = logging.getLogger(__name__)
@@ -47,10 +49,10 @@ def _row_to_run_response(row: asyncpg.Record) -> RunResponse:
 
 @router.get("", response_model=RunListResponse)
 async def list_runs(
-    run_type: Annotated[str | None, Query(description="Filter by run type")] = None,
-    status_filter: Annotated[str | None, Query(alias="status", description="Filter by status")] = None,
-    environment: Annotated[str | None, Query(description="Filter by environment")] = None,
-    symbol: Annotated[str | None, Query(description="Filter by symbol")] = None,
+    run_type: Annotated[str | None, Query(max_length=50, description="Filter by run type (max 50 chars)")] = None,
+    status_filter: Annotated[RunStatus | None, Query(alias="status", description="Filter by status (pending/running/completed/failed/cancelled)")] = None,
+    environment: Annotated[TradeEnvironment | None, Query(description="Filter by environment (testnet/live/paper/backtest)")] = None,
+    symbol: Annotated[str | None, Query(max_length=20, description="Filter by symbol (max 20 chars)")] = None,
     limit: Annotated[int, Query(ge=1, le=1000, description="Maximum results")] = 100,
     offset: Annotated[int, Query(ge=0, description="Offset for pagination")] = 0,
     user: User = Depends(get_current_user),
@@ -200,6 +202,7 @@ async def get_run(
 
 @router.patch("/{run_id}/status", response_model=RunResponse)
 async def update_run_status(
+    http_request: Request,
     run_id: int,
     update: RunStatusUpdate,
     user: User = Depends(get_current_user),
@@ -209,8 +212,10 @@ async def update_run_status(
     Update run status.
 
     Admin only endpoint. Validates status transitions.
+    Requires authentication and CSRF token.
 
     Args:
+        http_request: FastAPI request object (for CSRF validation)
         run_id: Run ID
         update: Status update request
 
@@ -218,8 +223,10 @@ async def update_run_status(
         Updated run
 
     Raises:
-        HTTPException: 404 if run not found, 400 if invalid transition
+        HTTPException: 404 if run not found, 400 if invalid transition, 403 if CSRF validation fails
     """
+    # Validate CSRF token
+    await validate_csrf_token(http_request)
     # Import for status validation
     from bot.runs.types import RunStatus, is_valid_status_transition
 

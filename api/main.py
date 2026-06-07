@@ -9,11 +9,16 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from .config import settings
 from .database import DatabasePool
+from .limiter import limiter
+from .middleware.security_headers import SecurityHeadersMiddleware
 from .redis.client import RedisPool
 from .redis.events import start_event_subscriber
 
@@ -93,13 +98,52 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Configure rate limiting
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Generic error handler (prevents information disclosure in production)
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    """
+    Handle all unhandled exceptions.
+
+    In production: Returns generic error message (prevents information disclosure)
+    In development: Returns full error details for debugging
+    """
+    # Log full error server-side (always)
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+
+    # Return different messages based on environment
+    if settings.environment == "prod":
+        # Production: Generic error (no details leaked to client)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "An internal error occurred"}
+        )
+    else:
+        # Development: Full error for debugging
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": str(exc),
+                "type": type(exc).__name__
+            }
+        )
+
+# Add security headers middleware
+app.add_middleware(SecurityHeadersMiddleware)
+
 # Configure CORS
+# Security: Explicitly list allowed methods and headers (no wildcards)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=settings.cors_origins_list,  # Exact domains from .env (no wildcards in production)
+    allow_credentials=True,  # Required for httpOnly cookies
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],  # Explicit methods only
+    allow_headers=["Content-Type", "Authorization", "X-CSRF-Token"],  # Explicit headers only
+    expose_headers=["Content-Length", "Content-Type"],
+    max_age=3600,  # Cache preflight requests for 1 hour
 )
 
 # Include routers

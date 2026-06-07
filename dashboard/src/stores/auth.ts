@@ -1,40 +1,41 @@
 /**
- * Authentication store with JWT token management
+ * Authentication store with httpOnly cookie JWT authentication
  */
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { useStorage } from '@vueuse/core'
 import * as authApi from '@/api/auth'
 import type { User } from '@/api/types'
+import { fetchCsrfToken } from '@/api/client'
 
 export const useAuthStore = defineStore('auth', () => {
   // State
-  // Token persisted in localStorage via useStorage
-  const token = useStorage<string | null>('auth_token', null)
+  // Note: JWT token is stored in httpOnly cookie (not accessible to JavaScript)
+  // We track authentication state via the user object
   const user = ref<User | null>(null)
   const isLoading = ref(false)
   const error = ref<string | null>(null)
 
   // Computed
-  const isAuthenticated = computed(() => !!token.value)
+  const isAuthenticated = computed(() => !!user.value)
 
   // Actions
   /**
    * Login with username and password
+   * JWT token is automatically set in httpOnly cookie by the server
    */
   async function login(username: string, password: string): Promise<boolean> {
     isLoading.value = true
     error.value = null
 
     try {
-      // Call login API
-      const response = await authApi.login(username, password)
+      // Call login API (server sets httpOnly cookie with JWT)
+      await authApi.login(username, password)
 
-      // Save token to localStorage (useStorage handles persistence)
-      token.value = response.access_token
+      // Fetch CSRF token for state-changing requests
+      await fetchCsrfToken()
 
-      // Fetch user info
+      // Fetch user info (cookie is automatically sent with request)
       await fetchUser()
 
       return true
@@ -61,26 +62,40 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   /**
-   * Logout - clear token and user data
+   * Logout - call API to clear httpOnly cookie and clear user data
    */
-  function logout(): void {
-    token.value = null
-    user.value = null
-    error.value = null
+  async function logout(): Promise<void> {
+    try {
+      // Call logout API (server clears httpOnly cookie)
+      await authApi.logout()
+    } catch (err) {
+      console.error('Logout error:', err)
+      // Continue with local cleanup even if API call fails
+    } finally {
+      // Clear local user data
+      user.value = null
+      error.value = null
+    }
   }
 
   /**
-   * Initialize auth state (fetch user if token exists)
+   * Initialize auth state (fetch user if httpOnly cookie exists)
+   * This attempts to fetch the current user on app load
    */
   async function initialize(): Promise<void> {
-    if (token.value && !user.value) {
-      await fetchUser()
+    if (!user.value) {
+      try {
+        await fetchUser()
+      } catch (err) {
+        // User not authenticated or session expired
+        // This is normal if user hasn't logged in yet
+        console.debug('No active session on initialization')
+      }
     }
   }
 
   return {
     // State
-    token,
     user,
     isLoading,
     error,

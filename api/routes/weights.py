@@ -8,9 +8,10 @@ import asyncpg
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from ..auth import User, get_current_user
+from ..csrf_helper import validate_csrf_token
 from ..database import get_db_pool
 from ..models.weights import (
     WeightsActivateRequest,
@@ -114,6 +115,7 @@ async def get_weights(
 
 @router.post("", response_model=WeightsResponse, status_code=status.HTTP_201_CREATED)
 async def create_weights(
+    http_request: Request,
     request: WeightsCreateRequest,
     user: User = Depends(get_current_user),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
@@ -121,9 +123,10 @@ async def create_weights(
     """
     Create a new weights set.
 
-    Requires authentication.
+    Requires authentication and CSRF token.
 
     Args:
+        http_request: FastAPI request object (for CSRF validation)
         request: Weights creation request
 
     Returns:
@@ -131,7 +134,10 @@ async def create_weights(
 
     Raises:
         HTTPException: 400 if invalid request
+        HTTPException: 403 if CSRF validation fails
     """
+    # Validate CSRF token
+    await validate_csrf_token(http_request)
     query = """
         INSERT INTO weights_sets (name, description, weights, source, is_active)
         VALUES ($1, $2, $3, $4, false)
@@ -165,6 +171,7 @@ async def create_weights(
 
 @router.patch("/{weights_id}/activate", response_model=WeightsResponse)
 async def activate_weights(
+    http_request: Request,
     weights_id: int,
     user: User = Depends(get_current_user),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
@@ -172,9 +179,10 @@ async def activate_weights(
     """
     Activate a weights set (deactivate current, activate new).
 
-    Requires authentication.
+    Requires authentication and CSRF token.
 
     Args:
+        http_request: FastAPI request object (for CSRF validation)
         weights_id: Weights set ID to activate
 
     Returns:
@@ -182,7 +190,10 @@ async def activate_weights(
 
     Raises:
         HTTPException: 404 if weights set not found
+        HTTPException: 403 if CSRF validation fails
     """
+    # Validate CSRF token
+    await validate_csrf_token(http_request)
     async with db_pool.acquire() as conn:
         # Verify weights set exists
         verify_query = "SELECT id FROM weights_sets WHERE id = $1"

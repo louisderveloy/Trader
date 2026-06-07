@@ -8,6 +8,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from .enums import PositionSizeMode, StopLossMode, TakeProfitMode
+
 
 class IndicatorConfigResponse(BaseModel):
     """Indicator configuration response."""
@@ -81,20 +83,62 @@ class IndicatorParameterUpdate(BaseModel):
 class StrategyConfigUpdate(BaseModel):
     """Request to update strategy configuration."""
 
-    entry_threshold: Optional[float] = Field(None, description="New entry threshold")
-    exit_threshold: Optional[float] = Field(None, description="New exit threshold")
-    confirmation_candles: Optional[int] = Field(None, description="New confirmation candles")
+    entry_threshold: Optional[float] = Field(
+        None,
+        ge=-1.0,
+        le=1.0,
+        description="New entry threshold (must be between -1.0 and 1.0)"
+    )
+    exit_threshold: Optional[float] = Field(
+        None,
+        ge=-1.0,
+        le=1.0,
+        description="New exit threshold (must be between -1.0 and 1.0)"
+    )
+    confirmation_candles: Optional[int] = Field(
+        None,
+        ge=1,
+        le=100,
+        description="New confirmation candles (must be between 1 and 100)"
+    )
 
 
 class RiskConfigUpdate(BaseModel):
     """Request to update risk configuration."""
 
-    max_trades_per_day: Optional[int] = Field(None)
-    max_exposure_percent: Optional[float] = Field(None)
-    position_size_mode: Optional[str] = Field(None)
-    fixed_size_usdt: Optional[float] = Field(None)
-    atr_multiplier: Optional[float] = Field(None)
-    capital_risk_percent: Optional[float] = Field(None)
+    max_trades_per_day: Optional[int] = Field(
+        None,
+        ge=0,
+        le=100,
+        description="Max trades per day (0-100)"
+    )
+    max_exposure_percent: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=100.0,
+        description="Max exposure as % of capital (0-100)"
+    )
+    position_size_mode: Optional[PositionSizeMode] = Field(
+        None,
+        description="Position sizing mode: fixed, confidence, or risk_atr"
+    )
+    fixed_size_usdt: Optional[float] = Field(
+        None,
+        ge=0.0,
+        description="Fixed position size in USDT (must be >= 0)"
+    )
+    atr_multiplier: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=10.0,
+        description="ATR multiplier (0-10)"
+    )
+    capital_risk_percent: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=100.0,
+        description="% of capital to risk per trade (0-100)"
+    )
 
 
 class UserIndicatorResponse(BaseModel):
@@ -110,6 +154,20 @@ class UserIndicatorResponse(BaseModel):
 class UserIndicatorUpdateRequest(BaseModel):
     """Request to update user indicator."""
 
-    signal: float = Field(..., description="Signal value [-1, 1]", ge=-1, le=1)
-    note: Optional[str] = Field(None, description="Optional note")
-    expires_in_hours: int = Field(default=24, ge=1, description="How long the signal is valid (hours)")
+    signal: float = Field(
+        ...,
+        ge=-1,
+        le=1,
+        description="Signal value (must be between -1 and 1)"
+    )
+    note: Optional[str] = Field(
+        None,
+        max_length=500,
+        description="Optional note (max 500 characters)"
+    )
+    expires_in_hours: int = Field(
+        default=24,
+        ge=1,
+        le=720,
+        description="How long the signal is valid in hours (1-720, default 24)"
+    )

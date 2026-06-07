@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..auth import User, get_current_user
 from ..database import get_db_pool
+from ..models.enums import OrderStatus, TradeSide
 from ..models.orders import OrderFilter, OrderListResponse, OrderResponse
 
 logger = logging.getLogger(__name__)
@@ -22,9 +23,9 @@ router = APIRouter()
 @router.get("", response_model=OrderListResponse)
 async def list_orders(
     run_id: Annotated[int | None, Query(description="Filter by run ID")] = None,
-    symbol: Annotated[str | None, Query(description="Filter by symbol")] = None,
-    side: Annotated[str | None, Query(description="Filter by side (buy/sell)")] = None,
-    status_filter: Annotated[str | None, Query(alias="status", description="Filter by status")] = None,
+    symbol: Annotated[str | None, Query(max_length=20, description="Filter by symbol (max 20 chars)")] = None,
+    side: Annotated[TradeSide | None, Query(description="Filter by side (buy/sell/long/short)")] = None,
+    status_filter: Annotated[OrderStatus | None, Query(alias="status", description="Filter by status (pending/open/filled/cancelled/rejected)")] = None,
     limit: Annotated[int, Query(ge=1, le=1000, description="Maximum results")] = 100,
     offset: Annotated[int, Query(ge=0, description="Offset for pagination")] = 0,
     user: User = Depends(get_current_user),

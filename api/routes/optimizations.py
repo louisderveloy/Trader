@@ -8,10 +8,13 @@ import asyncpg
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from ..auth import User, get_current_user
+from ..config import settings
+from ..csrf_helper import validate_csrf_token
 from ..database import get_db_pool
+from ..limiter import limiter
 from ..models.optimizations import (
     OptimizationLaunchRequest,
     OptimizationListResponse,
@@ -24,7 +27,9 @@ router = APIRouter()
 
 
 @router.get("", response_model=OptimizationListResponse)
+@limiter.limit(lambda: settings.rate_limit_api_read)
 async def list_optimizations(
+    request: Request,
     limit: Annotated[int, Query(ge=1, le=1000, description="Maximum results")] = 100,
     offset: Annotated[int, Query(ge=0, description="Offset for pagination")] = 0,
     user: User = Depends(get_current_user),
@@ -34,6 +39,7 @@ async def list_optimizations(
     List optimization studies with pagination.
 
     Requires authentication.
+    Rate limited to 60 requests per minute.
 
     Returns:
         Paginated list of optimization studies
@@ -74,8 +80,10 @@ async def list_optimizations(
 
 
 @router.get("/{study_id}", response_model=OptimizationResponse)
+@limiter.limit(lambda: settings.rate_limit_api_read)
 async def get_optimization(
     study_id: str,
+    request: Request,
     user: User = Depends(get_current_user),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> OptimizationResponse:
@@ -83,6 +91,7 @@ async def get_optimization(
     Get optimization study details by ID.
 
     Requires authentication.
+    Rate limited to 60 requests per minute.
 
     Args:
         study_id: Study ID (UUID)
@@ -124,7 +133,9 @@ async def get_optimization(
 
 
 @router.post("", response_model=OptimizationResponse, status_code=status.HTTP_202_ACCEPTED)
+@limiter.limit(lambda: settings.rate_limit_expensive)
 async def launch_optimization(
+    http_request: Request,
     request: OptimizationLaunchRequest,
     user: User = Depends(get_current_user),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
@@ -132,13 +143,15 @@ async def launch_optimization(
     """
     Launch a new optimization study.
 
-    Requires authentication.
+    Requires authentication and CSRF token.
+    Rate limited to 2 requests per hour (expensive operation).
 
     This endpoint creates a new study record and publishes a command to Redis
     for the bot to execute the optimization. The endpoint returns immediately
     with the study record.
 
     Args:
+        http_request: FastAPI request object (for CSRF validation)
         request: Optimization launch request
 
     Returns:
@@ -146,7 +159,11 @@ async def launch_optimization(
 
     Raises:
         HTTPException: 400 if invalid request
+        HTTPException: 403 if CSRF validation fails
+        HTTPException: 429 if rate limit exceeded (2/hour)
     """
+    # Validate CSRF token
+    await validate_csrf_token(http_request)
     try:
         query = """
             INSERT INTO optuna_studies (

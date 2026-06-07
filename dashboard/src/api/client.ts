@@ -1,84 +1,104 @@
 /**
- * API client with JWT authentication and error handling
+ * API client with JWT authentication via httpOnly cookies and error handling
  */
 
-import axios, { type AxiosInstance, type AxiosError, type InternalAxiosRequestConfig } from 'axios'
+import axios, {type AxiosError, type AxiosInstance} from 'axios'
 
 // Get API base URL from environment variable
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 // Create axios instance
 export const apiClient: AxiosInstance = axios.create({
-  baseURL: API_BASE_URL,
-  timeout: 15000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
+    baseURL: API_BASE_URL,
+    timeout: 15000,
+    withCredentials: true,  // Send cookies with requests (httpOnly JWT token)
+    headers: {
+        'Content-Type': 'application/json',
+    },
 })
 
 /**
- * Request interceptor: Add JWT token to all requests
+ * Helper function to get a cookie value by name
+ */
+function getCookie(name: string): string | null {
+    const value = `; ${document.cookie}`
+    const parts = value.split(`; ${name}=`)
+    if (parts.length === 2) {
+        return parts.pop()?.split(';').shift() || null
+    }
+    return null
+}
+
+/**
+ * Request interceptor: Add CSRF token to state-changing requests
+ * JWT token is automatically sent in httpOnly cookie (no JS access for XSS protection)
  */
 apiClient.interceptors.request.use(
-  (config: InternalAxiosRequestConfig) => {
-    // Get token from localStorage
-    const token = localStorage.getItem('auth_token')
-
-    if (token) {
-      // Remove quotes if present (localStorage stores strings with quotes sometimes)
-      const cleanToken = token.replace(/^"(.*)"$/, '$1')
-      config.headers.Authorization = `Bearer ${cleanToken}`
-    }
-
-    return config
-  },
-  (error) => {
-    return Promise.reject(error)
-  }
+    async (config) => {
+        // For state-changing methods, include CSRF token from cookie
+        if (['post', 'patch', 'put', 'delete'].includes(config.method?.toLowerCase() || '')) {
+            const csrfToken = getCookie('csrf_access_token')
+            if (csrfToken) {
+                config.headers['X-CSRF-Token'] = csrfToken
+            }
+        }
+        return config
+    },
+    (error) => Promise.reject(error)
 )
 
 /**
  * Response interceptor: Handle 401 errors (auto logout) and other errors
  */
 apiClient.interceptors.response.use(
-  (response) => response,
-  (error: AxiosError) => {
-    // Handle 401 Unauthorized - auto logout and redirect to login
-    if (error.response?.status === 401) {
-      console.warn('Unauthorized: Auto-logout triggered')
+    (response) => response,
+    (error: AxiosError) => {
+        // Handle 401 Unauthorized - redirect to login
+        // httpOnly cookie will be cleared by server on logout
+        if (error.response?.status === 401) {
+            console.warn('Unauthorized: Redirecting to login')
 
-      // Clear token from localStorage
-      localStorage.removeItem('auth_token')
+            // Redirect to login page (only if not already on login page)
+            if (window.location.pathname !== '/login') {
+                window.location.href = '/login'
+            }
+        }
 
-      // Redirect to login page (only if not already on login page)
-      if (window.location.pathname !== '/login') {
-        window.location.href = '/login'
-      }
+        // Handle 404 - Missing API endpoints
+        if (error.response?.status === 404) {
+            console.warn('API endpoint not available: ', error.config?.url)
+        }
+
+        // Log other errors
+        if (error.response) {
+            // Server responded with error status
+            console.error('API error:', {
+                status: error.response.status,
+                url: error.config?.url,
+                data: error.response.data,
+            })
+        } else if (error.request) {
+            // Request made but no response received
+            console.error('Network error: No response from server', error.request)
+        } else {
+            // Something else happened
+            console.error('Request error:', error.message)
+        }
+
+        return Promise.reject(error)
     }
-
-    // Handle 404 - Missing API endpoints (Phase 8 TODOs)
-    if (error.response?.status === 404) {
-      console.warn('API endpoint not yet implemented:', error.config?.url)
-    }
-
-    // Log other errors
-    if (error.response) {
-      // Server responded with error status
-      console.error('API error:', {
-        status: error.response.status,
-        url: error.config?.url,
-        data: error.response.data,
-      })
-    } else if (error.request) {
-      // Request made but no response received
-      console.error('Network error: No response from server', error.request)
-    } else {
-      // Something else happened
-      console.error('Request error:', error.message)
-    }
-
-    return Promise.reject(error)
-  }
 )
+
+/**
+ * Fetch CSRF token from backend
+ * Should be called on app initialization and after login
+ */
+export async function fetchCsrfToken(): Promise<void> {
+    try {
+        await apiClient.get('/auth/csrf-token')
+    } catch (error) {
+        console.error('Failed to fetch CSRF token:', error)
+    }
+}
 
 export default apiClient

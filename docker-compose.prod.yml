@@ -36,7 +36,11 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      # SECURITY: Bind to localhost only (127.0.0.1) instead of all interfaces (0.0.0.0)
+      # This prevents direct internet access to PostgreSQL
+      # External Grafana access must be configured via firewall (ufw)
+      # See docs/A6_runbook.md for firewall setup instructions
+      - "127.0.0.1:5432:5432"
     networks:
       - trader-network
     healthcheck:
@@ -181,12 +185,16 @@ services:
   # NOTE: Grafana has been moved to external hosting
   # ==========================================
   # Grafana is now hosted on a separate server for multi-project monitoring.
-  # The PostgreSQL database remains exposed on port 5432 for external Grafana to connect.
+  # PostgreSQL is bound to localhost (127.0.0.1:5432) for security.
   # You will need to:
-  # 1. Configure external Grafana to connect to this database using:
+  # 1. Configure firewall (ufw) to allow ONLY Grafana server IP:
+  #    sudo ufw allow from <grafana-ip> to any port 5432
+  #    sudo ufw deny 5432
+  #    See docs/A6_runbook.md for detailed firewall setup
+  # 2. Configure external Grafana to connect to this database using:
   #    Host: <your-server-ip>:5432
   #    Database: ${POSTGRES_DB}
   #    User: ${POSTGRES_USER}
   #    Password: ${POSTGRES_PASSWORD}
-  # 2. Import dashboard JSON files from /grafana/dashboards/ into external Grafana
-  # 3. Configure datasource in external Grafana (see /grafana/provisioning/datasources/ for reference)
+  # 3. Import dashboard JSON files from /grafana/dashboards/ into external Grafana
+  # 4. Configure datasource in external Grafana (see /grafana/provisioning/datasources/ for reference)

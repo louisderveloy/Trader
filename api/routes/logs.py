@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..auth import User, get_current_user
 from ..database import get_db_pool
+from ..models.enums import ErrorSeverity
 from ..models.errors import ErrorLogListResponse, ErrorLogResponse, ErrorStatsResponse
 
 logger = logging.getLogger(__name__)
@@ -42,8 +43,8 @@ def _row_to_error_response(row: asyncpg.Record) -> ErrorLogResponse:
 
 @router.get("", response_model=ErrorLogListResponse)
 async def list_errors(
-    severity: Annotated[str | None, Query(description="Filter by severity")] = None,
-    category: Annotated[str | None, Query(description="Filter by category")] = None,
+    severity: Annotated[ErrorSeverity | None, Query(description="Filter by severity (low/medium/high/critical)")] = None,
+    category: Annotated[str | None, Query(max_length=100, description="Filter by category (max 100 chars)")] = None,
     start_date: Annotated[datetime | None, Query(description="Filter from date")] = None,
     end_date: Annotated[datetime | None, Query(description="Filter to date")] = None,
     run_id: Annotated[str | None, Query(description="Filter by run ID")] = None,

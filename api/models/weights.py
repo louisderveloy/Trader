@@ -8,7 +8,9 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from .enums import VALID_INDICATORS
 
 
 class WeightsResponse(BaseModel):
@@ -48,17 +50,67 @@ class WeightsResponse(BaseModel):
 class WeightsCreateRequest(BaseModel):
     """Request to create new weights set."""
 
-    name: str = Field(..., description="Human-readable name", min_length=1, max_length=100)
-    description: Optional[str] = Field(None, description="Optional description")
-    weights: dict[str, Decimal] = Field(..., description="Indicator weights")
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Human-readable name (1-100 characters)"
+    )
+    description: Optional[str] = Field(
+        None,
+        max_length=500,
+        description="Optional description (max 500 characters)"
+    )
+    weights: dict[str, Decimal] = Field(
+        ...,
+        description="Indicator weights (must use valid indicator names)"
+    )
+
+    @field_validator('weights')
+    @classmethod
+    def validate_weights_keys(cls, v: dict[str, Decimal]) -> dict[str, Decimal]:
+        """Validate that all weight keys are valid indicator names."""
+        invalid_keys = set(v.keys()) - VALID_INDICATORS
+        if invalid_keys:
+            raise ValueError(
+                f"Invalid indicator names: {invalid_keys}. "
+                f"Valid indicators: {sorted(VALID_INDICATORS)}"
+            )
+        return v
 
 
 class WeightsUpdateRequest(BaseModel):
     """Request to update weights set."""
 
-    name: Optional[str] = Field(None, description="New name")
-    description: Optional[str] = Field(None, description="New description")
-    weights: Optional[dict[str, Decimal]] = Field(None, description="New weights")
+    name: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=100,
+        description="New name (1-100 characters)"
+    )
+    description: Optional[str] = Field(
+        None,
+        max_length=500,
+        description="New description (max 500 characters)"
+    )
+    weights: Optional[dict[str, Decimal]] = Field(
+        None,
+        description="New weights (must use valid indicator names)"
+    )
+
+    @field_validator('weights')
+    @classmethod
+    def validate_weights_keys(cls, v: dict[str, Decimal] | None) -> dict[str, Decimal] | None:
+        """Validate that all weight keys are valid indicator names."""
+        if v is None:
+            return v
+        invalid_keys = set(v.keys()) - VALID_INDICATORS
+        if invalid_keys:
+            raise ValueError(
+                f"Invalid indicator names: {invalid_keys}. "
+                f"Valid indicators: {sorted(VALID_INDICATORS)}"
+            )
+        return v
 
 
 class WeightsActivateRequest(BaseModel):

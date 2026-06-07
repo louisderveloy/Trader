@@ -8,11 +8,13 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from ..auth import User, get_current_user
 from ..config import settings
+from ..csrf_helper import validate_csrf_token
 from ..database import get_db_pool
+from ..limiter import limiter
 from ..models.config import (
     ConfigResponse,
     IndicatorConfigResponse,
@@ -32,7 +34,9 @@ router = APIRouter()
 
 
 @router.get("", response_model=ConfigResponse)
+@limiter.limit(lambda: settings.rate_limit_api_read)
 async def get_config(
+    request: Request,
     user: User = Depends(get_current_user),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> ConfigResponse:
@@ -40,6 +44,7 @@ async def get_config(
     Get complete bot configuration.
 
     Requires authentication.
+    Rate limited to 60 requests per minute.
 
     Returns:
         Complete bot configuration including strategy, risk, and indicator settings
@@ -133,21 +138,27 @@ async def get_config(
 
 
 @router.patch("/strategy", response_model=StrategyConfigResponse)
+@limiter.limit(lambda: settings.rate_limit_api_write)
 async def update_strategy_config(
+    http_request: Request,
     request: StrategyConfigUpdate,
     user: User = Depends(get_current_user),
 ) -> StrategyConfigResponse:
     """
     Update strategy configuration.
 
-    Requires authentication.
+    Requires authentication and CSRF token.
+    Rate limited to 30 requests per minute.
 
     Args:
+        http_request: FastAPI request object (for CSRF validation)
         request: Updated strategy configuration
 
     Returns:
         Updated strategy configuration
     """
+    # Validate CSRF token
+    await validate_csrf_token(http_request)
     # Update in-memory settings (for now)
     # TODO: Persist to database for durability
     if request.entry_threshold is not None:
@@ -167,21 +178,27 @@ async def update_strategy_config(
 
 
 @router.patch("/risk", response_model=RiskConfigResponse)
+@limiter.limit(lambda: settings.rate_limit_api_write)
 async def update_risk_config(
+    http_request: Request,
     request: RiskConfigUpdate,
     user: User = Depends(get_current_user),
 ) -> RiskConfigResponse:
     """
     Update risk management configuration.
 
-    Requires authentication.
+    Requires authentication and CSRF token.
+    Rate limited to 30 requests per minute.
 
     Args:
+        http_request: FastAPI request object (for CSRF validation)
         request: Updated risk configuration
 
     Returns:
         Updated risk configuration
     """
+    # Validate CSRF token
+    await validate_csrf_token(http_request)
     # Update in-memory settings (for now)
     # TODO: Persist to database for durability
     if request.max_trades_per_day is not None:
@@ -204,7 +221,9 @@ async def update_risk_config(
 
 
 @router.get("/user-indicator", response_model=UserIndicatorResponse)
+@limiter.limit(lambda: settings.rate_limit_api_read)
 async def get_user_indicator(
+    request: Request,
     symbol: Annotated[str, Query(description="Trading symbol")] = "BTCUSDT",
     user: User = Depends(get_current_user),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
@@ -213,8 +232,10 @@ async def get_user_indicator(
     Get user indicator for a symbol.
 
     Requires authentication.
+    Rate limited to 60 requests per minute.
 
     Args:
+        request: FastAPI request object (for rate limiting)
         symbol: Trading symbol
 
     Returns:
@@ -252,7 +273,9 @@ async def get_user_indicator(
 
 
 @router.patch("/user-indicator", response_model=UserIndicatorResponse)
+@limiter.limit(lambda: settings.rate_limit_api_write)
 async def update_user_indicator(
+    http_request: Request,
     symbol: Annotated[str, Query(description="Trading symbol")] = "BTCUSDT",
     request: UserIndicatorUpdateRequest = None,
     user: User = Depends(get_current_user),
@@ -261,15 +284,19 @@ async def update_user_indicator(
     """
     Update user indicator for a symbol.
 
-    Requires authentication.
+    Requires authentication and CSRF token.
+    Rate limited to 30 requests per minute.
 
     Args:
+        http_request: FastAPI request object (for CSRF validation)
         symbol: Trading symbol
         request: Updated user indicator
 
     Returns:
         Updated user indicator
     """
+    # Validate CSRF token
+    await validate_csrf_token(http_request)
     if request is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

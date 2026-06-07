@@ -18,42 +18,36 @@ docker compose up -d
 
 ### Run All Tests
 
-**Windows:**
-```cmd
-run-tests.bat
-```
+You first need to start the containers with `docker compose up -d`
 
-**Linux/Mac:**
 ```bash
-./run-tests.sh
-```
-
-**Or directly with docker compose:**
-```bash
-docker compose exec bot env PYTHONPATH=/app:/tests pytest /tests -v
+docker compose exec bot sh -c "pythom -m pytest /tests -v"
 ```
 
 ### Run Specific Tests
 
 **Single test file:**
+
 ```bash
-docker compose exec bot env PYTHONPATH=/app:/tests pytest /tests/indicators/test_ema.py -v
+docker compose exec bot sh -c "python -m pytest /tests/indicators/test_ema.py -v"
 ```
 
 **Single test class:**
+
 ```bash
-docker compose exec bot env PYTHONPATH=/app:/tests pytest /tests/indicators/test_ema.py::TestEMACompute -v
+docker compose exec bot sh -c "python -m pytest /tests/indicators/test_ema.py::TestEMACompute -v"
 ```
 
 **Single test function:**
+
 ```bash
-docker compose exec bot env PYTHONPATH=/app:/tests pytest /tests/indicators/test_ema.py::TestEMACompute::test_compute_with_default_params -v
+docker compose exec bot sh -c "python -m pytest /tests/indicators/test_ema.py::TestEMACompute::test_compute_with_default_params -v"
 ```
 
 ### Run with Coverage
 
 ```bash
-docker compose exec bot env PYTHONPATH=/app:/tests pytest /tests --cov=bot --cov-report=html
+docker compose exec bot sh -c "python -m pytest /tests --cov=bot --cov-report=html"
 ```
 
 Coverage report will be generated in `htmlcov/` directory.
@@ -127,8 +121,5 @@ def test_my_indicator(sample_candles):
 ## CI/CD
 
 Tests run automatically on GitHub Actions for:
-- Every push to `main` or `dev`
-- Every pull request
-- Scheduled nightly builds
 
-See `.github/workflows/test.yml` for CI configuration.
+- Every push to `main` or `dev`

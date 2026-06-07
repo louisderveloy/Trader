@@ -7,7 +7,7 @@ from environment variables with type checking and defaults.
 
 from typing import Optional
 
-from pydantic import Field, computed_field
+from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -89,6 +89,32 @@ class Settings(BaseSettings):
     admin_username: str = Field(default="admin", description="Admin username")
     admin_password: str = Field(default="admin", description="Admin password")
     admin_email: str = Field(default="admin@localhost", description="Admin email")
+
+    # ==========================================
+    # CSRF PROTECTION
+    # ==========================================
+    csrf_secret_key: str = Field(
+        default="generate_csrf_secret_with_openssl_rand_hex_32",
+        description="CSRF secret key",
+    )
+    csrf_token_location: str = Field(default="header", description="CSRF token location")
+
+    # ==========================================
+    # RATE LIMITING
+    # ==========================================
+    rate_limit_enabled: bool = Field(default=True, description="Enable rate limiting")
+    rate_limit_login: str = Field(
+        default="5/minute", description="Login endpoint rate limit"
+    )
+    rate_limit_api_read: str = Field(
+        default="60/minute", description="Read endpoints rate limit"
+    )
+    rate_limit_api_write: str = Field(
+        default="30/minute", description="Write endpoints rate limit"
+    )
+    rate_limit_expensive: str = Field(
+        default="2/hour", description="Expensive operations rate limit (optimizations)"
+    )
 
     # ==========================================
     # API SERVER
@@ -203,6 +229,55 @@ class Settings(BaseSettings):
     backtest_commission_percent: float = Field(
         default=0.1, description="Commission percent (Binance taker fee)"
     )
+
+    @model_validator(mode='after')
+    def validate_production_secrets(self):
+        """
+        Validate that production secrets are strong enough.
+
+        Only validates in production environment (environment='prod').
+        Checks JWT secret and database password for minimum length and weak patterns.
+
+        Note: Admin password validation is skipped as Authelia will replace authentication.
+
+        Raises:
+            ValueError: If any secret is weak in production mode
+        """
+        if self.environment == "prod":
+            weak_patterns = [
+                "change_me", "admin", "password", "secret",
+                "generate", "your_", "example", "localhost", "test"
+            ]
+
+            # Check JWT secret
+            if len(self.jwt_secret_key) < 32:
+                raise ValueError(
+                    "Production requires JWT_SECRET_KEY >= 32 characters. "
+                    "Generate with: openssl rand -hex 32"
+                )
+            for pattern in weak_patterns:
+                if pattern in self.jwt_secret_key.lower():
+                    raise ValueError(
+                        f"Production JWT_SECRET_KEY contains weak pattern: '{pattern}'. "
+                        "Generate with: openssl rand -hex 32"
+                    )
+
+            # Check database password
+            if len(self.postgres_password) < 16:
+                raise ValueError(
+                    "Production requires POSTGRES_PASSWORD >= 16 characters. "
+                    "Generate with: openssl rand -base64 24"
+                )
+            for pattern in weak_patterns:
+                if pattern in self.postgres_password.lower():
+                    raise ValueError(
+                        f"Production POSTGRES_PASSWORD contains weak pattern: '{pattern}'. "
+                        "Generate with: openssl rand -base64 24"
+                    )
+
+            # Skip admin password check - Authelia will replace authentication
+
+        return self
 
 
 # Global settings instance
