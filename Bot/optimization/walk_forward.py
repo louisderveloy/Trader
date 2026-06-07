@@ -301,7 +301,10 @@ def _generate_expanding_splits(
     )
 
     splits = []
-    current_date = start_date
+    # Initialize current_date to the end of the first training period
+    # This ensures the first split has training data
+    initial_train_duration = first_split_duration * train_ratio
+    current_date = start_date + initial_train_duration
 
     for i in range(n_splits):
         # Training always starts from the beginning

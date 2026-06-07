@@ -66,7 +66,7 @@ class WalkForwardSplit:
         if self.test_start >= self.test_end:
             raise ValueError(f"test_start must be before test_end: {self.test_start} >= {self.test_end}")
         if self.train_end > self.test_start:
-            raise ValueError(f"train_end must not be after test_start: {self.train_end} > {self.test_start}")
+            raise ValueError(f"train_end must be before test_start: {self.train_end} > {self.test_start}")
 
 
 @dataclass
