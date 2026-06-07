@@ -5,6 +5,7 @@ REST API for querying and managing trading runs.
 """
 
 import asyncpg
+import json
 import logging
 from typing import Annotated
 
@@ -17,6 +18,31 @@ from ..models.runs import RunFilter, RunListResponse, RunResponse, RunStatusUpda
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _row_to_run_response(row: asyncpg.Record) -> RunResponse:
+    """
+    Convert database row to RunResponse, parsing JSON fields.
+
+    PostgreSQL JSONB columns are returned as strings by asyncpg,
+    so we need to parse them manually.
+
+    Args:
+        row: Database row
+
+    Returns:
+        RunResponse model
+    """
+    data = dict(row)
+
+    # Parse JSON fields if they're strings
+    if isinstance(data.get("config_snapshot"), str):
+        data["config_snapshot"] = json.loads(data["config_snapshot"])
+
+    if isinstance(data.get("result"), str):
+        data["result"] = json.loads(data["result"])
+
+    return RunResponse(**data)
 
 
 @router.get("", response_model=RunListResponse)
@@ -88,7 +114,7 @@ async def list_runs(
         rows = await conn.fetch(runs_query, *params.values())
 
     # Convert to response models
-    items = [RunResponse(**dict(row)) for row in rows]
+    items = [_row_to_run_response(row) for row in rows]
 
     logger.info(f"Listed {len(items)} runs (total={total})")
 
@@ -123,7 +149,7 @@ async def get_active_runs(
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(query)
 
-    items = [RunResponse(**dict(row)) for row in rows]
+    items = [_row_to_run_response(row) for row in rows]
     logger.info(f"Found {len(items)} active runs")
 
     return items
@@ -169,7 +195,7 @@ async def get_run(
             detail=f"Run {run_id} not found",
         )
 
-    return RunResponse(**dict(row))
+    return _row_to_run_response(row)
 
 
 @router.patch("/{run_id}/status", response_model=RunResponse)
@@ -239,4 +265,4 @@ async def update_run_status(
         + (f" (reason: {update.reason})" if update.reason else "")
     )
 
-    return RunResponse(**dict(row))
+    return _row_to_run_response(row)

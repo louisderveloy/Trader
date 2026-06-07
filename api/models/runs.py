@@ -6,6 +6,7 @@ Request/response models for run management.
 
 from datetime import datetime
 from typing import Any, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -30,7 +31,7 @@ class RunResponse(BaseModel):
     started_at: Optional[datetime] = Field(None, description="Start timestamp")
     completed_at: Optional[datetime] = Field(None, description="Completion timestamp")
 
-    weights_set_id: Optional[int] = Field(None, description="Active weights set ID")
+    weights_set_id: Optional[UUID] = Field(None, description="Active weights set ID")
     optuna_study_id: Optional[int] = Field(None, description="Optuna study ID")
 
     class Config:
@@ -51,7 +52,7 @@ class RunFilter(BaseModel):
     created_after: Optional[datetime] = Field(None, description="Created after timestamp")
     created_before: Optional[datetime] = Field(None, description="Created before timestamp")
 
-    weights_set_id: Optional[int] = Field(None, description="Filter by weights set ID")
+    weights_set_id: Optional[UUID] = Field(None, description="Filter by weights set ID")
     optuna_study_id: Optional[int] = Field(None, description="Filter by Optuna study ID")
 
     limit: int = Field(default=100, ge=1, le=1000, description="Maximum results")
