@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Get file architecture
         run: pwd && ls -R
@@ -22,22 +22,22 @@ jobs:
         with:
           python-version: '3.13'
           cache: 'pip'  # Active le cache pip
-          pip-install: -r Bot/requirements-dev.txt
+          pip-install: -r $GITHUB_WORKSPACE/Bot/requirements-dev.txt
 
       - name: Run tests
         working-directory: Bot
-        run: python -m pytest tests/test_backtesting_coherence.py
+        run: python -m pytest $GITHUB_WORKSPACE/tests/test_backtesting_coherence.py
 
   secrets-scan:
     name: Scan for secrets
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Run gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
