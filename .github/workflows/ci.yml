@@ -22,6 +22,8 @@ jobs:
             --build-arg INSTALL_DEV=true \
             -t trader-bot:test \
             .
+      - name: Get file architecture
+        run: ls -R
 
       - name: Run pytest in bot container
         run: |
