@@ -18,11 +18,14 @@ jobs:
       - name: Get file architecture
         run: pwd && ls -R
 
+      - name: DEBUG ECHO ENV
+        run: echo "${{ env }}"
+
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
           cache: 'pip'  # Active le cache pip
-          pip-install: -r ${{ env.GITHUB_ACTION_PATH }}/Bot/requirements-dev.txt
+          pip-install: -r Bot/requirements-dev.txt
 
       - name: Run tests
         working-directory: Bot
