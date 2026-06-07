@@ -19,7 +19,7 @@ jobs:
         run: ls -R
 
       - name: Build bot Docker image
-        working-directory: bot
+        working-directory: Bot
         run: |
           docker build \
             --build-arg INSTALL_DEV=true \
