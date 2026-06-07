@@ -26,11 +26,11 @@ jobs:
       - uses: actions/cache@v5
         with:
           path: ~/.cache
-          key: venv-${{ runner.os }}-${{ hashFiles('**/requirements*.lock') }}
+          key: venv-${{ runner.os }}-${{ hashFiles('**/requirements*.txt') }}
 
       - name: Run tests
         working-directory: Bot
-        run: python -m pytest /home/runner/work/Trader/Trader/tests/test_backtesting_coherence.py
+        run: python -m pytest /home/runner/work/Trader/Trader/tests/
 
   secrets-scan:
     name: Scan for secrets
