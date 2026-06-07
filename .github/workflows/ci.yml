@@ -26,7 +26,7 @@ jobs:
 
       - name: Run tests
         working-directory: Bot
-        run: pytest tests
+        run: pytest tests/pytest.ini
 
   # ==========================================
   # Security: Check for secrets in code
