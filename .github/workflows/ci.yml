@@ -30,7 +30,7 @@ jobs:
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/tests:/tests \
-            -v ${{ github.workspace }}/bot:/app \
+            -v ${{ github.workspace }}/Bot:/app \
             trader-bot:test \
             sh -c "cd /tests && python -m pytest /tests -v --cov=bot --cov=api --cov-report=xml:/tests/coverage.xml --cov-report=term"
 
