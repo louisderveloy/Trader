@@ -1,4 +1,4 @@
-name: CI
+name: Python-Tests
 
 on:
   push:
@@ -18,15 +18,15 @@ jobs:
       - name: Get file architecture
         run: cd ~ && pwd && ls -aR
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.13'
-          pip-install: -r Bot/requirements-dev.txt
-
       - uses: actions/cache@v5
         with:
           path: ~/.cache
           key: venv-${{ runner.os }}-${{ hashFiles('**/requirements*.txt') }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          pip-install: -r Bot/requirements-dev.txt
 
       - name: Run tests
         working-directory: Bot
