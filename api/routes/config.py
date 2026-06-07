@@ -14,6 +14,7 @@ from ..auth import User, get_current_user
 from ..config import settings
 from ..csrf_helper import validate_csrf_token
 from ..database import get_db_pool
+from ..db_config import update_config_in_db
 from ..limiter import limiter
 from ..models.config import (
     ConfigResponse,
@@ -140,9 +141,10 @@ async def get_config(
 @router.patch("/strategy", response_model=StrategyConfigResponse)
 @limiter.limit(lambda: settings.rate_limit_api_write)
 async def update_strategy_config(
-    http_request: Request,
-    request: StrategyConfigUpdate,
+    request: Request,
+    update_data: StrategyConfigUpdate,
     user: User = Depends(get_current_user),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> StrategyConfigResponse:
     """
     Update strategy configuration.
@@ -151,24 +153,35 @@ async def update_strategy_config(
     Rate limited to 30 requests per minute.
 
     Args:
-        http_request: FastAPI request object (for CSRF validation)
-        request: Updated strategy configuration
+        request: FastAPI request object (for rate limiting and CSRF validation)
+        update_data: Updated strategy configuration
+        db_pool: Database connection pool
 
     Returns:
         Updated strategy configuration
     """
     # Validate CSRF token
-    await validate_csrf_token(http_request)
-    # Update in-memory settings (for now)
-    # TODO: Persist to database for durability
-    if request.entry_threshold is not None:
-        settings.strategy_entry_threshold = request.entry_threshold
-    if request.exit_threshold is not None:
-        settings.strategy_exit_threshold = request.exit_threshold
-    if request.confirmation_candles is not None:
-        settings.strategy_confirmation_candles = request.confirmation_candles
+    await validate_csrf_token(request)
 
-    logger.info("Updated strategy configuration")
+    # Prepare updates dict
+    updates = {}
+    if update_data.entry_threshold is not None:
+        settings.strategy_entry_threshold = update_data.entry_threshold
+        updates["entry_threshold"] = update_data.entry_threshold
+
+    if update_data.exit_threshold is not None:
+        settings.strategy_exit_threshold = update_data.exit_threshold
+        updates["exit_threshold"] = update_data.exit_threshold
+
+    if update_data.confirmation_candles is not None:
+        settings.strategy_confirmation_candles = update_data.confirmation_candles
+        updates["confirmation_candles"] = update_data.confirmation_candles
+
+    # Persist to database
+    if updates:
+        await update_config_in_db(db_pool, "strategy", updates)
+
+    logger.info("Updated strategy configuration and persisted to database")
 
     return StrategyConfigResponse(
         entry_threshold=settings.strategy_entry_threshold,
@@ -180,9 +193,10 @@ async def update_strategy_config(
 @router.patch("/risk", response_model=RiskConfigResponse)
 @limiter.limit(lambda: settings.rate_limit_api_write)
 async def update_risk_config(
-    http_request: Request,
-    request: RiskConfigUpdate,
+    request: Request,
+    update_data: RiskConfigUpdate,
     user: User = Depends(get_current_user),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> RiskConfigResponse:
     """
     Update risk management configuration.
@@ -191,24 +205,47 @@ async def update_risk_config(
     Rate limited to 30 requests per minute.
 
     Args:
-        http_request: FastAPI request object (for CSRF validation)
-        request: Updated risk configuration
+        request: FastAPI request object (for rate limiting and CSRF validation)
+        update_data: Updated risk configuration
+        db_pool: Database connection pool
 
     Returns:
         Updated risk configuration
     """
     # Validate CSRF token
-    await validate_csrf_token(http_request)
-    # Update in-memory settings (for now)
-    # TODO: Persist to database for durability
-    if request.max_trades_per_day is not None:
-        settings.risk_max_trades_per_day = request.max_trades_per_day
-    if request.max_exposure_percent is not None:
-        settings.risk_max_exposure_percent = request.max_exposure_percent
-    if request.position_size_mode is not None:
-        settings.risk_position_size_mode = request.position_size_mode
+    await validate_csrf_token(request)
 
-    logger.info("Updated risk configuration")
+    # Prepare updates dict
+    updates = {}
+    if update_data.max_trades_per_day is not None:
+        settings.risk_max_trades_per_day = update_data.max_trades_per_day
+        updates["max_trades_per_day"] = update_data.max_trades_per_day
+
+    if update_data.max_exposure_percent is not None:
+        settings.risk_max_exposure_percent = update_data.max_exposure_percent
+        updates["max_exposure_percent"] = update_data.max_exposure_percent
+
+    if update_data.position_size_mode is not None:
+        settings.risk_position_size_mode = update_data.position_size_mode.value
+        updates["position_size_mode"] = update_data.position_size_mode.value
+
+    if update_data.fixed_size_usdt is not None:
+        settings.risk_fixed_size_usdt = update_data.fixed_size_usdt
+        updates["fixed_size_usdt"] = update_data.fixed_size_usdt
+
+    if update_data.atr_multiplier is not None:
+        settings.risk_atr_multiplier = update_data.atr_multiplier
+        updates["atr_multiplier"] = update_data.atr_multiplier
+
+    if update_data.capital_risk_percent is not None:
+        settings.risk_capital_risk_percent = update_data.capital_risk_percent
+        updates["capital_risk_percent"] = update_data.capital_risk_percent
+
+    # Persist to database
+    if updates:
+        await update_config_in_db(db_pool, "risk", updates)
+
+    logger.info("Updated risk configuration and persisted to database")
 
     return RiskConfigResponse(
         max_trades_per_day=settings.risk_max_trades_per_day,
@@ -275,9 +312,9 @@ async def get_user_indicator(
 @router.patch("/user-indicator", response_model=UserIndicatorResponse)
 @limiter.limit(lambda: settings.rate_limit_api_write)
 async def update_user_indicator(
-    http_request: Request,
+    request: Request,
     symbol: Annotated[str, Query(description="Trading symbol")] = "BTCUSDT",
-    request: UserIndicatorUpdateRequest = None,
+    update_data: UserIndicatorUpdateRequest = None,
     user: User = Depends(get_current_user),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> UserIndicatorResponse:
@@ -288,23 +325,23 @@ async def update_user_indicator(
     Rate limited to 30 requests per minute.
 
     Args:
-        http_request: FastAPI request object (for CSRF validation)
+        request: FastAPI request object (for rate limiting and CSRF validation)
         symbol: Trading symbol
-        request: Updated user indicator
+        update_data: Updated user indicator
 
     Returns:
         Updated user indicator
     """
     # Validate CSRF token
-    await validate_csrf_token(http_request)
-    if request is None:
+    await validate_csrf_token(request)
+    if update_data is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Request body required",
         )
 
     # Calculate expiration
-    expires_at = datetime.now(timezone.utc) + timedelta(hours=request.expires_in_hours)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=update_data.expires_in_hours)
 
     async with db_pool.acquire() as conn:
         # Delete existing indicator for this symbol
@@ -319,12 +356,12 @@ async def update_user_indicator(
         row = await conn.fetchrow(
             insert_query,
             symbol,
-            float(request.signal),
-            request.note,
+            float(update_data.signal),
+            update_data.note,
             expires_at
         )
 
-    logger.info(f"Updated user indicator for {symbol}: signal={request.signal}")
+    logger.info(f"Updated user indicator for {symbol}: signal={update_data.signal}")
 
     return UserIndicatorResponse(
         symbol=row["symbol"],

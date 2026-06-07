@@ -17,6 +17,7 @@ from slowapi.errors import RateLimitExceeded
 
 from .config import settings
 from .database import DatabasePool
+from .db_config import apply_db_config_to_settings
 from .limiter import limiter
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .redis.client import RedisPool
@@ -49,6 +50,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to initialize database pool: {e}")
         raise
+
+    # Load persisted configuration from database
+    try:
+        await apply_db_config_to_settings(app.state.db_pool, settings)
+        logger.info("Configuration loaded from database")
+    except Exception as e:
+        logger.warning(f"Failed to load configuration from database: {e}. Using defaults.")
 
     # Initialize Redis pool
     try:
