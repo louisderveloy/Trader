@@ -19,7 +19,7 @@ jobs:
         run: pwd && ls -R
 
       - name: DEBUG ECHO ENV
-        run: echo "${{ env.GITHUB_WORKSPACE }} $GGITHUB_WORKSPACE"
+        run: echo "${{ env.GITHUB_WORKSPACE }} $GITHUB_WORKSPACE"
 
       - uses: actions/setup-python@v6
         with:
