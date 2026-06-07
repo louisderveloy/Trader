@@ -22,11 +22,11 @@ jobs:
         with:
           python-version: '3.13'
           cache: 'pip'  # Active le cache pip
-          pip-install: -r ${{ env.GITHUB_WORKSPACE }}/Bot/requirements-dev.txt
+          pip-install: -r ${{ env.GITHUB_ACTION_PATH }}/Bot/requirements-dev.txt
 
       - name: Run tests
         working-directory: Bot
-        run: python -m pytest ${{ env.GITHUB_WORKSPACE }}/tests/test_backtesting_coherence.py
+        run: python -m pytest ${{ env.GITHUB_ACTION_PATH }}/tests/test_backtesting_coherence.py
 
   secrets-scan:
     name: Scan for secrets
