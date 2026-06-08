@@ -116,6 +116,8 @@ class TradingBot:
         self.weights: Dict[str, float] = {}
         self.is_running = False
         self.lock_connection: Optional[asyncpg.Connection] = None  # Connection holding instance lock
+        self.config_listener_conn: Optional[asyncpg.Connection] = None  # Dedicated connection for LISTEN
+        self.config_listener_task: Optional[asyncio.Task] = None  # Background task for config updates
 
         # Configuration (loaded from database in start())
         self.config: Optional[StrategyEngineConfig] = None
@@ -168,6 +170,9 @@ class TradingBot:
             await self._init_discord()
             await self._load_weights()
             await self._create_run_record()
+
+            # Start config update listener (non-blocking background task)
+            await self._start_config_listener()
 
             # Log initial balance
             if self.mode == "live":
@@ -224,6 +229,9 @@ class TradingBot:
                 await self.discord_notifier.close()
             except Exception as e:
                 logger.error(f"Failed to close Discord notifier: {e}")
+
+        # Stop config update listener
+        await self._stop_config_listener()
 
         # Release instance lock before closing pool
         if self.lock_connection and self.db_pool:
@@ -1396,6 +1404,112 @@ class TradingBot:
             return value * 60 * 24 * 7
         else:
             return 15  # Default
+
+    async def _start_config_listener(self):
+        """Start listening for config update notifications from PostgreSQL."""
+        try:
+            # Create a dedicated connection for LISTEN (can't use pooled connection)
+            dsn = os.getenv("DATABASE_URL", "")
+            dsn = dsn.replace("postgresql+asyncpg://", "postgresql://")
+            self.config_listener_conn = await asyncpg.connect(dsn)
+
+            # Add listener for config_updated channel
+            await self.config_listener_conn.add_listener('config_updated', self._handle_config_notification)
+
+            logger.info("✓ Config update listener started")
+        except Exception as e:
+            logger.error(f"Failed to start config listener: {e}")
+            # Non-fatal - bot can continue without config hot-reload
+
+    async def _handle_config_notification(self, connection, pid, channel, payload):
+        """
+        Handle config update notification from PostgreSQL.
+
+        Args:
+            connection: Database connection
+            pid: Process ID of notifying backend
+            channel: Notification channel name
+            payload: JSON payload with config data
+        """
+        try:
+            logger.info("=" * 60)
+            logger.info("CONFIG UPDATE NOTIFICATION RECEIVED")
+            logger.info(f"  Channel: {channel}")
+            logger.info(f"  From PID: {pid}")
+
+            # Parse the notification payload
+            try:
+                config_data = json.loads(payload)
+                logger.info(f"  Config ID: {config_data.get('id')}")
+                logger.info(f"  Updated at: {config_data.get('updated_at')}")
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse config notification payload: {e}")
+                return
+
+            # Reload config from database
+            await self._reload_config()
+
+            logger.info("=" * 60)
+
+        except Exception as e:
+            logger.error(f"Error handling config notification: {e}", exc_info=True)
+
+    async def _reload_config(self):
+        """Reload configuration from database (hot reload)."""
+        try:
+            logger.info("Reloading configuration from database...")
+
+            # Store old config for comparison
+            old_config = self.config
+
+            # Load new config
+            new_config = await StrategyEngineConfig.from_db(self.db_pool)
+
+            # Log changes
+            if old_config:
+                logger.info("Configuration changes detected:")
+                if old_config.strategy.entry_threshold != new_config.strategy.entry_threshold:
+                    logger.info(f"  Entry threshold: {old_config.strategy.entry_threshold} → {new_config.strategy.entry_threshold}")
+                if old_config.strategy.exit_threshold != new_config.strategy.exit_threshold:
+                    logger.info(f"  Exit threshold: {old_config.strategy.exit_threshold} → {new_config.strategy.exit_threshold}")
+                if old_config.strategy.confirmation_candles != new_config.strategy.confirmation_candles:
+                    logger.info(f"  Confirmation candles: {old_config.strategy.confirmation_candles} → {new_config.strategy.confirmation_candles}")
+                if old_config.risk.max_trades_per_day != new_config.risk.max_trades_per_day:
+                    logger.info(f"  Max trades/day: {old_config.risk.max_trades_per_day} → {new_config.risk.max_trades_per_day}")
+                if old_config.risk.position_size_mode != new_config.risk.position_size_mode:
+                    logger.info(f"  Position size mode: {old_config.risk.position_size_mode.value} → {new_config.risk.position_size_mode.value}")
+
+            # Update config
+            self.config = new_config
+
+            # Reload weights (they might have changed too)
+            await self._load_weights()
+
+            logger.info("✓ Configuration reloaded successfully")
+
+            # Send Discord notification about config reload
+            if self.discord_notifier:
+                try:
+                    # Note: This is a custom notification, we may need to add a method for it
+                    # For now, we'll just log it
+                    pass
+                except Exception as e:
+                    logger.error(f"Failed to send config reload notification: {e}")
+
+        except Exception as e:
+            logger.error(f"Failed to reload configuration: {e}", exc_info=True)
+            logger.warning("Bot will continue using previous configuration")
+
+    async def _stop_config_listener(self):
+        """Stop the config update listener."""
+        if self.config_listener_conn:
+            try:
+                await self.config_listener_conn.remove_listener('config_updated', self._handle_config_notification)
+                await self.config_listener_conn.close()
+                self.config_listener_conn = None
+                logger.info("✓ Config update listener stopped")
+            except Exception as e:
+                logger.error(f"Failed to stop config listener: {e}")
 
 
 async def run_trading_loop(

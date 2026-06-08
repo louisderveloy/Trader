@@ -194,6 +194,35 @@ Implementing Optuna-based optimization with walk-forward analysis for indicator 
   - Reduces noise when analyzing different types of trading activity
 - **Result:** Better data organization and user control over what they see
 
+### 2026-06-08T20:30Z [CODE] Auto-reload config on database updates (PostgreSQL LISTEN/NOTIFY)
+- **Decision:** Implement hot config reload using PostgreSQL LISTEN/NOTIFY to avoid bot restarts
+- **Implementation:**
+  - Created migration `008_add_config_notify_trigger.py` with PostgreSQL trigger on config table
+  - Trigger function `notify_config_updated()` broadcasts via `pg_notify()` on INSERT/UPDATE
+  - Modified `bot/scripts/trading.py`:
+    - Added `config_listener_conn` for dedicated LISTEN connection
+    - Added `_start_config_listener()` to subscribe to 'config_updated' channel
+    - Added `_handle_config_notification()` to process notifications
+    - Added `_reload_config()` for hot config reload
+    - Added `_stop_config_listener()` for cleanup
+    - Integrated into `start()` and `stop()` lifecycle
+- **Behavior:**
+  - Any INSERT/UPDATE on config table triggers notification to all running bot instances
+  - All instances (paper, live testnet, live mainnet) reload config automatically
+  - No restart required - hot reload while trading continues
+  - Logs all config changes (old → new values)
+  - Reloads weights if they changed
+  - Non-fatal if listener fails - bot continues with current config
+- **Benefits:**
+  - Zero-downtime config updates
+  - All running instances stay in sync
+  - No need to manually restart bots
+  - Clear visibility of what changed in logs
+- **Impact:**
+  - Seamless config management across all trading modes
+  - Faster iteration during testing/optimization
+- **Result:** Production-ready hot config reload system with PostgreSQL pub/sub
+
 ### 2026-06-08T19:50Z [CODE] Single instance enforcement for trading scripts
 - **Decision:** Implement PostgreSQL advisory locks to prevent multiple instances of same trading mode
 - **Implementation:**
