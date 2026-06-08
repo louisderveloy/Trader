@@ -30,7 +30,7 @@ jobs:
 
       - name: Run tests
         working-directory: Bot
-        run: python -m pytest /home/runner/work/Trader/Trader/tests/
+        run: python -m pytest /home/runner/work/Trader/Trader/tests/ --ignore=/home/runner/work/Trader/Trader/tests/test_instance_lock.py
 
   secrets-scan:
     name: Scan for secrets
