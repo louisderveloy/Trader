@@ -327,6 +327,63 @@ Implementing Optuna-based optimization with walk-forward analysis for indicator 
 
 ## [PROGRESS]
 
+### 2026-06-08T17:45Z [CODE] Fixed order ID field name mismatch causing status check failures
+- **Issue:** Order status checks failing with `invalid literal for int() with base 10: 'None'`
+- **Root cause:** Field name mismatch between normalized order response and code accessing it
+  - `_normalize_order()` returns `"order_id"` (snake_case)
+  - `_execute_entry()` was looking for `"orderId"` (camelCase)
+  - `order.get("orderId")` returned `None`, then `str(None)` = string `"None"`
+  - Later: `int("None")` failed when checking order status
+- **Additional issues found:**
+  - Status field comparison using uppercase ("FILLED") but normalized response has lowercase ("filled")
+  - Wrong field names: `avgPrice` vs `filled_price`, `commission` (doesn't exist in normalized response)
+- **Solution:**
+  - Fixed field name: `order.get("order_id")` instead of `order.get("orderId")`
+  - Fixed status comparison: lowercase `"filled"`, `"cancelled"`, `"rejected"`, `"pending"`
+  - Fixed price field: use `filled_price` from normalized response
+  - Removed commission field access (not in normalized response, estimate instead)
+  - Added validation: reject order if `exchange_order_id` is None or "None"
+  - Added error handling: raise exception if order response missing `order_id`
+- **Locations:** `Bot/scripts/trading.py` (entry and exit order placement, order status checking)
+- **Status:** ✅ Fixed - orders should now be tracked correctly
+
+### 2026-06-08T17:30Z [CODE] Fixed Binance order placement errors in live testnet
+- **Issue 1:** Quantity precision error - Binance rejected quantities with 28 decimal places
+  - Root cause: `quantity = position_size / price` creates high-precision Decimal
+  - Binance Spot API limit: max 20 decimals in regex, BTC typically 8 decimals
+  - Solution: Added symbol info fetching and precision formatting
+    - `get_symbol_info()`: Fetches LOT_SIZE (quantity) and PRICE_FILTER (price) from exchange
+    - `_format_quantity()`: Rounds quantity to step_size precision using ROUND_DOWN
+    - `_format_price()`: Rounds price to tick_size precision using ROUND_HALF_UP
+    - Symbol info cached to avoid repeated API calls
+  - Before: `0.1494035809050271316902923529` (28 decimals) ❌
+  - After: `0.14940358` (8 decimals for BTC) ✅
+- **Issue 2:** Invalid timeInForce error - Used `GTX` which Binance doesn't support
+  - Root cause: GTX is not a valid timeInForce parameter in Binance Spot API
+  - Research via Context7: Valid values are GTC, IOC, FOK
+  - Solution: Use `LIMIT_MAKER` order type for post-only orders
+    - Post-only: type=LIMIT_MAKER (no timeInForce parameter needed)
+    - Regular limit: type=LIMIT with timeInForce=GTC
+    - LIMIT_MAKER orders rejected if they would immediately match (true post-only)
+  - Reference: Binance API docs `/websites/developers_binance_binance-spot-api-docs`
+- **Issue 3:** Insufficient balance error - Bot used hardcoded capital instead of actual balance
+  - Root cause: Position sizing used `self.capital` (default 10,000 USDT) instead of actual exchange balance
+  - Tried to order 0.14971 BTC × 63,454 USDT = ~9,499 USDT but testnet account had less
+  - Solution: Added actual balance checking for live mode
+    - New method `_get_available_capital()`: Fetches real USDT balance in live mode, uses simulated capital in paper mode
+    - Updated `_execute_entry()` to check actual balance before placing orders
+    - Added minimum order validation (Binance minimum ~10 USDT)
+    - Added balance logging at startup and during trading iterations
+    - Removed confusing "Initial Capital" log for live mode (now shows "Balance: Will fetch from exchange...")
+  - Live mode now checks real account balance before every trade
+  - Paper mode continues using simulated `self.capital` tracking
+  - **Network-agnostic:** Balance fetching works for both testnet AND mainnet
+    - Exchange initialized with correct API keys (BINANCE_TESTNET_* or BINANCE_MAINNET_*)
+    - Balance method calls `exchange.get_balance("USDT")` on connected exchange
+    - No code changes needed when switching testnet → mainnet
+- **Files modified:** `Bot/exchanges/binance.py`, `Bot/scripts/trading.py`
+- **Status:** ✅ Ready for testing - respects actual account balance on both testnet and mainnet
+
 ### 2026-06-08T16:30Z [USER] Enhanced trades table with network column and clickable filters
 - **Request:** Add network column, visual emphasis for live trades, clickable network/symbol badges
 - **Implementation:**

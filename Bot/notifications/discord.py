@@ -6,6 +6,7 @@ for all notification events.
 """
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -23,6 +24,8 @@ class NotificationType(str, Enum):
 
     TRADE_OPENED = "trade_opened"
     TRADE_CLOSED = "trade_closed"
+    ORDER_FILLED = "order_filled"
+    RUN_COMPLETED = "run_completed"
     ERROR = "error"
     WARNING = "warning"
     INFO = "info"
@@ -167,7 +170,7 @@ class DiscordNotifier:
                     notification_type.value,
                     message,
                     status,
-                    metadata,
+                    json.dumps(metadata) if metadata else None,
                     datetime.now(timezone.utc),
                 )
         except Exception as e:
@@ -416,4 +419,119 @@ class DiscordNotifier:
                 "trades_today": trades_today,
                 "capital": str(capital),
             },
+        )
+
+    async def notify_order_filled(
+        self,
+        symbol: str,
+        side: str,
+        filled_price: Decimal,
+        filled_quantity: Decimal,
+        order_type: str,
+        commission: Decimal,
+        testnet: bool,
+    ) -> bool:
+        """
+        Send notification for order filled (buy or sell).
+
+        Args:
+            symbol: Trading symbol
+            side: Order side (buy/sell)
+            filled_price: Filled price
+            filled_quantity: Filled quantity
+            order_type: Order type (limit/market)
+            commission: Commission paid
+            testnet: Whether on testnet
+
+        Returns:
+            True if sent successfully
+        """
+        network = "TESTNET" if testnet else "MAINNET"
+        volume_usd = filled_price * filled_quantity
+
+        message = (
+            f"**Order Filled - {side.upper()}**\n"
+            f"Symbol: {symbol}\n"
+            f"Price: {filled_price:.2f} USDT\n"
+            f"Quantity: {filled_quantity:.6f}\n"
+            f"Volume: ${volume_usd:.2f}\n"
+            f"Order Type: {order_type.upper()}\n"
+            f"Commission: {commission:.4f} USDT\n"
+            f"Network: {network}"
+        )
+
+        return await self.send(
+            message=message,
+            notification_type=NotificationType.ORDER_FILLED,
+            metadata={
+                "symbol": symbol,
+                "side": side,
+                "filled_price": str(filled_price),
+                "filled_quantity": str(filled_quantity),
+                "volume_usd": str(volume_usd),
+                "order_type": order_type,
+                "commission": str(commission),
+                "network": network,
+            },
+        )
+
+    async def notify_run_completed(
+        self,
+        run_type: str,
+        symbol: str,
+        environment: str,
+        start_date: datetime,
+        end_date: datetime,
+        win_rate: Optional[float] = None,
+        total_pnl: Optional[Decimal] = None,
+    ) -> bool:
+        """
+        Send notification for run completion.
+
+        Args:
+            run_type: Type of run (backtest/optimization/paper/live)
+            symbol: Trading symbol
+            environment: Environment (dev/staging/prod)
+            start_date: Run start date
+            end_date: Run end date
+            win_rate: Optional win rate for backtest/optimization
+            total_pnl: Optional total P&L for backtest/optimization
+
+        Returns:
+            True if sent successfully
+        """
+        message = (
+            f"**Run Completed**\n"
+            f"Type: {run_type.upper()}\n"
+            f"Symbol: {symbol}\n"
+            f"Environment: {environment.upper()}\n"
+            f"Start: {start_date.strftime('%Y-%m-%d %H:%M UTC')}\n"
+            f"End: {end_date.strftime('%Y-%m-%d %H:%M UTC')}"
+        )
+
+        if win_rate is not None:
+            message += f"\nWin Rate: {win_rate:.2f}%"
+
+        if total_pnl is not None:
+            pnl_emoji = "+" if total_pnl >= 0 else ""
+            message += f"\nTotal P&L: {pnl_emoji}{total_pnl:.2f} USDT"
+
+        metadata = {
+            "run_type": run_type,
+            "symbol": symbol,
+            "environment": environment,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+        }
+
+        if win_rate is not None:
+            metadata["win_rate"] = win_rate
+
+        if total_pnl is not None:
+            metadata["total_pnl"] = str(total_pnl)
+
+        return await self.send(
+            message=message,
+            notification_type=NotificationType.RUN_COMPLETED,
+            metadata=metadata,
         )

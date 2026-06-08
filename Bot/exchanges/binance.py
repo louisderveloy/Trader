@@ -68,6 +68,7 @@ class BinanceExchange(ExchangeBase):
         """
         super().__init__(api_key, api_secret, testnet)
         self.client: Optional[AsyncClient] = None
+        self._symbol_info_cache: Dict[str, Dict[str, Any]] = {}
         logger.info(
             f"Binance connector initialized (testnet={testnet})",
             extra={"testnet": testnet},
@@ -327,17 +328,42 @@ class BinanceExchange(ExchangeBase):
         side = side.upper()
 
         try:
-            # Create order params
-            params = {
-                "symbol": symbol,
-                "side": side,
-                "type": "LIMIT",
-                "quantity": str(quantity),
-                "price": str(price),
-                "timeInForce": "GTX" if post_only else "GTC",  # GTX = post-only
-            }
+            # Get symbol info for precision rules
+            symbol_info = await self.get_symbol_info(symbol)
 
+            # Format quantity and price according to exchange rules
+            formatted_quantity = self._format_quantity(quantity, symbol_info["lot_size_step"])
+            formatted_price = self._format_price(price, symbol_info["price_tick"])
+
+            logger.debug(
+                f"Formatted order: qty {quantity} -> {formatted_quantity}, "
+                f"price {price} -> {formatted_price}"
+            )
+
+            # Create order params
+            # For post-only, use LIMIT_MAKER type (no timeInForce needed)
+            # For regular limit, use LIMIT type with GTC timeInForce
+            if post_only:
+                params = {
+                    "symbol": symbol,
+                    "side": side,
+                    "type": "LIMIT_MAKER",  # Post-only, will reject if matches immediately
+                    "quantity": formatted_quantity,
+                    "price": formatted_price,
+                }
+            else:
+                params = {
+                    "symbol": symbol,
+                    "side": side,
+                    "type": "LIMIT",
+                    "quantity": formatted_quantity,
+                    "price": formatted_price,
+                    "timeInForce": "GTC",  # Good-Til-Canceled
+                }
+
+            logger.debug(f"Placing order with params: {params}")
             order = await self.client.create_order(**params)
+            logger.debug(f"Binance limit order response: {order}")
 
             return self._normalize_order(order)
 
@@ -386,14 +412,24 @@ class BinanceExchange(ExchangeBase):
         side = side.upper()
 
         try:
+            # Get symbol info for precision rules
+            symbol_info = await self.get_symbol_info(symbol)
+
+            # Format quantity according to exchange rules
+            formatted_quantity = self._format_quantity(quantity, symbol_info["lot_size_step"])
+
+            logger.debug(f"Formatted market order quantity: {quantity} -> {formatted_quantity}")
+
             params = {
                 "symbol": symbol,
                 "side": side,
                 "type": "MARKET",
-                "quantity": str(quantity),
+                "quantity": formatted_quantity,
             }
 
+            logger.debug(f"Placing market order with params: {params}")
             order = await self.client.create_order(**params)
+            logger.debug(f"Binance market order response: {order}")
 
             return self._normalize_order(order)
 
@@ -563,6 +599,9 @@ class BinanceExchange(ExchangeBase):
         Returns:
             Normalized order dictionary.
         """
+        # Log raw order for debugging
+        logger.debug(f"Normalizing order response: {order}")
+
         # Map Binance status to our status
         status_map = {
             "NEW": "pending",
@@ -574,9 +613,12 @@ class BinanceExchange(ExchangeBase):
             "EXPIRED": "cancelled",
         }
 
-        status = status_map.get(order["status"], "unknown")
+        # Get status with fallback
+        binance_status = order.get("status", "UNKNOWN")
+        status = status_map.get(binance_status, "unknown")
+
         filled_qty = Decimal(order.get("executedQty", "0"))
-        total_qty = Decimal(order["origQty"])
+        total_qty = Decimal(order.get("origQty", "0"))
 
         # Calculate average fill price
         filled_price = None
@@ -584,18 +626,137 @@ class BinanceExchange(ExchangeBase):
             cumulative_quote = Decimal(order.get("cummulativeQuoteQty", "0"))
             filled_price = cumulative_quote / filled_qty if filled_qty > 0 else None
 
+        # Handle missing fields gracefully
+        try:
+            order_id = str(order["orderId"])
+        except KeyError:
+            logger.error(f"Order response missing orderId: {order}")
+            raise
+
         return {
-            "order_id": str(order["orderId"]),
-            "symbol": order["symbol"],
-            "side": order["side"].lower(),
-            "type": order["type"].lower(),
+            "order_id": order_id,
+            "symbol": order.get("symbol", ""),
+            "side": order.get("side", "").lower(),
+            "type": order.get("type", "").lower(),
             "quantity": total_qty,
             "price": Decimal(order["price"]) if order.get("price") else None,
             "filled_quantity": filled_qty,
             "filled_price": filled_price,
             "status": status,
-            "created_at": datetime.fromtimestamp(order["time"] / 1000, tz=timezone.utc),
-            "updated_at": datetime.fromtimestamp(
-                order["updateTime"] / 1000, tz=timezone.utc
-            ),
+            "created_at": datetime.fromtimestamp(order.get("time", 0) / 1000, tz=timezone.utc) if order.get("time") else datetime.now(timezone.utc),
+            "updated_at": datetime.fromtimestamp(order.get("updateTime", 0) / 1000, tz=timezone.utc) if order.get("updateTime") else datetime.now(timezone.utc),
         }
+
+    async def get_symbol_info(self, symbol: str) -> Dict[str, Any]:
+        """Get symbol trading rules and precision info from Binance.
+
+        Args:
+            symbol: Trading pair (e.g., "BTCUSDT").
+
+        Returns:
+            Dictionary with symbol filters and precision info.
+
+        Raises:
+            ExchangeError: If Binance API returns an error.
+        """
+        if not self.client:
+            raise ConnectionError("Not connected to Binance. Call connect() first.")
+
+        symbol = self.normalize_symbol(symbol)
+
+        # Check cache first
+        if symbol in self._symbol_info_cache:
+            return self._symbol_info_cache[symbol]
+
+        try:
+            exchange_info = await self.client.get_exchange_info()
+
+            for s in exchange_info["symbols"]:
+                if s["symbol"] == symbol:
+                    # Extract key filters
+                    info = {
+                        "symbol": symbol,
+                        "base_asset": s["baseAsset"],
+                        "quote_asset": s["quoteAsset"],
+                        "base_asset_precision": s["baseAssetPrecision"],
+                        "quote_asset_precision": s["quoteAssetPrecision"],
+                    }
+
+                    # Extract LOT_SIZE filter (quantity precision)
+                    for f in s["filters"]:
+                        if f["filterType"] == "LOT_SIZE":
+                            info["lot_size_min"] = Decimal(f["minQty"])
+                            info["lot_size_max"] = Decimal(f["maxQty"])
+                            info["lot_size_step"] = Decimal(f["stepSize"])
+                        elif f["filterType"] == "PRICE_FILTER":
+                            info["price_min"] = Decimal(f["minPrice"])
+                            info["price_max"] = Decimal(f["maxPrice"])
+                            info["price_tick"] = Decimal(f["tickSize"])
+
+                    # Cache it
+                    self._symbol_info_cache[symbol] = info
+                    logger.debug(f"Cached symbol info for {symbol}: {info}")
+                    return info
+
+            raise InvalidSymbolError(f"Symbol {symbol} not found in exchange info")
+
+        except BinanceAPIException as e:
+            logger.error(f"Binance API error fetching symbol info: {e.message}")
+            raise ExchangeError(f"Failed to fetch symbol info: {e.message}")
+        except Exception as e:
+            logger.error(f"Unexpected error fetching symbol info: {e}")
+            raise ExchangeError(f"Failed to fetch symbol info: {e}")
+
+    def _format_quantity(self, quantity: Decimal, step_size: Decimal) -> str:
+        """Format quantity according to Binance LOT_SIZE step size.
+
+        Args:
+            quantity: Raw quantity value.
+            step_size: Step size from symbol LOT_SIZE filter.
+
+        Returns:
+            Formatted quantity string.
+        """
+        # Calculate precision from step_size
+        # step_size examples: 0.00001000 -> 5 decimals, 1.00000000 -> 0 decimals
+        step_str = f"{step_size:.8f}".rstrip('0')
+        if '.' in step_str:
+            precision = len(step_str.split('.')[1])
+        else:
+            precision = 0
+
+        # Round down to step_size (never round up to avoid exceeding balance)
+        # quantity_rounded = floor(quantity / step_size) * step_size
+        from decimal import ROUND_DOWN
+        quantity_rounded = (quantity / step_size).quantize(Decimal("1"), rounding=ROUND_DOWN) * step_size
+
+        # Format to precision (remove trailing zeros)
+        formatted = f"{quantity_rounded:.{precision}f}".rstrip('0').rstrip('.')
+
+        return formatted
+
+    def _format_price(self, price: Decimal, tick_size: Decimal) -> str:
+        """Format price according to Binance PRICE_FILTER tick size.
+
+        Args:
+            price: Raw price value.
+            tick_size: Tick size from symbol PRICE_FILTER filter.
+
+        Returns:
+            Formatted price string.
+        """
+        # Calculate precision from tick_size
+        tick_str = f"{tick_size:.8f}".rstrip('0')
+        if '.' in tick_str:
+            precision = len(tick_str.split('.')[1])
+        else:
+            precision = 0
+
+        # Round to nearest tick_size
+        from decimal import ROUND_HALF_UP
+        price_rounded = (price / tick_size).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * tick_size
+
+        # Format to precision (remove trailing zeros)
+        formatted = f"{price_rounded:.{precision}f}".rstrip('0').rstrip('.')
+
+        return formatted

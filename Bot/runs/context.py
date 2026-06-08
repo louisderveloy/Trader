@@ -7,12 +7,15 @@ including status transitions and error handling.
 
 import asyncpg
 import logging
+import os
 import traceback
 from contextlib import asynccontextmanager
+from decimal import Decimal
 from typing import AsyncIterator, Optional
 
 from .manager import RunManager
 from .types import Run, RunConfig, RunResult, RunStatus
+from notifications.discord import DiscordNotifier
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +59,23 @@ async def create_run(
     run = await manager.create_run(run_config, status=RunStatus.PENDING)
     logger.info(f"[RUN {run.id}] Created run: {run.run_type.value}")
 
+    # Initialize Discord notifier if configured
+    discord_notifier = None
+    try:
+        webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
+        notify_enabled = os.getenv("NOTIFY_OPTIMIZATION_COMPLETE", "true").lower() == "true"
+
+        if webhook_url and not webhook_url.startswith("https://discord.com/api/webhooks/YOUR_WEBHOOK") and notify_enabled:
+            rate_limit_seconds = int(os.getenv("DISCORD_RATE_LIMIT_PERIOD_SECONDS", "60"))
+            discord_notifier = DiscordNotifier(
+                webhook_url=webhook_url,
+                db_pool=db_pool,
+                rate_limit_seconds=rate_limit_seconds,
+                enabled=True,
+            )
+    except Exception as e:
+        logger.warning(f"Failed to initialize Discord notifier: {e}")
+
     try:
         # Transition to RUNNING if auto_start
         if auto_start:
@@ -68,6 +88,32 @@ async def create_run(
         # Normal exit - transition to COMPLETED
         run = await manager.update_status(run.id, RunStatus.COMPLETED)
         logger.info(f"[RUN {run.id}] Completed run")
+
+        # Send Discord notification for run completion
+        if discord_notifier:
+            try:
+                win_rate = None
+                total_pnl = None
+
+                # Extract metrics from result if available
+                if run.result and isinstance(run.result, dict):
+                    metrics = run.result.get("metrics", {})
+                    if "win_rate" in metrics:
+                        win_rate = float(metrics["win_rate"]) * 100  # Convert to percentage
+                    if "total_pnl" in metrics:
+                        total_pnl = Decimal(str(metrics["total_pnl"]))
+
+                await discord_notifier.notify_run_completed(
+                    run_type=run.run_type.value,
+                    symbol=run.symbol,
+                    environment=run.environment.value,
+                    start_date=run.started_at or run.created_at,
+                    end_date=run.completed_at or run.created_at,
+                    win_rate=win_rate,
+                    total_pnl=total_pnl,
+                )
+            except Exception as e:
+                logger.error(f"Failed to send run completion notification: {e}")
 
     except Exception as e:
         # Exception - transition to FAILED with error details
@@ -92,6 +138,14 @@ async def create_run(
 
         # Re-raise original exception
         raise
+
+    finally:
+        # Close Discord notifier
+        if discord_notifier:
+            try:
+                await discord_notifier.close()
+            except Exception as e:
+                logger.warning(f"Failed to close Discord notifier: {e}")
 
 
 @asynccontextmanager

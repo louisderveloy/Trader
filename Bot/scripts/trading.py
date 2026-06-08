@@ -58,6 +58,7 @@ from runs.orders import (
 )
 from runs.errors import log_exception, ErrorCategory, ErrorSeverity
 from strategy.config import StrategyEngineConfig
+from notifications.discord import DiscordNotifier
 
 # Setup logging
 logging.basicConfig(
@@ -105,6 +106,7 @@ class TradingBot:
         self.exchange: Optional[BinanceExchange] = None
         self.db_pool: Optional[asyncpg.Pool] = None
         self.redis_client: Optional[redis.Redis] = None
+        self.discord_notifier: Optional[DiscordNotifier] = None
 
         # State
         self.run_id: Optional[int] = None  # Set when run record is created
@@ -132,7 +134,11 @@ class TradingBot:
         logger.info(f"Symbol: {self.symbol}")
         logger.info(f"Timeframe: {self.timeframe}")
         logger.info(f"Network: {'TESTNET' if self.testnet else 'MAINNET'}")
-        logger.info(f"Initial Capital: {self.initial_capital} USDT")
+        # Only show initial capital for paper trading
+        if self.mode == "paper":
+            logger.info(f"Simulated Capital: {self.initial_capital} USDT")
+        else:
+            logger.info("Balance: Will fetch from exchange...")
         logger.info("=" * 80)
 
         try:
@@ -141,8 +147,26 @@ class TradingBot:
             await self._load_config()
             await self._init_exchange()
             await self._init_redis()
+            await self._init_discord()
             await self._load_weights()
             await self._create_run_record()
+
+            # Log initial balance
+            if self.mode == "live":
+                try:
+                    balance = await self.exchange.get_balance("USDT")
+                    logger.info("=" * 80)
+                    logger.info(f"ACCOUNT BALANCE:")
+                    logger.info(f"  Free: {balance['free']} USDT")
+                    logger.info(f"  Locked: {balance['locked']} USDT")
+                    logger.info(f"  Total: {balance['total']} USDT")
+                    logger.info("=" * 80)
+                except Exception as e:
+                    logger.warning(f"Could not fetch initial balance: {e}")
+            else:
+                logger.info("=" * 80)
+                logger.info(f"SIMULATED CAPITAL: {self.capital} USDT")
+                logger.info("=" * 80)
 
             # Start trading loop
             self.is_running = True
@@ -176,6 +200,12 @@ class TradingBot:
                 await self.exchange.disconnect()
             except Exception as e:
                 logger.error(f"Failed to disconnect exchange: {e}")
+
+        if self.discord_notifier:
+            try:
+                await self.discord_notifier.close()
+            except Exception as e:
+                logger.error(f"Failed to close Discord notifier: {e}")
 
         if self.db_pool:
             try:
@@ -243,6 +273,30 @@ class TradingBot:
         except Exception as e:
             logger.warning(f"Redis connection failed (non-fatal): {e}")
             self.redis_client = None
+
+    async def _init_discord(self):
+        """Initialize Discord notifier."""
+        webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
+        if not webhook_url or webhook_url.startswith("https://discord.com/api/webhooks/YOUR_WEBHOOK"):
+            logger.warning("Discord webhook not configured, notifications disabled")
+            self.discord_notifier = None
+            return
+
+        # Check if notifications are enabled
+        notify_enabled = os.getenv("NOTIFY_TRADE_OPENED", "true").lower() == "true"
+        if not notify_enabled:
+            logger.info("Discord notifications disabled in config")
+            self.discord_notifier = None
+            return
+
+        rate_limit_seconds = int(os.getenv("DISCORD_RATE_LIMIT_PERIOD_SECONDS", "60"))
+        self.discord_notifier = DiscordNotifier(
+            webhook_url=webhook_url,
+            db_pool=self.db_pool,
+            rate_limit_seconds=rate_limit_seconds,
+            enabled=True,
+        )
+        logger.info("Discord notifier initialized")
 
     async def _load_weights(self):
         """Load active weights from database."""
@@ -327,6 +381,28 @@ class TradingBot:
         async with self.db_pool.acquire() as conn:
             await conn.execute(query, status, datetime.now(timezone.utc), self.run_id)
 
+        # Send Discord notification when run completes
+        if status in ("completed", "failed") and self.discord_notifier:
+            try:
+                # Fetch run details
+                query_run = """
+                    SELECT run_type, symbol, environment, start_date, completed_at
+                    FROM runs WHERE id = $1
+                """
+                async with self.db_pool.acquire() as conn:
+                    run = await conn.fetchrow(query_run, self.run_id)
+
+                if run:
+                    await self.discord_notifier.notify_run_completed(
+                        run_type=run["run_type"],
+                        symbol=run["symbol"],
+                        environment=run["environment"],
+                        start_date=run["start_date"],
+                        end_date=run["completed_at"],
+                    )
+            except Exception as e:
+                logger.error(f"Failed to send run completion notification: {e}")
+
     async def _trading_loop(self):
         """Main trading loop."""
         # Calculate sleep interval based on timeframe
@@ -400,11 +476,22 @@ class TradingBot:
 
         current_price = Decimal(str(candles[-1]["close"]))
 
+        # Get current balance for logging
+        if self.mode == "live":
+            try:
+                balance = await self.exchange.get_balance("USDT")
+                balance_str = f"Balance: {balance['free']:.2f} USDT"
+            except Exception:
+                balance_str = "Balance: N/A"
+        else:
+            balance_str = f"Capital: {self.capital:.2f} USDT"
+
         logger.info(
             f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] "
             f"Price: {current_price:.2f} | Score: {weighted_score:.3f} | "
             f"Position: {'LONG' if self.position else 'NONE'} | "
-            f"Pending: {bool(self.pending_order)}"
+            f"Pending: {bool(self.pending_order)} | "
+            f"{balance_str}"
         )
 
         # Check for pending order fills FIRST
@@ -564,6 +651,13 @@ class TradingBot:
         order_price = self.pending_order["price"]
         quantity = self.pending_order["quantity"]
 
+        # Validate exchange_order_id
+        if not exchange_order_id or exchange_order_id == "None":
+            logger.error(f"Invalid exchange_order_id: {exchange_order_id}. Cancelling pending order.")
+            await update_order_rejected(self.db_pool, order_id, "Invalid exchange order ID")
+            self.pending_order = None
+            return
+
         is_filled = False
         filled_price = order_price
         commission = Decimal("0")
@@ -576,29 +670,31 @@ class TradingBot:
                     order_id=exchange_order_id
                 )
 
-                status = order_status.get("status", "").upper()
+                # Note: normalized response has lowercase status
+                status = order_status.get("status", "")
 
-                if status == "FILLED":
+                if status == "filled":
                     # Order fully filled
                     is_filled = True
-                    filled_price = Decimal(str(order_status.get("avgPrice", order_price)))
-                    # Get actual commission from exchange
-                    commission = Decimal(str(order_status.get("commission", 0)))
-                    if commission == 0:
-                        # Estimate if not provided
-                        commission = quantity * filled_price * Decimal("0.001")
+                    # Use filled_price from normalized response (average fill price)
+                    filled_price = order_status.get("filled_price", order_price)
+                    if filled_price is None:
+                        filled_price = order_price
+
+                    # Estimate commission (normalized response doesn't include commission)
+                    commission = quantity * filled_price * Decimal("0.001")
 
                     logger.info(f"Order {exchange_order_id} FILLED at {filled_price}")
 
-                elif status in ("CANCELED", "REJECTED", "EXPIRED"):
+                elif status in ("cancelled", "rejected"):
                     # Order failed
-                    logger.warning(f"Order {exchange_order_id} {status}")
+                    logger.warning(f"Order {exchange_order_id} {status.upper()}")
                     await update_order_cancelled(self.db_pool, order_id, f"Exchange status: {status}")
                     self.pending_order = None
                     return
 
                 else:
-                    # Still pending (NEW, PARTIALLY_FILLED)
+                    # Still pending (status = "pending")
                     logger.debug(f"Order {exchange_order_id} status: {status}")
                     return
 
@@ -630,6 +726,21 @@ class TradingBot:
                 commission=commission,
                 exchange_order_id=exchange_order_id,
             )
+
+            # Send Discord notification for order filled
+            if self.discord_notifier:
+                try:
+                    await self.discord_notifier.notify_order_filled(
+                        symbol=self.symbol,
+                        side=side,
+                        filled_price=filled_price,
+                        filled_quantity=quantity,
+                        order_type=self.pending_order.get("order_type", "limit"),
+                        commission=commission,
+                        testnet=self.testnet,
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send Discord notification: {e}")
 
             # Update position state
             if side == "buy":
@@ -705,6 +816,21 @@ class TradingBot:
 
                 # Publish to Redis
                 await self._publish_trade_event("exit", filled_price, quantity, pnl)
+
+                # Send Discord notification for trade completion
+                if self.discord_notifier:
+                    try:
+                        await self.discord_notifier.notify_trade_closed(
+                            symbol=self.symbol,
+                            side="long",
+                            entry_price=entry_price,
+                            exit_price=filled_price,
+                            pnl=pnl,
+                            pnl_pct=float(pnl_pct),
+                            reason=exit_reason,
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to send Discord trade completion notification: {e}")
 
                 # Clear position
                 self.position = None
@@ -789,6 +915,39 @@ class TradingBot:
             self.pending_signal = None
             self.confirmation_count = 0
 
+    async def _get_available_capital(self) -> Decimal:
+        """
+        Get available capital for trading.
+
+        In live mode: Fetch actual USDT balance from exchange.
+        In paper mode: Use simulated self.capital.
+
+        Returns:
+            Available USDT balance
+        """
+        if self.mode == "live":
+            try:
+                # Fetch actual USDT balance from exchange
+                balance = await self.exchange.get_balance("USDT")
+                available = balance["free"]
+
+                logger.debug(
+                    f"Exchange balance: {available} USDT (free), "
+                    f"{balance['locked']} USDT (locked), "
+                    f"{balance['total']} USDT (total)"
+                )
+
+                return available
+
+            except Exception as e:
+                logger.error(f"Failed to fetch balance from exchange: {e}")
+                # Fallback to self.capital if balance fetch fails
+                logger.warning(f"Using fallback capital: {self.capital} USDT")
+                return self.capital
+        else:
+            # Paper trading: use simulated capital
+            return self.capital
+
     async def _execute_entry(
         self,
         price: Decimal,
@@ -796,9 +955,26 @@ class TradingBot:
         signals: Dict[str, float]
     ):
         """Execute entry order."""
-        # Calculate position size (simplified: use 95% of capital)
-        position_size = self.capital * Decimal("0.95")
+        # Get available capital (actual balance in live mode, simulated in paper mode)
+        available_capital = await self._get_available_capital()
+
+        if available_capital <= 0:
+            logger.warning(f"No available capital (balance: {available_capital} USDT). Skipping entry.")
+            return
+
+        # Calculate position size: use 95% of available capital
+        position_size = available_capital * Decimal("0.95")
         quantity = position_size / price
+
+        # Validate minimum order size
+        min_notional = Decimal("10")  # Binance minimum ~10 USDT per order
+        order_value = quantity * price
+        if order_value < min_notional:
+            logger.warning(
+                f"Order value {order_value:.2f} USDT below minimum {min_notional} USDT. "
+                f"Available capital: {available_capital:.2f} USDT. Skipping entry."
+            )
+            return
 
         # Calculate stop-loss and take-profit (simplified: fixed percentages)
         stop_loss = price * Decimal("0.98")  # 2% stop-loss
@@ -806,7 +982,10 @@ class TradingBot:
 
         logger.info("=" * 60)
         logger.info(f"ENTRY SIGNAL - Score: {score:.3f}")
+        logger.info(f"Available capital: {available_capital:.2f} USDT")
+        logger.info(f"Position size: {position_size:.2f} USDT (95% of capital)")
         logger.info(f"Price: {price:.2f} | Quantity: {quantity:.6f}")
+        logger.info(f"Order value: {order_value:.2f} USDT")
         logger.info(f"Stop-loss: {stop_loss:.2f} | Take-profit: {take_profit:.2f}")
         logger.info("=" * 60)
 
@@ -836,7 +1015,10 @@ class TradingBot:
                     quantity=quantity,
                     price=price
                 )
-                exchange_order_id = str(order.get("orderId"))
+                # Note: normalized order response uses "order_id" not "orderId"
+                exchange_order_id = order.get("order_id")
+                if not exchange_order_id:
+                    raise ExchangeError(f"Order response missing order_id: {order}")
                 logger.info(f"Order placed on exchange: {exchange_order_id}")
 
                 # Update order with exchange ID
@@ -859,12 +1041,14 @@ class TradingBot:
             logger.info(f"[PAPER] Order placed: {exchange_order_id}")
 
         # Store pending order for fill tracking
+        order_type = "limit" if self.mode == "live" else "market"
         self.pending_order = {
             "db_order_id": db_order_id,
             "exchange_order_id": exchange_order_id,
             "side": "buy",
             "price": price,
             "quantity": quantity,
+            "order_type": order_type,
             "stop_loss": stop_loss,
             "take_profit": take_profit,
             "score": score,
@@ -924,7 +1108,10 @@ class TradingBot:
                     side="sell",
                     quantity=quantity
                 )
-                exchange_order_id = str(order.get("orderId"))
+                # Note: normalized order response uses "order_id" not "orderId"
+                exchange_order_id = order.get("order_id")
+                if not exchange_order_id:
+                    raise ExchangeError(f"Order response missing order_id: {order}")
                 logger.info(f"Exit order placed on exchange: {exchange_order_id}")
 
                 # Update order with exchange ID
@@ -953,6 +1140,7 @@ class TradingBot:
             "side": "sell",
             "price": price,
             "quantity": quantity,
+            "order_type": "market",
             "exit_reason": reason,
             "score": score,
             "signals": signals.copy(),
