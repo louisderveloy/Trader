@@ -59,6 +59,7 @@ from runs.orders import (
 from runs.errors import log_exception, ErrorCategory, ErrorSeverity
 from strategy.config import StrategyEngineConfig
 from notifications.discord import DiscordNotifier
+from utils.instance_lock import InstanceLockManager
 
 # Setup logging
 logging.basicConfig(
@@ -114,6 +115,7 @@ class TradingBot:
         self.position: Optional[Dict[str, Any]] = None  # Current position
         self.weights: Dict[str, float] = {}
         self.is_running = False
+        self.lock_connection: Optional[asyncpg.Connection] = None  # Connection holding instance lock
 
         # Configuration (loaded from database in start())
         self.config: Optional[StrategyEngineConfig] = None
@@ -144,6 +146,22 @@ class TradingBot:
         try:
             # Initialize components
             await self._init_database()
+
+            # Acquire instance lock BEFORE proceeding
+            # This returns a persistent connection that must be held for the duration
+            self.lock_connection = await InstanceLockManager.acquire_lock_connection(self.db_pool, self.mode)
+            if not self.lock_connection:
+                # Lock is held by another instance - check for details
+                existing_run = await InstanceLockManager.check_existing_runs(self.db_pool, self.mode)
+                error_msg = f"Cannot start {self.mode} trading: Another instance is already running"
+                if existing_run:
+                    error_msg += f"\n  Active run_id: {existing_run['id']}"
+                    error_msg += f"\n  Started at: {existing_run['started_at']}"
+                    error_msg += f"\n  Symbol: {existing_run.get('symbol', 'unknown')}"
+                    error_msg += f"\n  Environment: {existing_run.get('environment', 'unknown')}"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+
             await self._load_config()
             await self._init_exchange()
             await self._init_redis()
@@ -207,6 +225,17 @@ class TradingBot:
             except Exception as e:
                 logger.error(f"Failed to close Discord notifier: {e}")
 
+        # Release instance lock before closing pool
+        if self.lock_connection and self.db_pool:
+            try:
+                await InstanceLockManager.release_lock_connection(
+                    self.db_pool, self.lock_connection, self.mode
+                )
+                self.lock_connection = None
+            except Exception as e:
+                logger.error(f"Failed to release instance lock: {e}")
+
+        # Close database pool
         if self.db_pool:
             try:
                 await self.db_pool.close()

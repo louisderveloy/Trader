@@ -194,6 +194,31 @@ Implementing Optuna-based optimization with walk-forward analysis for indicator 
   - Reduces noise when analyzing different types of trading activity
 - **Result:** Better data organization and user control over what they see
 
+### 2026-06-08T19:50Z [CODE] Single instance enforcement for trading scripts
+- **Decision:** Implement PostgreSQL advisory locks to prevent multiple instances of same trading mode
+- **Implementation:**
+  - Created `bot/utils/instance_lock.py` with `InstanceLockManager` class
+  - Uses PostgreSQL advisory locks (pg_try_advisory_lock/pg_advisory_unlock)
+  - Lock keys: paper=1827364950, live=1923847563
+  - Modified `bot/scripts/trading.py` to acquire lock on start, release on stop
+  - Modified `bot/main.py` to add pre-flight checks before starting trading
+  - Created comprehensive test suite in `tests/test_instance_lock.py`
+- **Behavior:**
+  - Only ONE paper trading instance can run at a time (globally)
+  - Only ONE live trading instance can run at a time (testnet and mainnet share same lock)
+  - Different modes (paper + live) can run simultaneously
+  - Lock auto-released on graceful shutdown (Ctrl+C) or crash
+  - Clear error messages with run_id, started_at, symbol when blocked
+- **Rationale:**
+  - Prevents accidental duplicate instances causing conflicts
+  - Ensures only one bot is trading per mode at a time
+  - Advisory locks are crash-safe (auto-released on connection close)
+- **Impact:**
+  - Attempting to start duplicate instance shows error and exits
+  - No race conditions or stale locks
+  - Better operational safety
+- **Result:** Robust single-instance enforcement with clear user feedback
+
 ### 2026-06-08T15:00Z [USER] Trades table schema change: Track ongoing trades
 - **Decision:** Modify trades table to create entries when positions open, update when they close
 - **Rationale:** User wants to track active positions in real-time, not just completed trades

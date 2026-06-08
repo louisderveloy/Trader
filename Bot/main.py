@@ -41,7 +41,12 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
+import asyncpg
 from dotenv import load_dotenv
+
+# Add bot directory to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
+from utils.instance_lock import InstanceLockManager
 
 # Load environment variables
 load_dotenv()
@@ -164,6 +169,28 @@ def cmd_paper(args):
     """Run paper trading command."""
     from scripts.trading import run_trading_loop
 
+    # Pre-flight instance check
+    async def check_instance():
+        dsn = os.getenv("DATABASE_URL", "").replace("postgresql+asyncpg://", "postgresql://")
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=1)
+        try:
+            existing = await InstanceLockManager.check_existing_runs(pool, 'paper')
+            if existing:
+                print(f"\n❌ Cannot start paper trading: Another instance is already running")
+                print(f"   Active run_id: {existing['id']}")
+                print(f"   Started at: {existing['started_at']}")
+                print(f"   Symbol: {existing.get('symbol', 'unknown')}")
+                print(f"   Environment: {existing.get('environment', 'unknown')}")
+                print("\n   To stop the existing instance:")
+                print("   - Press Ctrl+C in the running instance")
+                print("   - Or restart the bot container: docker compose restart bot")
+                sys.exit(1)
+        finally:
+            await pool.close()
+
+    asyncio.run(check_instance())
+
+    # Proceed with trading loop
     asyncio.run(run_trading_loop(
         symbol=args.symbol,
         timeframe=args.timeframe,
@@ -180,6 +207,27 @@ def cmd_paper(args):
 def cmd_live(args):
     """Run live trading command."""
     from scripts.trading import run_trading_loop
+
+    # Pre-flight instance check
+    async def check_instance():
+        dsn = os.getenv("DATABASE_URL", "").replace("postgresql+asyncpg://", "postgresql://")
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=1)
+        try:
+            existing = await InstanceLockManager.check_existing_runs(pool, 'live')
+            if existing:
+                print(f"\n❌ Cannot start live trading: Another instance is already running")
+                print(f"   Active run_id: {existing['id']}")
+                print(f"   Started at: {existing['started_at']}")
+                print(f"   Symbol: {existing.get('symbol', 'unknown')}")
+                print(f"   Environment: {existing.get('environment', 'unknown')}")
+                print("\n   To stop the existing instance:")
+                print("   - Press Ctrl+C in the running instance")
+                print("   - Or restart the bot container: docker compose restart bot")
+                sys.exit(1)
+        finally:
+            await pool.close()
+
+    asyncio.run(check_instance())
 
     # Safety confirmation for mainnet
     if not args.testnet:
