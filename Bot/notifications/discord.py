@@ -6,7 +6,6 @@ for all notification events.
 """
 
 import asyncio
-import json
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -137,44 +136,7 @@ class DiscordNotifier:
 
         self._last_notification_time = datetime.now(timezone.utc)
 
-        # Log to database
-        await self._log_notification(
-            notification_type=notification_type,
-            message=message,
-            status=status,
-            metadata={
-                **(metadata or {}),
-                "error": error_message,
-            } if error_message else metadata,
-        )
-
         return status == "sent"
-
-    async def _log_notification(
-            self,
-            notification_type: NotificationType,
-            message: str,
-            status: str,
-            metadata: Optional[dict[str, Any]] = None,
-    ) -> None:
-        """Log notification to database."""
-        try:
-            async with self.db_pool.acquire() as conn:
-                await conn.execute(
-                    """
-                    INSERT INTO notifications_log (
-                        notification_type, message, status, metadata, sent_at
-                    )
-                    VALUES ($1, $2, $3, $4, $5)
-                    """,
-                    notification_type.value,
-                    message,
-                    status,
-                    json.dumps(metadata) if metadata else None,
-                    datetime.now(timezone.utc),
-                )
-        except Exception as e:
-            logger.error(f"Failed to log notification: {e}")
 
     async def notify_trade_opened(
             self,
@@ -351,7 +313,7 @@ class DiscordNotifier:
             metadata={
                 "study_name": study_name,
                 "best_value": str(best_value),
-                "best_params": json.dumps({k: v for k, v in best_params.items()}),
+                "best_params": best_params,
                 "n_trials": str(n_trials),
                 "duration_seconds": str(duration_seconds),
             },
