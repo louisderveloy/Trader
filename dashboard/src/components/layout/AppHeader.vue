@@ -20,7 +20,7 @@
         </button>
 
         <!-- Title -->
-        <h1 class="text-xl font-bold text-gray-900">Trading Bot Dashboard</h1>
+        <button class="text-xl font-bold text-gray-900" @click="goBackToHome">Trading Bot Dashboard</button>
       </div>
 
       <!-- Right: User info + Logout -->
@@ -61,5 +61,9 @@ const uiStore = useUiStore()
 
 function handleLogout() {
   authStore.logout().then(() => router.push('/login'));
+}
+
+function goBackToHome() {
+  router.push('/')
 }
 </script>
