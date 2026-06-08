@@ -6,6 +6,7 @@ to the orders table in the database.
 """
 
 import asyncpg
+import json
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -77,7 +78,7 @@ async def create_order(
             quantity,
             price,
             now,
-            metadata,
+            json.dumps(metadata) if metadata else None,
         )
 
     order_id = row["id"]
@@ -237,7 +238,7 @@ async def update_order_cancelled(
                 """,
                 order_id,
                 now,
-                metadata_update,
+                json.dumps(metadata_update),
             )
         else:
             await conn.execute(
@@ -287,7 +288,7 @@ async def update_order_rejected(
             """,
             order_id,
             now,
-            metadata_update,
+            json.dumps(metadata_update),
         )
 
     logger.warning(

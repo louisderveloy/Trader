@@ -6,6 +6,7 @@ with run context and structured data.
 """
 
 import asyncpg
+import json
 import logging
 import traceback
 from datetime import datetime, timezone
@@ -102,7 +103,7 @@ async def log_error(
             category.value,
             error_message,
             error_traceback,
-            context_data,
+            json.dumps(context_data),
             now,
         )
 

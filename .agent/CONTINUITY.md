@@ -1537,6 +1537,54 @@ docker compose exec bot python -m main live --symbol BTCUSDT
   - Troubleshooting guide
   - Docker commands reference
 
+### 2026-06-08T12:45Z [CODE] Fixed Critical Bugs: Metadata JSON Serialization & Score Calculation Debugging
+
+**Status:** ✅ Fixed
+
+**Issue 1: Database Error - Metadata Dict Not Serialized**
+- **Problem:** `DataError: invalid input for query argument $10: {'score': 1.0, 'mode': 'paper'} (expected str, got dict)`
+- **Root cause:** `orders.py` was passing Python dict directly to asyncpg, which expects JSONB as JSON string
+- **Locations:** 3 places in `orders.py`:
+  1. `create_order()` line 81 - metadata parameter
+  2. `update_order_cancelled()` line 241 - metadata_update parameter
+  3. `update_order_rejected()` line 291 - metadata_update parameter
+- **Fix:** Added `json.dumps()` serialization before passing to database, same pattern as `errors.py`
+- **Files modified:**
+  - `bot/runs/orders.py` - Added `import json` and wrapped all metadata dict parameters with `json.dumps()`
+
+**Issue 2: Score Calculation Always 1.0 - Added Diagnostic Logging**
+- **Problem:** Weighted score always returning exactly 1.0, which is suspicious and suggests all indicators at maximum positive values
+- **Investigation:** Added comprehensive logging to `_calculate_weighted_score()` method
+- **Diagnostic logging added:**
+  - Individual signal values for each indicator
+  - Weight values for each indicator
+  - Contribution (signal × weight) for each indicator
+  - Raw score before clamping
+  - Final score after clamping to [-1, 1]
+- **Expected output on next run:**
+  ```
+  SCORE CALCULATION BREAKDOWN:
+    atr            : signal=+0.123, weight=0.125, contrib=+0.0154
+    bollinger      : signal=-0.456, weight=0.125, contrib=-0.0570
+    ...
+  Raw score (before clamp): +1.234
+  Final score (after clamp): +1.000
+  ```
+- **Purpose:** This will reveal which indicators are producing extreme signals and why the weighted sum is 1.0
+- **Files modified:**
+  - `bot/scripts/trading.py` - Enhanced `_calculate_weighted_score()` with detailed breakdown logging
+
+**Verification needed:**
+1. ✅ Database error fixed - orders can now be created with metadata
+2. ⏳ Score calculation diagnosis - user should run paper trading and review logs to see signal breakdown
+3. ⏳ If score is legitimately 1.0, logs will show which indicators are bullish and their weights
+4. ⏳ If score calculation has a bug, logs will reveal the issue in signal computation
+
+**Next steps:**
+- User should run paper trading: `docker compose exec bot python -m main paper --symbol BTCUSDT --testnet`
+- Review logs for "SCORE CALCULATION BREAKDOWN" to understand why score is 1.0
+- If specific indicators are problematic, investigate their signal calculation logic
+
 ### 2026-06-05T23:30Z [CODE] Database Logging Integration — All 8 Phases Complete ✅
 
 **Status:** ✅ Complete

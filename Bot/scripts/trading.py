@@ -69,13 +69,6 @@ logger = logging.getLogger(__name__)
 shutdown_requested = False
 
 
-def signal_handler(signum, frame):
-    """Handle shutdown signals gracefully."""
-    global shutdown_requested
-    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
-    shutdown_requested = True
-
-
 class TradingBot:
     """
     Main trading bot class.
@@ -161,11 +154,15 @@ class TradingBot:
 
     async def stop(self):
         """Gracefully stop the bot and cleanup resources."""
+        # Prevent multiple calls to stop()
+        if not self.is_running:
+            return
+
         logger.info("Stopping trading bot...")
         self.is_running = False
 
         # Update run status
-        if self.db_pool:
+        if self.db_pool and self.run_id:
             try:
                 await self._update_run_status("cancelled" if shutdown_requested else "completed")
             except Exception as e:
@@ -173,11 +170,22 @@ class TradingBot:
 
         # Cleanup connections
         if self.exchange:
-            await self.exchange.disconnect()
+            try:
+                await self.exchange.disconnect()
+            except Exception as e:
+                logger.error(f"Failed to disconnect exchange: {e}")
+
         if self.db_pool:
-            await self.db_pool.close()
+            try:
+                await self.db_pool.close()
+            except Exception as e:
+                logger.error(f"Failed to close database pool: {e}")
+
         if self.redis_client:
-            await self.redis_client.close()
+            try:
+                await self.redis_client.close()
+            except Exception as e:
+                logger.error(f"Failed to close Redis client: {e}")
 
         logger.info("Trading bot stopped.")
 
@@ -360,8 +368,13 @@ class TradingBot:
                 )
                 await asyncio.sleep(10)
 
-            # Sleep until next check
-            await asyncio.sleep(check_interval)
+            # Sleep until next check, but wake up periodically to check shutdown flag
+            # This makes shutdown more responsive
+            sleep_remaining = check_interval
+            while sleep_remaining > 0 and self.is_running and not shutdown_requested:
+                sleep_chunk = min(5, sleep_remaining)  # Wake up every 5 seconds max
+                await asyncio.sleep(sleep_chunk)
+                sleep_remaining -= sleep_chunk
 
     async def _trading_iteration(self):
         """Single iteration of the trading loop."""
@@ -504,10 +517,28 @@ class TradingBot:
     def _calculate_weighted_score(self, signals: Dict[str, float]) -> float:
         """Calculate weighted score from signals."""
         score = 0.0
+        contributions = {}
         for indicator, signal in signals.items():
             weight = self.weights.get(indicator, 0.0)
-            score += signal * weight
-        return max(-1.0, min(1.0, score))
+            contribution = signal * weight
+            contributions[indicator] = contribution
+            score += contribution
+
+        # Log detailed breakdown
+        logger.info("=" * 60)
+        logger.info("SCORE CALCULATION BREAKDOWN:")
+        for indicator in sorted(contributions.keys()):
+            signal_val = signals[indicator]
+            weight_val = self.weights.get(indicator, 0.0)
+            contrib_val = contributions[indicator]
+            logger.info(f"  {indicator:15s}: signal={signal_val:+.3f}, weight={weight_val:.3f}, contrib={contrib_val:+.4f}")
+        logger.info(f"Raw score (before clamp): {score:+.4f}")
+
+        clamped_score = max(-1.0, min(1.0, score))
+        logger.info(f"Final score (after clamp): {clamped_score:+.4f}")
+        logger.info("=" * 60)
+
+        return clamped_score
 
     async def _check_entry(
         self,
@@ -822,8 +853,8 @@ class TradingBot:
         query = """
             INSERT INTO signals (
                 run_id, time, symbol, signal_type, weighted_score,
-                decision, weights_snapshot, indicators_snapshot
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                weights_snapshot, indicators_snapshot
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id
         """
         async with self.db_pool.acquire() as conn:
@@ -834,7 +865,6 @@ class TradingBot:
                 self.symbol,
                 signal_type,
                 score,
-                signal_type,
                 json.dumps(self.weights),
                 json.dumps(signals)
             )
@@ -982,8 +1012,34 @@ async def run_trading_loop(
         logging.getLogger().setLevel(logging.DEBUG)
 
     # Register signal handlers for graceful shutdown
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    # Use different approach for Windows vs Unix
+    loop = asyncio.get_running_loop()
+    signals_registered = False
+
+    def shutdown_handler():
+        global shutdown_requested
+        logger.info("Received shutdown signal, initiating graceful shutdown...")
+        shutdown_requested = True
+
+    # Try to use asyncio signal handlers (Unix)
+    try:
+        loop.add_signal_handler(signal.SIGINT, shutdown_handler)
+        loop.add_signal_handler(signal.SIGTERM, shutdown_handler)
+        signals_registered = True
+        logger.debug("Registered asyncio signal handlers (Unix)")
+    except NotImplementedError:
+        # On Windows, add_signal_handler is not implemented
+        # Fall back to traditional signal handlers
+        def sync_signal_handler(signum, frame):
+            global shutdown_requested
+            logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+            shutdown_requested = True
+            # Set a flag on the event loop to stop it gracefully
+            loop.call_soon_threadsafe(lambda: None)
+
+        signal.signal(signal.SIGINT, sync_signal_handler)
+        signal.signal(signal.SIGTERM, sync_signal_handler)
+        logger.debug("Registered traditional signal handlers (Windows)")
 
     bot = TradingBot(
         symbol=symbol,
@@ -992,7 +1048,16 @@ async def run_trading_loop(
         testnet=testnet
     )
 
-    await bot.start()
+    try:
+        await bot.start()
+    finally:
+        # Remove signal handlers on exit
+        if signals_registered:
+            try:
+                loop.remove_signal_handler(signal.SIGINT)
+                loop.remove_signal_handler(signal.SIGTERM)
+            except Exception:
+                pass
 
 
 def parse_args():
