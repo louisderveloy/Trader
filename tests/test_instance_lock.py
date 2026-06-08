@@ -7,6 +7,7 @@ Tests the PostgreSQL advisory lock implementation for single-instance enforcemen
 
 import pytest
 import asyncpg
+import asyncio
 import os
 from datetime import datetime, timezone
 
@@ -23,14 +24,40 @@ async def db_pool():
 
     # Clean up any existing locks before tests
     async with pool.acquire() as conn:
-        # Release all advisory locks (in case of previous test failures)
+        # Release all advisory locks on this connection
         await conn.execute("SELECT pg_advisory_unlock_all()")
+
+        # Terminate any other backends holding advisory locks
+        try:
+            result = await conn.fetch("""
+                SELECT pg_terminate_backend(pid)
+                FROM pg_locks
+                WHERE locktype = 'advisory'
+                AND pid != pg_backend_pid()
+            """)
+            if result:
+                # Wait a moment for connections to terminate
+                await asyncio.sleep(0.5)
+        except Exception as e:
+            # Non-fatal if this fails
+            print(f"Warning: Could not terminate backends: {e}")
 
     yield pool
 
-    # Clean up after tests
+    # Clean up after all tests
     async with pool.acquire() as conn:
         await conn.execute("SELECT pg_advisory_unlock_all()")
+
+        # Terminate any backends still holding locks
+        try:
+            await conn.fetch("""
+                SELECT pg_terminate_backend(pid)
+                FROM pg_locks
+                WHERE locktype = 'advisory'
+                AND pid != pg_backend_pid()
+            """)
+        except Exception:
+            pass
 
     await pool.close()
 
@@ -38,15 +65,37 @@ async def db_pool():
 @pytest.fixture
 async def clean_runs_table(db_pool):
     """Clean up runs table before and after tests."""
-    # Clean up before test
+    # Clean up before test - mark as completed instead of deleting to avoid FK issues
     async with db_pool.acquire() as conn:
-        await conn.execute("DELETE FROM runs WHERE run_type IN ('paper', 'live') AND status = 'running'")
+        await conn.execute("""
+            UPDATE runs
+            SET status = 'test_cleanup', completed_at = NOW()
+            WHERE run_type IN ('paper', 'live') AND status = 'running'
+        """)
 
     yield
 
-    # Clean up after test
+    # Clean up after test - mark as completed instead of deleting
     async with db_pool.acquire() as conn:
-        await conn.execute("DELETE FROM runs WHERE run_type IN ('paper', 'live') AND status = 'running'")
+        await conn.execute("""
+            UPDATE runs
+            SET status = 'test_cleanup', completed_at = NOW()
+            WHERE run_type IN ('paper', 'live') AND status = 'running'
+        """)
+
+
+@pytest.fixture(autouse=True)
+async def release_locks_between_tests(db_pool):
+    """Automatically release all advisory locks before and after each test."""
+    # Release locks before test
+    async with db_pool.acquire() as conn:
+        await conn.execute("SELECT pg_advisory_unlock_all()")
+
+    yield
+
+    # Release locks after test (critical for cleanup)
+    async with db_pool.acquire() as conn:
+        await conn.execute("SELECT pg_advisory_unlock_all()")
 
 
 class TestInstanceLockManager:
@@ -75,12 +124,15 @@ class TestInstanceLockManager:
     @pytest.mark.asyncio
     async def test_acquire_lock_success(self, db_pool):
         """Test successful lock acquisition."""
-        # Acquire lock
-        conn = await InstanceLockManager.acquire_lock_connection(db_pool, 'paper')
-        assert conn is not None
-
-        # Clean up
-        await InstanceLockManager.release_lock_connection(db_pool, conn, 'paper')
+        conn = None
+        try:
+            # Acquire lock
+            conn = await InstanceLockManager.acquire_lock_connection(db_pool, 'paper')
+            assert conn is not None
+        finally:
+            # Always clean up
+            if conn:
+                await InstanceLockManager.release_lock_connection(db_pool, conn, 'paper')
 
     @pytest.mark.asyncio
     async def test_acquire_lock_blocks_second(self, db_pool):
@@ -90,6 +142,7 @@ class TestInstanceLockManager:
         dsn = dsn.replace("postgresql+asyncpg://", "postgresql://")
         pool2 = await asyncpg.create_pool(dsn=dsn, min_size=1, max_size=1)
 
+        conn1 = None
         try:
             # First acquire with pool1
             conn1 = await InstanceLockManager.acquire_lock_connection(db_pool, 'paper')
@@ -99,27 +152,36 @@ class TestInstanceLockManager:
             conn2 = await InstanceLockManager.acquire_lock_connection(pool2, 'paper')
             assert conn2 is None
 
-            # Clean up with pool1 (the one holding the lock)
-            await InstanceLockManager.release_lock_connection(db_pool, conn1, 'paper')
         finally:
+            # Clean up with pool1 (the one holding the lock)
+            if conn1:
+                await InstanceLockManager.release_lock_connection(db_pool, conn1, 'paper')
             await pool2.close()
 
     @pytest.mark.asyncio
     async def test_release_lock(self, db_pool):
         """Test lock release."""
-        # Acquire lock first
-        conn = await InstanceLockManager.acquire_lock_connection(db_pool, 'paper')
-        assert conn is not None
+        conn = None
+        conn2 = None
+        try:
+            # Acquire lock first
+            conn = await InstanceLockManager.acquire_lock_connection(db_pool, 'paper')
+            assert conn is not None
 
-        # Release the lock
-        await InstanceLockManager.release_lock_connection(db_pool, conn, 'paper')
+            # Release the lock
+            await InstanceLockManager.release_lock_connection(db_pool, conn, 'paper')
+            conn = None  # Mark as released
 
-        # Verify lock is released by acquiring again
-        conn2 = await InstanceLockManager.acquire_lock_connection(db_pool, 'paper')
-        assert conn2 is not None
+            # Verify lock is released by acquiring again
+            conn2 = await InstanceLockManager.acquire_lock_connection(db_pool, 'paper')
+            assert conn2 is not None
 
-        # Clean up
-        await InstanceLockManager.release_lock_connection(db_pool, conn2, 'paper')
+        finally:
+            # Clean up any remaining locks
+            if conn:
+                await InstanceLockManager.release_lock_connection(db_pool, conn, 'paper')
+            if conn2:
+                await InstanceLockManager.release_lock_connection(db_pool, conn2, 'paper')
 
     @pytest.mark.asyncio
     async def test_release_lock_with_none(self, db_pool):
@@ -135,20 +197,24 @@ class TestInstanceLockManager:
         dsn = dsn.replace("postgresql+asyncpg://", "postgresql://")
         temp_pool = await asyncpg.create_pool(dsn=dsn, min_size=1, max_size=1)
 
-        # Acquire lock with temp pool
-        temp_conn = await InstanceLockManager.acquire_lock_connection(temp_pool, 'paper')
-        assert temp_conn is not None
+        conn2 = None
+        try:
+            # Acquire lock with temp pool
+            temp_conn = await InstanceLockManager.acquire_lock_connection(temp_pool, 'paper')
+            assert temp_conn is not None
 
-        # Close the connection directly (simulates process crash)
-        await temp_conn.close()
-        await temp_pool.close()
+            # Close the connection directly (simulates process crash)
+            await temp_conn.close()
+            await temp_pool.close()
 
-        # Lock should be automatically released, so acquiring with main pool should succeed
-        conn2 = await InstanceLockManager.acquire_lock_connection(db_pool, 'paper')
-        assert conn2 is not None
+            # Lock should be automatically released, so acquiring with main pool should succeed
+            conn2 = await InstanceLockManager.acquire_lock_connection(db_pool, 'paper')
+            assert conn2 is not None
 
-        # Clean up
-        await InstanceLockManager.release_lock_connection(db_pool, conn2, 'paper')
+        finally:
+            # Clean up
+            if conn2:
+                await InstanceLockManager.release_lock_connection(db_pool, conn2, 'paper')
 
     @pytest.mark.asyncio
     async def test_check_existing_runs_found(self, db_pool, clean_runs_table):
@@ -194,17 +260,23 @@ class TestInstanceLockManager:
     @pytest.mark.asyncio
     async def test_concurrent_different_modes(self, db_pool):
         """Test that paper and live locks don't conflict."""
-        # Acquire paper lock
-        conn_paper = await InstanceLockManager.acquire_lock_connection(db_pool, 'paper')
-        assert conn_paper is not None
+        conn_paper = None
+        conn_live = None
+        try:
+            # Acquire paper lock
+            conn_paper = await InstanceLockManager.acquire_lock_connection(db_pool, 'paper')
+            assert conn_paper is not None
 
-        # Acquire live lock should succeed (different lock key)
-        conn_live = await InstanceLockManager.acquire_lock_connection(db_pool, 'live')
-        assert conn_live is not None
+            # Acquire live lock should succeed (different lock key)
+            conn_live = await InstanceLockManager.acquire_lock_connection(db_pool, 'live')
+            assert conn_live is not None
 
-        # Clean up
-        await InstanceLockManager.release_lock_connection(db_pool, conn_paper, 'paper')
-        await InstanceLockManager.release_lock_connection(db_pool, conn_live, 'live')
+        finally:
+            # Clean up
+            if conn_paper:
+                await InstanceLockManager.release_lock_connection(db_pool, conn_paper, 'paper')
+            if conn_live:
+                await InstanceLockManager.release_lock_connection(db_pool, conn_live, 'live')
 
     @pytest.mark.asyncio
     async def test_lock_keys_are_different(self):

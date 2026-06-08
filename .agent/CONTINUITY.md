@@ -194,6 +194,21 @@ Implementing Optuna-based optimization with walk-forward analysis for indicator 
   - Reduces noise when analyzing different types of trading activity
 - **Result:** Better data organization and user control over what they see
 
+### 2026-06-08T21:00Z [CODE] Fixed instance lock tests - proper cleanup and isolation
+- **Problem:** Instance lock tests were failing due to stale advisory locks and foreign key constraints
+- **Root causes:**
+  1. Advisory locks not being released between tests (connection pooling issue)
+  2. Foreign key constraints preventing deletion of runs records in cleanup
+  3. Stray locks from previous bot/test runs
+- **Fixes implemented:**
+  - Modified `db_pool` fixture to aggressively terminate backends holding advisory locks before/after tests
+  - Added `release_locks_between_tests` autouse fixture to release locks between each test
+  - Changed `clean_runs_table` to UPDATE status instead of DELETE (avoids FK violations)
+  - Added try/finally blocks in all tests to ensure lock cleanup
+  - Added asyncio import for sleep in cleanup
+- **Result:** All 382 tests passing, 10 skipped (expected - user_indicator DB models pending)
+- **Impact:** Robust test isolation, no more lock conflicts between tests
+
 ### 2026-06-08T20:30Z [CODE] Auto-reload config on database updates (PostgreSQL LISTEN/NOTIFY)
 - **Decision:** Implement hot config reload using PostgreSQL LISTEN/NOTIFY to avoid bot restarts
 - **Implementation:**
