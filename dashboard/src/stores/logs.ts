@@ -33,7 +33,6 @@ export const useLogsStore = defineStore('logs', () => {
 
   const logSummary = computed(() => {
     const summary = {
-      debug: 0,
       info: 0,
       warning: 0,
       error: 0,
@@ -42,7 +41,9 @@ export const useLogsStore = defineStore('logs', () => {
 
     logs.value.forEach(log => {
       const key = log.level.toLowerCase() as keyof typeof summary
-      summary[key]++
+      if (key in summary) {
+        summary[key]++
+      }
     })
 
     return summary

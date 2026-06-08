@@ -15,7 +15,7 @@ class ErrorLogResponse(BaseModel):
     """Error log response model."""
 
     id: UUID = Field(..., description="Error log ID")
-    run_id: Optional[UUID] = Field(None, description="Associated run ID")
+    run_id: Optional[int] = Field(None, description="Associated run ID")
     category: str = Field(..., description="Error category/type")
     severity: str = Field(..., description="Error severity: low, medium, high, critical")
     error_message: str = Field(..., description="Error message")

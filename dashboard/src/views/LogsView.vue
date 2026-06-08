@@ -10,11 +10,7 @@
       </div>
 
       <!-- Statistics Cards -->
-      <div v-if="!isLoading && logs.length > 0" class="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <div class="bg-white rounded-lg shadow p-4">
-          <p class="text-xs text-gray-600 mb-1">DEBUG</p>
-          <p class="text-2xl font-bold text-blue-600">{{ logSummary.debug }}</p>
-        </div>
+      <div v-if="!isLoading && logs.length > 0" class="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div class="bg-white rounded-lg shadow p-4">
           <p class="text-xs text-gray-600 mb-1">INFO</p>
           <p class="text-2xl font-bold text-green-600">{{ logSummary.info }}</p>
@@ -46,10 +42,9 @@
                 </svg>
                 <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block bg-gray-900 text-white text-xs rounded py-2 px-3 whitespace-nowrap z-10">
                   <div class="font-semibold mb-1">Filtrer par niveau de log</div>
-                  <div>• DEBUG: Informations détaillées</div>
-                  <div>• INFO: Messages informatifs</div>
-                  <div>• WARNING: Avertissements</div>
-                  <div>• ERROR: Erreurs</div>
+                  <div>• INFO: Erreurs de faible gravité</div>
+                  <div>• WARNING: Avertissements (gravité moyenne)</div>
+                  <div>• ERROR: Erreurs (gravité élevée)</div>
                   <div>• CRITICAL: Erreurs critiques</div>
                 </div>
               </div>
@@ -60,7 +55,6 @@
               @change="setLevelFilter(($event.target as HTMLSelectElement).value || undefined)"
             >
               <option value="">Tous</option>
-              <option value="DEBUG">DEBUG</option>
               <option value="INFO">INFO</option>
               <option value="WARNING">WARNING</option>
               <option value="ERROR">ERROR</option>
@@ -68,13 +62,13 @@
             </select>
           </div>
 
-          <!-- Logger Filter -->
+          <!-- Category Filter -->
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Logger</label>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Catégorie</label>
             <input
               :value="filters.logger || ''"
               type="text"
-              placeholder="Ex: bot.exchange"
+              placeholder="Ex: exchange, strategy"
               class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
               @input="filters.logger = ($event.target as HTMLInputElement).value || undefined"
             />
@@ -129,9 +123,8 @@
           <thead class="bg-gray-100 border-b">
             <tr>
               <th class="px-4 py-3 text-left font-semibold text-gray-900">Niveau</th>
-              <th class="px-4 py-3 text-left font-semibold text-gray-900">Logger</th>
+              <th class="px-4 py-3 text-left font-semibold text-gray-900">Catégorie</th>
               <th class="px-4 py-3 text-left font-semibold text-gray-900">Message</th>
-              <th class="px-4 py-3 text-left font-semibold text-gray-900">Source</th>
               <th class="px-4 py-3 text-left font-semibold text-gray-900">Timestamp</th>
             </tr>
           </thead>
@@ -146,9 +139,7 @@
                 <span
                   :class="[
                     'px-2 py-1 rounded text-xs font-semibold',
-                    log.level === 'DEBUG'
-                      ? 'bg-blue-100 text-blue-800'
-                      : log.level === 'INFO'
+                    log.level === 'INFO'
                       ? 'bg-green-100 text-green-800'
                       : log.level === 'WARNING'
                       ? 'bg-yellow-100 text-yellow-800'
@@ -161,7 +152,7 @@
                 </span>
               </td>
 
-              <!-- Logger -->
+              <!-- Category -->
               <td class="px-4 py-3 font-mono text-xs text-gray-700">
                 {{ log.logger }}
               </td>
@@ -171,11 +162,6 @@
                 <div class="truncate" :title="log.message">
                   {{ log.message }}
                 </div>
-              </td>
-
-              <!-- Source -->
-              <td class="px-4 py-3 text-gray-600 text-xs">
-                {{ log.source || '-' }}
               </td>
 
               <!-- Timestamp -->
