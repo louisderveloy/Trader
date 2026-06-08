@@ -10,9 +10,6 @@
       <!-- Loading State -->
       <LoadingSpinner v-if="isLoading" />
 
-      <!-- Error Alert -->
-      <ErrorAlert v-if="error" :message="error" @dismiss="error = null" />
-
       <!-- Configuration Content -->
       <div v-else-if="config" class="space-y-8">
         <!-- Strategy Configuration -->
@@ -217,17 +214,17 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useConfigStore } from '@/stores/config'
+import { useToastStore } from '@/stores/toast'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import ConfigField from '@/components/common/ConfigField.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
-import ErrorAlert from '@/components/common/ErrorAlert.vue'
 
 const configStore = useConfigStore()
+const toastStore = useToastStore()
 
 const isLoading = computed(() => configStore.isLoading)
 const config = computed(() => configStore.config)
 const isSaving = ref(false)
-const error = ref<string | null>(null)
 
 // Form state
 const formData = ref({
@@ -296,14 +293,18 @@ function resetForm() {
 
 async function saveConfiguration() {
   isSaving.value = true
-  error.value = null
   try {
     await configStore.updateStrategy(formData.value.strategy)
     await configStore.updateRisk(formData.value.risk)
     // Note: stop-loss/take-profit update would require API endpoint
     // For now, just update strategy and risk
+
+    // Show success toast
+    toastStore.success('Configuration enregistrée avec succès')
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Erreur lors de l\'enregistrement'
+    // Show error toast
+    const errorMessage = err instanceof Error ? err.message : 'Erreur lors de l\'enregistrement'
+    toastStore.error(errorMessage)
   } finally {
     isSaving.value = false
   }

@@ -341,7 +341,7 @@ function formatResult(trade: any): string {
   }
 
   const pnl = Number(trade.pnl)
-  const pnlPercent = Number(trade.pnl_percent) * 100
+  const pnlPercent = Number(trade.pnl_percent) // Already a percentage from backend (8.0 = 8%)
   const sign = pnl >= 0 ? '+' : ''
 
   return `${sign}${pnl.toFixed(2)} USDT (${sign}${pnlPercent.toFixed(2)}%)`

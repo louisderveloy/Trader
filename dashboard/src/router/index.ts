@@ -87,11 +87,27 @@ router.beforeEach((to, from, next) => {
       query: { redirect: to.fullPath },
     })
   } else if (to.name === 'login' && authStore.isAuthenticated) {
-    // Already authenticated, redirect to home
-    next({ name: 'home' })
+    // Already authenticated, restore last route or go to home
+    const lastRoute = localStorage.getItem('lastRoute')
+    if (lastRoute && lastRoute !== '/login') {
+      next(lastRoute)
+    } else {
+      next({ name: 'home' })
+    }
   } else {
     // Allow navigation
     next()
+  }
+})
+
+/**
+ * Save current route to localStorage after each navigation
+ * This allows restoring the user's location after page reload
+ */
+router.afterEach((to) => {
+  // Only save authenticated routes (not login or 404)
+  if (to.meta.requiresAuth && to.name !== 'not-found') {
+    localStorage.setItem('lastRoute', to.fullPath)
   }
 })
 

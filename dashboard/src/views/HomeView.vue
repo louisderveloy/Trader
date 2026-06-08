@@ -96,13 +96,19 @@
         <!-- Global stats -->
         <PeriodStats title="Vue globale (tous les actifs)" :stats="globalStats" />
 
-        <!-- Per-asset stats -->
-        <div v-for="(assetStats, symbol) in assetStats" :key="symbol" class="space-y-2">
-          <PeriodStats :title="`${symbol}`" :stats="assetStats" />
+        <!-- Per-asset stats - Grid layout -->
+        <div v-if="Object.keys(assetStats).length > 0" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <PeriodStats
+            v-for="(stats, symbol) in assetStats"
+            :key="symbol"
+            :title="`${symbol}`"
+            :stats="stats"
+            compact
+          />
         </div>
 
         <!-- Empty state -->
-        <div v-if="Object.keys(assetStats).length === 0" class="bg-gray-50 border border-gray-200 rounded-lg p-6 text-center">
+        <div v-else class="bg-gray-50 border border-gray-200 rounded-lg p-6 text-center">
           <p class="text-gray-600">Aucun trade pour cette période</p>
         </div>
       </div>

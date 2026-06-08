@@ -9,11 +9,11 @@
   <!-- Sidebar -->
   <aside
       :class="[
-      'fixed lg:static inset-y-0 left-0 z-6 w-64 bg-white border-r border-gray-200 transform transition-transform duration-300 ease-in-out',
+      'fixed inset-y-0 left-0 z-6 w-64 bg-white border-r border-gray-200 transform transition-transform duration-300 ease-in-out lg:top-[53px] overflow-y-auto',
       uiStore.sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
     ]"
   >
-    <nav class="p-4 space-y-2">
+    <nav class="p-4 space-y-2 pb-8">
       <!-- Navigation links -->
       <router-link
           v-for="item in navItems"
