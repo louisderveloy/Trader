@@ -80,7 +80,22 @@ const showTooltip = ref(false)
 function getInputValue(event: Event): string | number {
   const target = event.target as HTMLInputElement
   if (props.type === 'number') {
-    return target.value === '' ? 0 : parseFloat(target.value)
+    // Handle empty input
+    if (target.value === '') {
+      return ''
+    }
+
+    // Parse the value
+    const numValue = parseFloat(target.value)
+
+    // If parseFloat returns NaN, it means we're in the middle of typing
+    // a number (e.g., "-", ".", "-.", "1."). Keep the string value.
+    if (isNaN(numValue)) {
+      return target.value
+    }
+
+    // Return the parsed number
+    return numValue
   }
   return target.value
 }
