@@ -191,6 +191,17 @@ class TradingBot:
                 logger.info(f"SIMULATED CAPITAL: {self.capital} USDT")
                 logger.info("=" * 80)
 
+            # Send bot started notification
+            if self.discord_notifier:
+                try:
+                    await self.discord_notifier.notify_bot_started(
+                        mode=self.mode,
+                        symbol=self.symbol,
+                        testnet=self.testnet,
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send bot started notification: {e}")
+
             # Start trading loop
             self.is_running = True
             await self._trading_loop()
@@ -216,6 +227,18 @@ class TradingBot:
                 await self._update_run_status("cancelled" if shutdown_requested else "completed")
             except Exception as e:
                 logger.error(f"Failed to update run status: {e}")
+
+        # Send bot stopped notification before cleanup
+        if self.discord_notifier:
+            try:
+                reason = "User requested shutdown" if shutdown_requested else "Completed normally"
+                await self.discord_notifier.notify_bot_stopped(
+                    reason=reason,
+                    trades_today=self.trades_today,
+                    capital=self.capital,
+                )
+            except Exception as e:
+                logger.error(f"Failed to send bot stopped notification: {e}")
 
         # Cleanup connections
         if self.exchange:
@@ -818,6 +841,19 @@ class TradingBot:
 
                 # Publish to Redis
                 await self._publish_trade_event("entry", filled_price, quantity)
+
+                # Send Discord notification for trade opened
+                if self.discord_notifier:
+                    try:
+                        await self.discord_notifier.notify_trade_opened(
+                            symbol=self.symbol,
+                            side="long",  # Assuming all trades are long for now
+                            price=filled_price,
+                            quantity=quantity,
+                            score=entry_score,
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to send trade opened notification: {e}")
 
             elif side == "sell":
                 # Exit order filled - trade completed

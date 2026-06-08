@@ -49,11 +49,11 @@ class DiscordNotifier:
     """
 
     def __init__(
-        self,
-        webhook_url: str,
-        db_pool: asyncpg.Pool,
-        rate_limit_seconds: int = 5,
-        enabled: bool = True,
+            self,
+            webhook_url: str,
+            db_pool: asyncpg.Pool,
+            rate_limit_seconds: int = 5,
+            enabled: bool = True,
     ):
         """
         Initialize Discord notifier.
@@ -85,10 +85,10 @@ class DiscordNotifier:
             self._http_client = None
 
     async def send(
-        self,
-        message: str,
-        notification_type: NotificationType,
-        metadata: Optional[dict[str, Any]] = None,
+            self,
+            message: str,
+            notification_type: NotificationType,
+            metadata: Optional[dict[str, Any]] = None,
     ) -> bool:
         """
         Send a Discord notification and log to database.
@@ -151,11 +151,11 @@ class DiscordNotifier:
         return status == "sent"
 
     async def _log_notification(
-        self,
-        notification_type: NotificationType,
-        message: str,
-        status: str,
-        metadata: Optional[dict[str, Any]] = None,
+            self,
+            notification_type: NotificationType,
+            message: str,
+            status: str,
+            metadata: Optional[dict[str, Any]] = None,
     ) -> None:
         """Log notification to database."""
         try:
@@ -177,12 +177,12 @@ class DiscordNotifier:
             logger.error(f"Failed to log notification: {e}")
 
     async def notify_trade_opened(
-        self,
-        symbol: str,
-        side: str,
-        price: Decimal,
-        quantity: Decimal,
-        score: Optional[float] = None,
+            self,
+            symbol: str,
+            side: str,
+            price: Decimal,
+            quantity: Decimal,
+            score: Optional[float] = None,
     ) -> bool:
         """
         Send notification for trade opened.
@@ -197,15 +197,16 @@ class DiscordNotifier:
         Returns:
             True if sent successfully
         """
+        side_emoji = "🟢" if side.lower() == "long" else "🔴"
+        score_str = f"\n💡 Signal: **{score:.3f}**" if score is not None else ""
+
         message = (
-            f"**Trade Opened**\n"
-            f"Symbol: {symbol}\n"
-            f"Side: {side.upper()}\n"
-            f"Price: {price:.2f} USDT\n"
-            f"Quantity: {quantity:.6f}"
+            f"{side_emoji} **{side.upper()}** POSITION OPENED\n"
+            f">>> 💰 Entry: **{price:.2f}** $\n"
+            f"📦 Quantity: **{quantity:.6f}**\n"
+            f"🔗 {symbol}"
+            f"{score_str}"
         )
-        if score is not None:
-            message += f"\nScore: {score:.3f}"
 
         return await self.send(
             message=message,
@@ -220,14 +221,14 @@ class DiscordNotifier:
         )
 
     async def notify_trade_closed(
-        self,
-        symbol: str,
-        side: str,
-        entry_price: Decimal,
-        exit_price: Decimal,
-        pnl: Decimal,
-        pnl_pct: float,
-        reason: str,
+            self,
+            symbol: str,
+            side: str,
+            entry_price: Decimal,
+            exit_price: Decimal,
+            pnl: Decimal,
+            pnl_pct: float,
+            reason: str,
     ) -> bool:
         """
         Send notification for trade closed.
@@ -245,16 +246,15 @@ class DiscordNotifier:
             True if sent successfully
         """
         # Format P&L with emoji
-        pnl_emoji = "+" if pnl >= 0 else ""
+        pnl_emoji = "🟢" if pnl >= 0 else "🔴"
+        pnl_sign = "+" if pnl >= 0 else ""
 
         message = (
             f"**Trade Closed**\n"
-            f"Symbol: {symbol}\n"
-            f"Side: {side.upper()}\n"
-            f"Entry: {entry_price:.2f} USDT\n"
-            f"Exit: {exit_price:.2f} USDT\n"
-            f"P&L: {pnl_emoji}{pnl:.2f} USDT ({pnl_emoji}{pnl_pct:.2f}%)\n"
-            f"Reason: {reason}"
+            f">>> {pnl_emoji} **{pnl_sign}{pnl:.2f}** $ **({pnl_sign}{pnl_pct:.2f}%)**\n"
+            f"👉 Entry: **{entry_price:.2f}** $\n"
+            f"👈 Exit: **{exit_price:.2f}** $\n"
+            f"🔗 {symbol}"
         )
 
         return await self.send(
@@ -272,10 +272,10 @@ class DiscordNotifier:
         )
 
     async def notify_error(
-        self,
-        error_type: str,
-        message: str,
-        critical: bool = False,
+            self,
+            error_type: str,
+            message: str,
+            critical: bool = False,
     ) -> bool:
         """
         Send notification for an error.
@@ -288,8 +288,13 @@ class DiscordNotifier:
         Returns:
             True if sent successfully
         """
+        severity_emoji = "🚨" if critical else "⚠️"
         severity = "CRITICAL" if critical else "ERROR"
-        notification_message = f"**{severity}**\nType: {error_type}\nMessage: {message}"
+        notification_message = (
+            f"{severity_emoji} **{severity}**\n"
+            f">>> 📋 Type: {error_type}\n"
+            f"💬 {message}"
+        )
 
         return await self.send(
             message=notification_message,
@@ -302,12 +307,12 @@ class DiscordNotifier:
         )
 
     async def notify_optimization_complete(
-        self,
-        study_name: str,
-        best_value: float,
-        best_params: dict[str, float],
-        n_trials: int,
-        duration_seconds: float,
+            self,
+            study_name: str,
+            best_value: float,
+            best_params: dict[str, float],
+            n_trials: int,
+            duration_seconds: float,
     ) -> bool:
         """
         Send notification for optimization completion.
@@ -332,12 +337,12 @@ class DiscordNotifier:
         params_str = "\n".join([f"  {k}: {v:.3f}" for k, v in top_params])
 
         message = (
-            f"**Optimization Complete**\n"
-            f"Study: {study_name}\n"
-            f"Best Score: {best_value:.4f}\n"
-            f"Trials: {n_trials}\n"
-            f"Duration: {duration_str}\n"
-            f"Top Weights:\n{params_str}"
+            f"🧪 **OPTIMIZATION COMPLETE**\n"
+            f">>> 📊 Best Score: **{best_value:.4f}**\n"
+            f"📈 Study: {study_name}\n"
+            f"🔄 Trials: **{n_trials}**\n"
+            f"🏆 Top Weights:\n{params_str}"
+            f"⏱️ Duration: **{duration_str}**\n"
         )
 
         return await self.send(
@@ -345,18 +350,18 @@ class DiscordNotifier:
             notification_type=NotificationType.OPTIMIZATION_COMPLETE,
             metadata={
                 "study_name": study_name,
-                "best_value": best_value,
-                "best_params": best_params,
-                "n_trials": n_trials,
-                "duration_seconds": duration_seconds,
+                "best_value": str(best_value),
+                "best_params": json.dumps({k: v for k, v in best_params.items()}),
+                "n_trials": str(n_trials),
+                "duration_seconds": str(duration_seconds),
             },
         )
 
     async def notify_bot_started(
-        self,
-        mode: str,
-        symbol: str,
-        testnet: bool,
+            self,
+            mode: str,
+            symbol: str,
+            testnet: bool,
     ) -> bool:
         """
         Send notification for bot startup.
@@ -370,11 +375,13 @@ class DiscordNotifier:
             True if sent successfully
         """
         network = "TESTNET" if testnet else "MAINNET"
+        network_emoji = "🧪" if testnet else "💸"
+        mode_emoji = "📝" if mode.lower() == "paper" else "🎯"
         message = (
-            f"**Bot Started**\n"
-            f"Mode: {mode.upper()}\n"
-            f"Symbol: {symbol}\n"
-            f"Network: {network}"
+            f"🚦** BOT STARTED **🚦\n"
+            f">>> 🔗 {symbol}\n"
+            f"{mode_emoji} **{mode.upper()} TRADING**\n"
+            f"{network_emoji} {network}"
         )
 
         return await self.send(
@@ -383,15 +390,15 @@ class DiscordNotifier:
             metadata={
                 "mode": mode,
                 "symbol": symbol,
-                "testnet": testnet,
+                "testnet": str(testnet),
             },
         )
 
     async def notify_bot_stopped(
-        self,
-        reason: str,
-        trades_today: int,
-        capital: Decimal,
+            self,
+            reason: str,
+            trades_today: int,
+            capital: Decimal,
     ) -> bool:
         """
         Send notification for bot shutdown.
@@ -405,10 +412,10 @@ class DiscordNotifier:
             True if sent successfully
         """
         message = (
-            f"**Bot Stopped**\n"
-            f"Reason: {reason}\n"
-            f"Trades Today: {trades_today}\n"
-            f"Capital: {capital:.2f} USDT"
+            f"🛑 **BOT STOPPED**\n"
+            f">>> 📌 Reason: {reason}\n"
+            f"📊 Trades: **{trades_today}**\n"
+            f"💰 Capital: **{capital:.2f}** $"
         )
 
         return await self.send(
@@ -416,20 +423,20 @@ class DiscordNotifier:
             notification_type=NotificationType.BOT_STOPPED,
             metadata={
                 "reason": reason,
-                "trades_today": trades_today,
+                "trades_today": str(trades_today),
                 "capital": str(capital),
             },
         )
 
     async def notify_order_filled(
-        self,
-        symbol: str,
-        side: str,
-        filled_price: Decimal,
-        filled_quantity: Decimal,
-        order_type: str,
-        commission: Decimal,
-        testnet: bool,
+            self,
+            symbol: str,
+            side: str,
+            filled_price: Decimal,
+            filled_quantity: Decimal,
+            order_type: str,
+            commission: Decimal,
+            testnet: bool,
     ) -> bool:
         """
         Send notification for order filled (buy or sell).
@@ -447,17 +454,18 @@ class DiscordNotifier:
             True if sent successfully
         """
         network = "TESTNET" if testnet else "MAINNET"
+        network_emoji = "🧪" if testnet else "💸"
+        side_emoji = "🟢" if side.lower() == "buy" else "🔴"
         volume_usd = filled_price * filled_quantity
 
         message = (
-            f"**Order Filled - {side.upper()}**\n"
-            f"Symbol: {symbol}\n"
-            f"Price: {filled_price:.2f} USDT\n"
-            f"Quantity: {filled_quantity:.6f}\n"
-            f"Volume: ${volume_usd:.2f}\n"
-            f"Order Type: {order_type.upper()}\n"
-            f"Commission: {commission:.4f} USDT\n"
-            f"Network: {network}"
+            f"{network_emoji} **{network}** | {side_emoji} {side.upper()} ({symbol})\n"
+            f">>> 💰 Price: **{filled_price:.2f}** $\n"
+            f"💵 Volume: **${volume_usd:.2f}**\n"
+            f"📦 Quantity: **{filled_quantity:.6f}**\n"
+            f"🔗 {symbol}\n"
+            f"🏧 Type: {order_type.upper()}\n"
+            f"💎 Commission: {commission:.4f} $"
         )
 
         return await self.send(
@@ -476,14 +484,14 @@ class DiscordNotifier:
         )
 
     async def notify_run_completed(
-        self,
-        run_type: str,
-        symbol: str,
-        environment: str,
-        start_date: datetime,
-        end_date: datetime,
-        win_rate: Optional[float] = None,
-        total_pnl: Optional[Decimal] = None,
+            self,
+            run_type: str,
+            symbol: str,
+            environment: str,
+            start_date: datetime,
+            end_date: datetime,
+            win_rate: Optional[float] = None,
+            total_pnl: Optional[Decimal] = None,
     ) -> bool:
         """
         Send notification for run completion.
@@ -500,21 +508,30 @@ class DiscordNotifier:
         Returns:
             True if sent successfully
         """
-        message = (
-            f"**Run Completed**\n"
-            f"Type: {run_type.upper()}\n"
-            f"Symbol: {symbol}\n"
-            f"Environment: {environment.upper()}\n"
-            f"Start: {start_date.strftime('%Y-%m-%d %H:%M UTC')}\n"
-            f"End: {end_date.strftime('%Y-%m-%d %H:%M UTC')}"
-        )
+        # Format P&L with emoji
+        pnl_emoji = "🟢" if (total_pnl and total_pnl >= 0) else "🔴"
+        pnl_sign = "+" if (total_pnl and total_pnl >= 0) else ""
 
-        if win_rate is not None:
-            message += f"\nWin Rate: {win_rate:.2f}%"
+        # Determine network emoji based on environment
+        network_emoji = "🧪" if environment.lower() in ["dev", "staging"] else "💸"
 
+        message = (f"**RUN COMPLETE**\n"
+                   f"⚙️ Type: {run_type.upper()}\n"
+                   f">>> 🔗 {symbol}\n")
+
+        # P&L if available
         if total_pnl is not None:
-            pnl_emoji = "+" if total_pnl >= 0 else ""
-            message += f"\nTotal P&L: {pnl_emoji}{total_pnl:.2f} USDT"
+            message += f"{pnl_emoji} P&L: **{pnl_sign}{total_pnl:.2f}** $\n"
+
+        # Win rate if available
+        if win_rate is not None:
+            message += f"📈 Win Rate: **{win_rate:.2f}%**\n"
+
+        message += (
+
+            f"{network_emoji} {environment.upper()}\n"
+            f"⏱️ Started: {start_date.strftime('%Y-%m-%d %H:%M UTC')}"
+        )
 
         metadata = {
             "run_type": run_type,
@@ -525,7 +542,7 @@ class DiscordNotifier:
         }
 
         if win_rate is not None:
-            metadata["win_rate"] = win_rate
+            metadata["win_rate"] = str(win_rate)
 
         if total_pnl is not None:
             metadata["total_pnl"] = str(total_pnl)

@@ -7,6 +7,7 @@ and result persistence.
 """
 
 import logging
+import os
 import time
 from typing import Optional
 from datetime import datetime, timezone
@@ -32,6 +33,7 @@ from runs.manager import RunManager
 from runs.errors import log_exception, ErrorCategory, ErrorSeverity
 
 from strategy.config import StrategyEngineConfig
+from notifications.discord import DiscordNotifier
 
 # Structured logging
 logger = logging.getLogger(__name__)
@@ -253,6 +255,32 @@ class OptimizationRunner:
                     "weights_set_id": str(weights_set_id)
                 }
             )
+
+            # Send Discord notification for optimization complete
+            try:
+                webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
+                notify_enabled = os.getenv("NOTIFY_OPTIMIZATION_COMPLETE", "true").lower() == "true"
+
+                if webhook_url and not webhook_url.startswith("https://discord.com/api/webhooks/YOUR_WEBHOOK") and notify_enabled:
+                    rate_limit_seconds = int(os.getenv("DISCORD_RATE_LIMIT_PERIOD_SECONDS", "60"))
+                    discord_notifier = DiscordNotifier(
+                        webhook_url=webhook_url,
+                        db_pool=self.db_pool,
+                        rate_limit_seconds=rate_limit_seconds,
+                        enabled=True,
+                    )
+
+                    await discord_notifier.notify_optimization_complete(
+                        study_name=self.config.study_name,
+                        best_value=float(best_overall_value),
+                        best_params=best_overall_params,
+                        n_trials=study_result.n_trials,
+                        duration_seconds=optimization_time,
+                    )
+
+                    await discord_notifier.close()
+            except Exception as e:
+                logger.error(f"Failed to send optimization complete notification: {e}")
 
             return study_result
 
