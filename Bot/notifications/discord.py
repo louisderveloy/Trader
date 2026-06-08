@@ -460,8 +460,8 @@ class DiscordNotifier:
 
         message = (
             f"{network_emoji} **{network}** | {side_emoji} {side.upper()} ({symbol})\n"
-            f">>> 💰 Price: **{filled_price:.2f}** $\n"
-            f"💵 Volume: **${volume_usd:.2f}**\n"
+            f">>> 💵 Volume: **${volume_usd:.2f}**\n"
+            f"💰 Price: **{filled_price:.2f}** $\n"
             f"📦 Quantity: **{filled_quantity:.6f}**\n"
             f"🔗 {symbol}\n"
             f"🏧 Type: {order_type.upper()}\n"

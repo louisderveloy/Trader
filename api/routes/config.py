@@ -177,6 +177,13 @@ async def update_strategy_config(
         settings.strategy_confirmation_candles = update_data.confirmation_candles
         updates["confirmation_candles"] = update_data.confirmation_candles
 
+    # Validate that entry_threshold > exit_threshold
+    if settings.strategy_entry_threshold <= settings.strategy_exit_threshold:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Le seuil d'entrée ({settings.strategy_entry_threshold}) doit être supérieur au seuil de sortie ({settings.strategy_exit_threshold})",
+        )
+
     # Persist to database
     if updates:
         await update_config_in_db(db_pool, "strategy", updates)

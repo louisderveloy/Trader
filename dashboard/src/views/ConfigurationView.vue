@@ -294,6 +294,15 @@ function resetForm() {
 async function saveConfiguration() {
   isSaving.value = true
   try {
+    // Validate that entry_threshold > exit_threshold
+    if (formData.value.strategy.entry_threshold <= formData.value.strategy.exit_threshold) {
+      toastStore.error(
+        `Le seuil d'entrée (${formData.value.strategy.entry_threshold}) doit être supérieur au seuil de sortie (${formData.value.strategy.exit_threshold})`
+      )
+      isSaving.value = false
+      return
+    }
+
     await configStore.updateStrategy(formData.value.strategy)
     await configStore.updateRisk(formData.value.risk)
     // Note: stop-loss/take-profit update would require API endpoint
