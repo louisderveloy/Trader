@@ -30,6 +30,8 @@ export const useTradesStore = defineStore('trades', () => {
     if (trades.value.length === 0) {
       return {
         totalTrades: 0,
+        openTrades: 0,
+        closedTrades: 0,
         winningTrades: 0,
         losingTrades: 0,
         winRate: 0,
@@ -40,8 +42,27 @@ export const useTradesStore = defineStore('trades', () => {
       }
     }
 
-    // Ensure pnl values are numbers (convert from Decimal if needed)
-    const pnlValues = trades.value.map(t => {
+    // Separate open and closed trades
+    const openTrades = trades.value.filter(t => t.status === 'open')
+    const closedTrades = trades.value.filter(t => t.status === 'closed')
+
+    if (closedTrades.length === 0) {
+      return {
+        totalTrades: trades.value.length,
+        openTrades: openTrades.length,
+        closedTrades: 0,
+        winningTrades: 0,
+        losingTrades: 0,
+        winRate: 0,
+        totalPnl: 0,
+        avgPnl: 0,
+        bestTrade: 0,
+        worstTrade: 0
+      }
+    }
+
+    // Calculate stats only for closed trades (open trades have no pnl yet)
+    const pnlValues = closedTrades.map(t => {
       if (!t.pnl) return 0
       if (typeof t.pnl === 'number') return t.pnl
       if (typeof t.pnl === 'string') return parseFloat(t.pnl)
@@ -57,9 +78,11 @@ export const useTradesStore = defineStore('trades', () => {
 
     return {
       totalTrades: trades.value.length,
+      openTrades: openTrades.length,
+      closedTrades: closedTrades.length,
       winningTrades,
       losingTrades,
-      winRate: trades.value.length > 0 ? (winningTrades / trades.value.length) * 100 : 0,
+      winRate: closedTrades.length > 0 ? (winningTrades / closedTrades.length) * 100 : 0,
       totalPnl,
       avgPnl,
       bestTrade,

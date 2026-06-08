@@ -15,23 +15,24 @@ class TradeResponse(BaseModel):
     """Trade response model."""
 
     id: str = Field(..., description="Trade ID (UUID)")
-    run_id: int = Field(..., description="Run ID")
+    run_id: str = Field(..., description="Run ID (UUID)")
     symbol: str = Field(..., description="Trading symbol")
     side: str = Field(..., description="Trade side: long, short")
     environment: str = Field(..., description="Environment: testnet, live, paper, backtest")
+    status: str = Field(..., description="Trade status: open, closed")
 
     entry_price: Decimal = Field(..., description="Entry price")
-    exit_price: Decimal = Field(..., description="Exit price")
+    exit_price: Optional[Decimal] = Field(None, description="Exit price (null if still open)")
     quantity: Decimal = Field(..., description="Position size")
 
-    pnl: Decimal = Field(..., description="Profit/Loss in USDT")
-    pnl_percent: Decimal = Field(..., description="P&L as percentage")
+    pnl: Optional[Decimal] = Field(None, description="Profit/Loss in USDT (null if still open)")
+    pnl_percent: Optional[Decimal] = Field(None, description="P&L as percentage (null if still open)")
 
-    commission_total: Decimal = Field(..., description="Total commission paid")
+    commission_total: Decimal = Field(..., description="Total commission paid (entry + exit)")
 
     opened_at: datetime = Field(..., description="Entry timestamp")
-    closed_at: datetime = Field(..., description="Exit timestamp")
-    duration_seconds: int = Field(..., description="Trade duration in seconds")
+    closed_at: Optional[datetime] = Field(None, description="Exit timestamp (null if still open)")
+    duration_seconds: Optional[int] = Field(None, description="Trade duration in seconds (null if still open)")
 
     created_at: datetime = Field(..., description="Creation timestamp")
 
@@ -44,7 +45,7 @@ class TradeResponse(BaseModel):
 class TradeFilter(BaseModel):
     """Trade filter query parameters."""
 
-    run_id: Optional[int] = Field(None, description="Filter by run ID")
+    run_id: Optional[str] = Field(None, description="Filter by run ID (UUID)")
     symbol: Optional[str] = Field(None, description="Filter by symbol")
     side: Optional[str] = Field(None, description="Filter by side (long/short)")
     environment: Optional[str] = Field(None, description="Filter by environment (testnet/live/paper/backtest)")

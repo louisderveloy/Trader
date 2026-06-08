@@ -4,16 +4,16 @@ Trades management endpoints.
 REST API for querying and analyzing completed trades.
 """
 
-import asyncpg
 import logging
 from typing import Annotated
 
+import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..auth import User, get_current_user
 from ..database import get_db_pool
 from ..models.enums import TradeSide, TradeEnvironment
-from ..models.trades import TradeFilter, TradeListResponse, TradeResponse
+from ..models.trades import TradeListResponse, TradeResponse
 
 logger = logging.getLogger(__name__)
 
@@ -22,16 +22,17 @@ router = APIRouter()
 
 @router.get("", response_model=TradeListResponse)
 async def list_trades(
-    run_id: Annotated[int | None, Query(description="Filter by run ID")] = None,
-    symbol: Annotated[str | None, Query(max_length=20, description="Filter by symbol (max 20 chars)")] = None,
-    side: Annotated[TradeSide | None, Query(description="Filter by side (buy/sell/long/short)")] = None,
-    environment: Annotated[TradeEnvironment | None, Query(description="Filter by environment (testnet/live/paper/backtest)")] = None,
-    min_pnl: Annotated[float | None, Query(description="Minimum P&L")] = None,
-    max_pnl: Annotated[float | None, Query(description="Maximum P&L")] = None,
-    limit: Annotated[int, Query(ge=1, le=1000, description="Maximum results")] = 100,
-    offset: Annotated[int, Query(ge=0, description="Offset for pagination")] = 0,
-    user: User = Depends(get_current_user),
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
+        run_id: Annotated[str | None, Query(description="Filter by run ID (UUID)")] = None,
+        symbol: Annotated[str | None, Query(max_length=20, description="Filter by symbol (max 20 chars)")] = None,
+        side: Annotated[TradeSide | None, Query(description="Filter by side (buy/sell/long/short)")] = None,
+        environment: Annotated[
+            TradeEnvironment | None, Query(description="Filter by environment (testnet/live/paper/backtest)")] = None,
+        min_pnl: Annotated[float | None, Query(description="Minimum P&L")] = None,
+        max_pnl: Annotated[float | None, Query(description="Maximum P&L")] = None,
+        limit: Annotated[int, Query(ge=1, le=1000, description="Maximum results")] = 100,
+        offset: Annotated[int, Query(ge=0, description="Offset for pagination")] = 0,
+        user: User = Depends(get_current_user),
+        db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> TradeListResponse:
     """
     List completed trades with filtering and pagination.
@@ -70,7 +71,8 @@ async def list_trades(
             conditions.append(f"t.pnl <= ${len(param_values) + 1}")
             param_values.append(max_pnl)
 
-        where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+        where_clause = "WHERE " + " AND ".join(
+            conditions) if conditions else ""  # TODO: Check for dashboard data. For SQLInjection breach
 
         # Count total
         count_query = f"""
@@ -82,7 +84,7 @@ async def list_trades(
         # Get trades
         trades_query = f"""
             SELECT
-                t.id, t.run_id, t.symbol, t.side, r.environment,
+                t.id::text, t.run_id::text, t.symbol, t.side, r.environment, t.status,
                 t.entry_price, t.exit_price, t.quantity,
                 t.pnl, t.pnl_percent, t.commission_total,
                 t.opened_at, t.closed_at, t.duration_seconds,
@@ -90,7 +92,7 @@ async def list_trades(
             FROM trades t
             JOIN runs r ON t.run_id = r.id
             {where_clause}
-            ORDER BY t.closed_at DESC
+            ORDER BY t.opened_at DESC
             LIMIT ${len(param_values) + 1} OFFSET ${len(param_values) + 2}
         """
 
@@ -118,9 +120,9 @@ async def list_trades(
 
 @router.get("/{trade_id}", response_model=TradeResponse)
 async def get_trade(
-    trade_id: str,
-    user: User = Depends(get_current_user),
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
+        trade_id: str,
+        user: User = Depends(get_current_user),
+        db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> TradeResponse:
     """
     Get trade details by ID.
@@ -139,7 +141,7 @@ async def get_trade(
     try:
         query = """
             SELECT
-                t.id, t.run_id, t.symbol, t.side, r.environment,
+                t.id::text, t.run_id::text, t.symbol, t.side, r.environment, t.status,
                 t.entry_price, t.exit_price, t.quantity,
                 t.pnl, t.pnl_percent, t.commission_total,
                 t.opened_at, t.closed_at, t.duration_seconds,

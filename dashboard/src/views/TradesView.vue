@@ -8,16 +8,18 @@
       </div>
 
       <!-- Statistics Cards -->
-      <div v-if="!isLoading && trades.length > 0" class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+      <div v-if="!isLoading && trades.length > 0" class="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
         <div class="bg-white rounded-lg shadow p-4">
           <p class="text-xs text-gray-600 mb-1">Total Trades</p>
           <p class="text-2xl font-bold text-gray-900">{{ stats.totalTrades }}</p>
+          <p class="text-xs text-gray-500 mt-1">{{ stats.openTrades }} ouvert(s) · {{ stats.closedTrades }} fermé(s)</p>
         </div>
         <div class="bg-white rounded-lg shadow p-4">
           <p class="text-xs text-gray-600 mb-1">Win Rate</p>
           <p class="text-2xl font-bold" :class="stats.winRate >= 50 ? 'text-green-600' : 'text-red-600'">
             {{ stats.winRate.toFixed(1) }}%
           </p>
+          <p class="text-xs text-gray-500 mt-1">{{ stats.winningTrades }}W / {{ stats.losingTrades }}L</p>
         </div>
         <div class="bg-white rounded-lg shadow p-4">
           <p class="text-xs text-gray-600 mb-1">Total P&L</p>
@@ -31,14 +33,32 @@
             {{ Number(stats.avgPnl).toFixed(2) }} USDT
           </p>
         </div>
+        <div class="bg-white rounded-lg shadow p-4">
+          <p class="text-xs text-gray-600 mb-1">Best / Worst</p>
+          <p class="text-sm font-bold text-green-600">{{ Number(stats.bestTrade).toFixed(2) }} USDT</p>
+          <p class="text-sm font-bold text-red-600">{{ Number(stats.worstTrade).toFixed(2) }} USDT</p>
+        </div>
       </div>
 
       <!-- Filters -->
       <div class="bg-white rounded-lg shadow p-4 mb-6">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-sm font-semibold text-gray-700">Filtres</h2>
+          <button
+            v-if="hasActiveFilters"
+            @click="clearAllFilters"
+            class="text-xs text-blue-600 hover:text-blue-800 font-medium transition-colors"
+          >
+            Effacer tous les filtres
+          </button>
+        </div>
         <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
           <div>
             <div class="flex items-center gap-1 mb-1">
-              <label class="block text-sm font-medium text-gray-700">Réseau</label>
+              <label class="block text-sm font-medium text-gray-700">
+                Réseau
+                <span v-if="filters.environment" class="text-blue-600">•</span>
+              </label>
               <div class="group relative">
                 <svg class="w-4 h-4 text-gray-400 cursor-help" fill="currentColor" viewBox="0 0 20 20">
                   <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd" />
@@ -65,7 +85,10 @@
             </select>
           </div>
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Symbole</label>
+            <label class="block text-sm font-medium text-gray-700 mb-1">
+              Symbole
+              <span v-if="filters.symbol" class="text-blue-600">•</span>
+            </label>
             <input
               :value="filters.symbol || ''"
               type="text"
@@ -120,18 +143,67 @@
         <table class="w-full text-sm">
           <thead class="bg-gray-100 border-b">
             <tr>
+              <th class="px-4 py-3 text-left font-semibold text-gray-900">Réseau</th>
               <th class="px-4 py-3 text-left font-semibold text-gray-900">Symbole</th>
+              <th class="px-4 py-3 text-left font-semibold text-gray-900">Statut</th>
               <th class="px-4 py-3 text-left font-semibold text-gray-900">Side</th>
               <th class="px-4 py-3 text-right font-semibold text-gray-900">Entrée</th>
               <th class="px-4 py-3 text-right font-semibold text-gray-900">Sortie</th>
-              <th class="px-4 py-3 text-right font-semibold text-gray-900">P&L</th>
-              <th class="px-4 py-3 text-center font-semibold text-gray-900">%</th>
+              <th class="px-4 py-3 text-right font-semibold text-gray-900">Résultat</th>
               <th class="px-4 py-3 text-right font-semibold text-gray-900">Durée</th>
             </tr>
           </thead>
           <tbody class="divide-y">
-            <tr v-for="trade in trades" :key="trade.id" class="hover:bg-gray-50">
-              <td class="px-4 py-3 font-medium text-gray-900">{{ trade.symbol }}</td>
+            <tr
+              v-for="trade in trades"
+              :key="trade.id"
+              :class="[
+                'hover:bg-gray-50 transition-colors',
+                trade.environment === 'live' ? 'bg-amber-50/30' : ''
+              ]"
+            >
+              <td class="px-4 py-3">
+                <div class="flex items-center gap-2">
+                  <!-- Live trade indicator icon -->
+                  <svg
+                    v-if="trade.environment === 'live'"
+                    class="w-4 h-4 text-amber-600 flex-shrink-0"
+                    fill="currentColor"
+                    viewBox="0 0 20 20"
+                  >
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+                  </svg>
+                  <button
+                    @click="filterByEnvironment(trade.environment)"
+                    :class="[
+                      'px-2 py-1 rounded text-xs font-medium cursor-pointer hover:opacity-80 transition-opacity',
+                      getEnvironmentBadgeClass(trade.environment)
+                    ]"
+                    :title="`Filtrer par ${trade.environment}`"
+                  >
+                    {{ formatEnvironment(trade.environment) }}
+                  </button>
+                </div>
+              </td>
+              <td class="px-4 py-3">
+                <button
+                  @click="filterBySymbol(trade.symbol)"
+                  class="font-medium text-gray-900 hover:text-blue-600 transition-colors cursor-pointer"
+                  :title="`Filtrer par ${trade.symbol}`"
+                >
+                  {{ trade.symbol }}
+                </button>
+              </td>
+              <td class="px-4 py-3">
+                <span
+                  :class="[
+                    'px-2 py-1 rounded text-xs font-medium',
+                    trade.status === 'open' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'
+                  ]"
+                >
+                  {{ trade.status === 'open' ? 'OUVERT' : 'FERMÉ' }}
+                </span>
+              </td>
               <td class="px-4 py-3">
                 <span
                   :class="[
@@ -146,13 +218,10 @@
                 {{ Number(trade.entry_price).toFixed(2) }}
               </td>
               <td class="px-4 py-3 text-right text-gray-700">
-                {{ Number(trade.exit_price).toFixed(2) }}
+                {{ trade.exit_price !== null ? Number(trade.exit_price).toFixed(2) : '—' }}
               </td>
-              <td class="px-4 py-3 text-right font-semibold" :class="getPnlColor(Number(trade.pnl))">
-                {{ Number(trade.pnl).toFixed(2) }} USDT
-              </td>
-              <td class="px-4 py-3 text-center font-semibold" :class="getPnlColor(Number(trade.pnl_percent) * 100)">
-                {{ (Number(trade.pnl_percent) * 100).toFixed(2) }}%
+              <td class="px-4 py-3 text-right font-semibold" :class="getPnlColor(trade.pnl)">
+                {{ formatResult(trade) }}
               </td>
               <td class="px-4 py-3 text-gray-700 text-sm">
                 {{ formatDuration(trade.duration_seconds) }}
@@ -216,6 +285,16 @@ const total = computed(() => tradesStore.total)
 const hasMore = computed(() => tradesStore.hasMore)
 const offset = computed(() => tradesStore.offset)
 
+const hasActiveFilters = computed(() => {
+  return !!(
+    filters.value.environment ||
+    filters.value.symbol ||
+    filters.value.side ||
+    filters.value.min_pnl !== undefined ||
+    filters.value.max_pnl !== undefined
+  )
+})
+
 onMounted(async () => {
   await tradesStore.fetchTrades()
 })
@@ -254,5 +333,56 @@ function formatDuration(seconds: number | null | undefined): string {
   } else {
     return `${secs}s`
   }
+}
+
+function formatResult(trade: any): string {
+  if (trade.pnl === null || trade.pnl_percent === null) {
+    return '—'
+  }
+
+  const pnl = Number(trade.pnl)
+  const pnlPercent = Number(trade.pnl_percent) * 100
+  const sign = pnl >= 0 ? '+' : ''
+
+  return `${sign}${pnl.toFixed(2)} USDT (${sign}${pnlPercent.toFixed(2)}%)`
+}
+
+function formatEnvironment(env: string): string {
+  const labels: Record<string, string> = {
+    testnet: 'Testnet',
+    live: 'Live',
+    paper: 'Paper',
+    backtest: 'Backtest'
+  }
+  return labels[env] || env
+}
+
+function getEnvironmentBadgeClass(env: string): string {
+  const classes: Record<string, string> = {
+    testnet: 'bg-blue-100 text-blue-800',
+    live: 'bg-amber-100 text-amber-900 ring-1 ring-amber-300',
+    paper: 'bg-purple-100 text-purple-800',
+    backtest: 'bg-gray-100 text-gray-800'
+  }
+  return classes[env] || 'bg-gray-100 text-gray-800'
+}
+
+function filterByEnvironment(environment: string): void {
+  updateFilter('environment', environment)
+}
+
+function filterBySymbol(symbol: string): void {
+  updateFilter('symbol', symbol)
+}
+
+function clearAllFilters(): void {
+  tradesStore.setFilters({
+    environment: undefined,
+    symbol: undefined,
+    side: undefined,
+    min_pnl: undefined,
+    max_pnl: undefined
+  })
+  tradesStore.fetchTrades()
 }
 </script>

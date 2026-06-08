@@ -8,19 +8,20 @@ import { apiClient } from './client'
 
 export interface Trade {
   id: string
-  run_id: number
+  run_id: string
   symbol: string
   side: 'long' | 'short'
   environment: 'testnet' | 'live' | 'paper' | 'backtest'
+  status: 'open' | 'closed'
   entry_price: number
-  exit_price: number
+  exit_price: number | null
   quantity: number
-  pnl: number
-  pnl_percent: number
+  pnl: number | null
+  pnl_percent: number | null
   commission_total: number
   opened_at: string
-  closed_at: string
-  duration_seconds: number
+  closed_at: string | null
+  duration_seconds: number | null
   created_at: string
 }
 
@@ -32,7 +33,7 @@ export interface TradeListResponse {
 }
 
 export interface TradeFilters {
-  run_id?: number
+  run_id?: string
   symbol?: string
   side?: 'long' | 'short'
   environment?: 'testnet' | 'live' | 'paper' | 'backtest'

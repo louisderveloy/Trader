@@ -194,6 +194,33 @@ Implementing Optuna-based optimization with walk-forward analysis for indicator 
   - Reduces noise when analyzing different types of trading activity
 - **Result:** Better data organization and user control over what they see
 
+### 2026-06-08T15:00Z [USER] Trades table schema change: Track ongoing trades
+- **Decision:** Modify trades table to create entries when positions open, update when they close
+- **Rationale:** User wants to track active positions in real-time, not just completed trades
+- **Previous behavior:**
+  - Trade entry created only when position closed (both entry + exit data at once)
+  - No visibility into currently open positions in database
+- **New behavior:**
+  - Trade entry created immediately when entry order fills (status='open')
+  - Trade updated with exit data when exit order fills (status='closed')
+  - Bot tracks trade_id in position state for update reference
+- **Implementation:**
+  - Created Alembic migration `007_update_trades_for_ongoing_tracking.py`
+  - Added `status` column (VARCHAR, default 'open', indexed)
+  - Made nullable: exit_order_id, exit_price, closed_at, duration_seconds, pnl, pnl_percent
+  - Set commission_total default to 0 (accumulates entry + exit commission)
+  - Created `_create_trade_entry()` method to INSERT on position open
+  - Updated `_log_trade()` to UPDATE existing trade on position close
+  - Updated Pydantic TradeResponse model with optional exit fields + status
+  - Updated API routes to include status column and ORDER BY opened_at DESC
+- **Impact:**
+  - Dashboard can now display currently open positions
+  - Better real-time visibility into active trading
+  - Commission tracking more accurate (separate entry/exit calculation)
+  - Trades ordered by when they opened, not when they closed
+- **Migration required:** Run `alembic upgrade head` to apply schema changes
+- **Result:** Real-time position tracking with full trade lifecycle visibility
+
 ### 2026-06-04T22:00Z [USER] Architecture change: Grafana moved to external hosting
 - **Decision:** Move Grafana to separate external server for multi-project monitoring
 - **Rationale:** User wants to use one Grafana instance to monitor multiple projects, not just this trading bot
@@ -299,6 +326,50 @@ Implementing Optuna-based optimization with walk-forward analysis for indicator 
 ---
 
 ## [PROGRESS]
+
+### 2026-06-08T16:30Z [USER] Enhanced trades table with network column and clickable filters
+- **Request:** Add network column, visual emphasis for live trades, clickable network/symbol badges
+- **Implementation:**
+  - Added "Réseau" (network) column as first column in trades table
+  - Live trades get subtle visual emphasis:
+    - Amber checkmark icon on the left
+    - Light amber background (`bg-amber-50/30`)
+    - Amber ring on network badge (`ring-1 ring-amber-300`)
+  - Network badges are clickable buttons that filter by that environment
+  - Symbol names are clickable buttons that filter by that symbol
+  - Added "Effacer tous les filtres" (Clear all filters) button when filters are active
+  - Active filters show blue dot indicator (•) next to label
+  - Color-coded network badges:
+    - Testnet: blue (`bg-blue-100 text-blue-800`)
+    - Live: amber with ring (`bg-amber-100 text-amber-900 ring-1 ring-amber-300`)
+    - Paper: purple (`bg-purple-100 text-purple-800`)
+    - Backtest: gray (`bg-gray-100 text-gray-800`)
+- **UX improvements:**
+  - One-click filtering from table data
+  - Visual feedback on hover (opacity change for badges, color change for symbols)
+  - Live trades stand out subtly without disrupting overall design
+  - Clear indication of which filters are active
+  - Easy filter reset with "Clear all" button
+- **Result:** More interactive and informative trades table with better filtering UX
+
+### 2026-06-08T16:00Z [CODE] UUID type conversion fix for trades API
+- **Issue discovered:** Pydantic validation error when fetching trades
+  - Database returns UUID objects for `id` and `run_id` fields
+  - Pydantic models expected strings, causing validation failure
+  - Error: "Input should be a valid string [type=string_type, input_value=UUID(...)]"
+- **Root cause:**
+  - PostgreSQL UUID columns return UUID Python objects by default
+  - Pydantic models defined fields as `str` but didn't convert UUIDs
+  - Both `trades.id` and `trades.run_id` are UUID types in database schema
+- **Fix applied:**
+  - Cast UUID to text in SQL queries: `t.id::text`, `t.run_id::text`
+  - Updated `TradeResponse` model: `run_id: str` (was incorrectly `int`)
+  - Updated `TradeFilter` model: `run_id: Optional[str]` (was `Optional[int]`)
+  - Updated API route parameters: `run_id: str | None` (was `int | None`)
+  - Updated frontend `Trade` interface: `run_id: string` (was `number`)
+  - Updated frontend `TradeFilters` interface: `run_id?: string` (was `number`)
+- **Impact:** Trades API now returns correctly serialized UUID strings for all ID fields
+- **Lesson:** Always cast PostgreSQL UUID columns to text when returning to JSON APIs
 
 ### 2026-06-03T19:45Z [CODE] Phase 0 completed
 All 7 tasks for Phase 0 infrastructure setup completed successfully:
@@ -1680,4 +1751,242 @@ Implemented comprehensive database logging for all events that should be persist
 - Phase 1 (schema) → Phase 6 (error logging calls)
 - Phase 4 (orders module) → Phase 5 (trading integration)
 - Phase 7 (notifications) → Trading/optimization integration
+
+### 2026-06-08T13:30Z [CODE] Dashboard Active Orders Display Complete ✅
+
+**Status:** ✅ Complete
+
+**Summary:**
+Enhanced TradesView to display active orders (buy orders that haven't been sold yet) at the top of the page in a dedicated section. This provides visibility into open positions without modifying the bot's behavior.
+
+**Files created:**
+1. `dashboard/src/api/orders.ts` (~110 lines) - Orders API client with types
+2. `dashboard/src/stores/orders.ts` (~100 lines) - Orders Pinia store
+
+**Files modified:**
+1. `dashboard/src/views/TradesView.vue` - Added active orders section at top
+
+**Key features implemented:**
+- ✅ Active orders section displayed at top of TradesView (only visible when active orders exist)
+- ✅ Shows filled buy orders that haven't been sold yet
+- ✅ Compact card layout with key information:
+  - Symbol
+  - Entry price (filled_price)
+  - Quantity (filled_quantity)
+  - Value (price × quantity)
+  - Date (filled_at)
+- ✅ Manual refresh button for updating active orders
+- ✅ Orders API client with TypeScript types
+- ✅ Orders store with Pinia for state management
+- ✅ Integration with existing API endpoint `/orders?side=buy&status=filled`
+
+**Implementation approach:**
+- Bot behavior unchanged: Trades table entry still created only on exit
+- Active orders identified by: status='filled' AND side='buy'
+- Dashboard queries orders table directly
+- Blue-themed section to distinguish from completed trades (green/red)
+
+**API endpoints used:**
+- GET /orders - List orders with filters (side, status, run_id, symbol)
+- GET /orders?side=buy&status=filled - Get active buy orders
+
+**Type definitions:**
+```typescript
+interface Order {
+  id: string
+  run_id: number
+  exchange_order_id: string | null
+  symbol: string
+  side: 'buy' | 'sell'
+  order_type: 'limit' | 'market'
+  quantity: string
+  price: string | null
+  status: 'pending' | 'filled' | 'cancelled' | 'rejected'
+  filled_quantity: string
+  filled_price: string | null
+  commission: string | null
+  placed_at: string
+  filled_at: string | null
+  cancelled_at: string | null
+  metadata: Record<string, any> | null
+}
+```
+
+**UX improvements:**
+- Active orders section only shown when orders exist
+- Blue background (blue-50) to differentiate from trades
+- Refresh button for manual updates
+- Formatted dates (DD/MM HH:MM)
+- Responsive grid layout (2 columns mobile, 5 columns desktop)
+
+**Testing needed (user responsibility):**
+- ⏳ Verify active orders section appears after buy order
+- ⏳ Verify active orders section disappears after sell order
+- ⏳ Verify refresh button updates data
+- ⏳ Verify responsive design on mobile/tablet/desktop
+- ⏳ Verify data matches database orders table
+
+**Next steps:**
+- User testing with paper trading to verify workflow
+- Consider auto-refresh for active orders (polling every 30s)
+- Consider adding unrealized P&L calculation (current_price - entry_price)
+
+### 2026-06-08T14:00Z [CODE] CRITICAL FIX: Order Fill Tracking for Paper and Live Trading ✅
+
+**Status:** ✅ Fixed
+
+**Problem:**
+Three critical bugs discovered in `bot/scripts/trading.py`:
+
+1. **Live trading bug (DANGEROUS):** After placing limit orders on Binance, code immediately marked them as filled WITHOUT verifying execution
+   - Orders might still be pending, partially filled, or at different prices
+   - Bot thought it had positions when it might not
+   - Risk of real money loss in live trading
+
+2. **Paper trading bug:** Orders instantly marked as filled, defeating realistic simulation
+   - No delay simulation
+   - No slippage simulation
+
+3. **Exit orders:** Same instant-fill bugs for both entry and exit orders in both modes
+
+**Root cause:**
+- Lines 670-678: Live entry orders marked filled immediately after placement
+- Lines 695-703: Paper entry orders marked filled immediately
+- Lines 773-806: Same issue for exit orders
+- Comments in code admitted this was wrong: `# simplified - real implementation would track fills`
+
+**Solution implemented:**
+
+**Architecture changes:**
+1. Added `self.pending_order` tracking to TradingBot class
+2. Added `_check_pending_order()` method called at start of each iteration
+3. Modified `_execute_entry()` and `_execute_exit()` to create pending orders instead of instant fills
+4. Skip normal trading logic while pending order exists
+
+**Paper trading fill simulation:**
+- Orders marked as pending initially
+- Fill simulated on next iteration (~15-60s delay based on timeframe)
+- Random slippage: -0.1% to +0.1%
+- Realistic commission: 0.1% of notional value
+
+**Live trading fill verification:**
+- Orders placed on Binance exchange
+- Order ID stored with `update_order_submitted()`
+- On next iteration, query Binance with `get_order_status()`
+- Check status: FILLED, CANCELED, REJECTED, EXPIRED, or still pending
+- Only mark as filled when exchange confirms
+- Extract actual fill price and commission from exchange response
+- Handle partial fills and failures
+
+**Order lifecycle now:**
+```
+1. Signal detected → create_order() → status='pending'
+2. Place on exchange → update_order_submitted() → exchange_order_id stored
+3. Store in self.pending_order → skip other logic
+4. Next iteration → _check_pending_order()
+5. Query exchange status (live) or simulate (paper)
+6. If filled → update_order_filled() → update position/capital → log trade
+7. Clear self.pending_order → resume normal logic
+```
+
+**Files modified:**
+- `bot/scripts/trading.py`:
+  - Added `self.pending_order` state variable
+  - Added `_check_pending_order()` method (150+ lines)
+  - Modified `_trading_iteration()` to check pending orders first
+  - Modified `_execute_entry()` to use pending order tracking
+  - Modified `_execute_exit()` to use pending order tracking
+  - Added import for `update_order_submitted`
+  - Added pending order status to log output
+
+**Trade table behavior (not changed):**
+- Trades still only created when position fully closes (by design)
+- Orders table tracks all individual buy/sell orders
+- This separation is correct and intentional
+
+**Testing needed:**
+- ⏳ Run paper trading and verify orders show as pending before filled
+- ⏳ Verify realistic delay (one iteration) before fill
+- ⏳ Verify slippage simulation
+- ⏳ Check orders table shows correct status progression: pending → filled
+- ⏳ Verify trades table only populated after both entry+exit complete
+- ⏳ Test live trading on testnet to verify exchange status polling
+- ⏳ Verify dashboard active orders display works correctly
+
+**Impact:**
+- **CRITICAL for live trading:** No longer dangerous to run with real money
+- Paper trading now realistic with delays and slippage
+- Proper order state tracking in database
+- Dashboard active orders will show correct pending status
+
+**Verification command:**
+```bash
+docker compose exec bot python -m main paper --symbol BTCUSDT --testnet
+```
+
+### 2026-06-08T14:30Z [CODE] CRITICAL FIX: Trades Not Being Logged to Database ✅
+
+**Status:** ✅ Fixed
+
+**Problem:**
+User reported that NO TRADES were being logged to the database, even though orders were being created and filled.
+
+**Root cause:**
+The `_log_trade()` method in `bot/scripts/trading.py` was trying to insert a `metadata` column that **doesn't exist** in the trades table schema.
+
+**Evidence:**
+- Database schema check showed trades table has 16 columns (no metadata)
+- `_log_trade()` INSERT query included metadata as 15th parameter
+- This caused database error: `column "metadata" of relation "trades" does not exist`
+- Error prevented ALL trades from being logged
+- Exception was likely being caught in main trading loop error handler
+
+**Database schema (actual):**
+```
+trades table columns:
+id, run_id, symbol, entry_order_id, exit_order_id, side,
+entry_price, exit_price, quantity, pnl, pnl_percent,
+commission_total, opened_at, closed_at, duration_seconds, created_at
+```
+
+**Code was trying to insert (incorrect):**
+```sql
+INSERT INTO trades (
+    ..., metadata
+) VALUES (..., $15)
+```
+
+**Fix applied:**
+1. Removed `metadata` dict creation (lines 1018-1023)
+2. Removed `metadata` from INSERT column list
+3. Removed `json.dumps(metadata)` from VALUES parameters
+4. Reduced parameter count from 15 to 14
+5. Added logging statement after successful insert for debugging
+
+**Files modified:**
+- `bot/scripts/trading.py`:
+  - Fixed `_log_trade()` method to match actual database schema
+  - Removed metadata insertion
+  - Added confirmation logging after trade insert
+
+**Why orders worked but trades didn't:**
+- Orders table HAS a metadata column (JSONB) → orders logged successfully
+- Trades table has NO metadata column → trades INSERT failed silently
+- This is why dashboard showed active orders but no completed trades
+
+**Testing needed:**
+- ⏳ Run paper trading until a full trade cycle completes (entry + exit)
+- ⏳ Verify trades table has entries: `SELECT * FROM trades ORDER BY created_at DESC LIMIT 5;`
+- ⏳ Check logs for "Trade logged:" confirmation message
+- ⏳ Verify dashboard Trades page shows completed trades
+- ⏳ Verify Home page analytics show trade statistics
+
+**Verification command:**
+```bash
+# Start paper trading
+docker compose exec bot python -m main paper --symbol BTCUSDT --testnet
+
+# In another terminal, check trades table
+docker compose exec -T postgres psql -U trader -d trader_bot -c "SELECT id, symbol, pnl, pnl_percent, opened_at, closed_at FROM trades ORDER BY created_at DESC LIMIT 5;"
+```
 

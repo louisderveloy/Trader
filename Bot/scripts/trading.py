@@ -51,6 +51,7 @@ from exchanges import BinanceExchange
 from exchanges.exceptions import ExchangeError
 from runs.orders import (
     create_order,
+    update_order_submitted,
     update_order_filled,
     update_order_cancelled,
     update_order_rejected,
@@ -120,6 +121,7 @@ class TradingBot:
         self.last_trade_time: Optional[datetime] = None
         self.confirmation_count = 0
         self.pending_signal: Optional[str] = None
+        self.pending_order: Optional[Dict[str, Any]] = None  # Track pending entry order
 
     async def start(self):
         """Initialize all components and start trading loop."""
@@ -401,8 +403,14 @@ class TradingBot:
         logger.info(
             f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] "
             f"Price: {current_price:.2f} | Score: {weighted_score:.3f} | "
-            f"Position: {'LONG' if self.position else 'NONE'}"
+            f"Position: {'LONG' if self.position else 'NONE'} | "
+            f"Pending: {bool(self.pending_order)}"
         )
+
+        # Check for pending order fills FIRST
+        if self.pending_order:
+            await self._check_pending_order(current_price)
+            return  # Skip other logic while order is pending
 
         # Trading logic
         if self.position is None:
@@ -540,6 +548,170 @@ class TradingBot:
 
         return clamped_score
 
+    async def _check_pending_order(self, current_price: Decimal):
+        """
+        Check if pending order has been filled.
+
+        For paper trading: Simulate fill after one iteration (realistic delay).
+        For live trading: Query exchange for order status.
+        """
+        if not self.pending_order:
+            return
+
+        order_id = self.pending_order["db_order_id"]
+        exchange_order_id = self.pending_order["exchange_order_id"]
+        side = self.pending_order["side"]
+        order_price = self.pending_order["price"]
+        quantity = self.pending_order["quantity"]
+
+        is_filled = False
+        filled_price = order_price
+        commission = Decimal("0")
+
+        if self.mode == "live":
+            # Query Binance for order status
+            try:
+                order_status = await self.exchange.get_order_status(
+                    symbol=self.symbol,
+                    order_id=exchange_order_id
+                )
+
+                status = order_status.get("status", "").upper()
+
+                if status == "FILLED":
+                    # Order fully filled
+                    is_filled = True
+                    filled_price = Decimal(str(order_status.get("avgPrice", order_price)))
+                    # Get actual commission from exchange
+                    commission = Decimal(str(order_status.get("commission", 0)))
+                    if commission == 0:
+                        # Estimate if not provided
+                        commission = quantity * filled_price * Decimal("0.001")
+
+                    logger.info(f"Order {exchange_order_id} FILLED at {filled_price}")
+
+                elif status in ("CANCELED", "REJECTED", "EXPIRED"):
+                    # Order failed
+                    logger.warning(f"Order {exchange_order_id} {status}")
+                    await update_order_cancelled(self.db_pool, order_id, f"Exchange status: {status}")
+                    self.pending_order = None
+                    return
+
+                else:
+                    # Still pending (NEW, PARTIALLY_FILLED)
+                    logger.debug(f"Order {exchange_order_id} status: {status}")
+                    return
+
+            except ExchangeError as e:
+                logger.error(f"Failed to check order status: {e}")
+                # Continue to retry on next iteration
+                return
+
+        else:
+            # Paper trading: Simulate fill with slight slippage
+            # Fill after one iteration (simulates ~15-60s delay)
+            is_filled = True
+
+            # Simulate slippage: 0.05% on average
+            import random
+            slippage_pct = Decimal(str(random.uniform(-0.001, 0.001)))
+            filled_price = order_price * (Decimal("1") + slippage_pct)
+            commission = quantity * filled_price * Decimal("0.001")
+
+            logger.info(f"[PAPER] Order filled at {filled_price} (slippage: {slippage_pct*100:.3f}%)")
+
+        if is_filled:
+            # Update order as filled
+            await update_order_filled(
+                db_pool=self.db_pool,
+                order_id=order_id,
+                filled_quantity=quantity,
+                filled_price=filled_price,
+                commission=commission,
+                exchange_order_id=exchange_order_id,
+            )
+
+            # Update position state
+            if side == "buy":
+                # Entry order filled
+                stop_loss = self.pending_order["stop_loss"]
+                take_profit = self.pending_order["take_profit"]
+                entry_score = self.pending_order["score"]
+                entry_signals = self.pending_order["signals"]
+                entry_time = datetime.now(timezone.utc)
+
+                # Create trade entry in database
+                trade_id = await self._create_trade_entry(
+                    entry_price=filled_price,
+                    quantity=quantity,
+                    entry_time=entry_time,
+                    entry_order_id=order_id,
+                )
+
+                self.position = {
+                    "trade_id": trade_id,
+                    "entry_price": filled_price,
+                    "entry_time": entry_time,
+                    "quantity": quantity,
+                    "stop_loss": stop_loss,
+                    "take_profit": take_profit,
+                    "order_id": exchange_order_id,
+                    "entry_order_id": order_id,
+                    "entry_score": entry_score,
+                    "entry_signals": entry_signals
+                }
+
+                logger.info("=" * 60)
+                logger.info(f"POSITION OPENED")
+                logger.info(f"Entry: {filled_price:.2f} | Qty: {quantity:.6f}")
+                logger.info(f"SL: {stop_loss:.2f} | TP: {take_profit:.2f}")
+                logger.info(f"Trade ID: {trade_id}")
+                logger.info("=" * 60)
+
+                # Publish to Redis
+                await self._publish_trade_event("entry", filled_price, quantity)
+
+            elif side == "sell":
+                # Exit order filled - trade completed
+                entry_price = self.position["entry_price"]
+                pnl = (filled_price - entry_price) * quantity
+                pnl_pct = (filled_price - entry_price) / entry_price * 100
+
+                # Update capital
+                self.capital += pnl
+
+                # Update trade with exit data
+                exit_reason = self.pending_order["exit_reason"]
+                exit_score = self.pending_order["score"]
+                exit_signals = self.pending_order["signals"]
+
+                await self._log_trade(
+                    trade_id=self.position["trade_id"],
+                    exit_price=filled_price,
+                    exit_reason=exit_reason,
+                    pnl=pnl,
+                    pnl_pct=pnl_pct,
+                    exit_score=exit_score,
+                    exit_signals=exit_signals,
+                    exit_order_id=order_id,
+                )
+
+                logger.info("=" * 60)
+                logger.info(f"POSITION CLOSED")
+                logger.info(f"Entry: {entry_price:.2f} | Exit: {filled_price:.2f}")
+                logger.info(f"P&L: {pnl:.2f} USDT ({pnl_pct:+.2f}%)")
+                logger.info(f"Capital: {self.capital:.2f} USDT")
+                logger.info("=" * 60)
+
+                # Publish to Redis
+                await self._publish_trade_event("exit", filled_price, quantity, pnl)
+
+                # Clear position
+                self.position = None
+
+            # Clear pending order
+            self.pending_order = None
+
     async def _check_entry(
         self,
         score: float,
@@ -665,17 +837,10 @@ class TradingBot:
                     price=price
                 )
                 exchange_order_id = str(order.get("orderId"))
-                logger.info(f"Order placed: {exchange_order_id}")
+                logger.info(f"Order placed on exchange: {exchange_order_id}")
 
-                # Update order as filled (simplified - real implementation would track fills)
-                await update_order_filled(
-                    db_pool=self.db_pool,
-                    order_id=db_order_id,
-                    filled_quantity=quantity,
-                    filled_price=price,
-                    commission=quantity * price * Decimal("0.001"),  # 0.1% fee estimate
-                    exchange_order_id=exchange_order_id,
-                )
+                # Update order with exchange ID
+                await update_order_submitted(self.db_pool, db_order_id, exchange_order_id)
 
             except ExchangeError as e:
                 logger.error(f"Failed to place order: {e}")
@@ -689,36 +854,28 @@ class TradingBot:
                 )
                 return
         else:
+            # Paper trading - generate simulated order ID
             exchange_order_id = f"paper_{uuid4().hex[:8]}"
-            logger.info(f"[PAPER] Simulated order: {exchange_order_id}")
+            logger.info(f"[PAPER] Order placed: {exchange_order_id}")
 
-            # Mark paper order as filled
-            await update_order_filled(
-                db_pool=self.db_pool,
-                order_id=db_order_id,
-                filled_quantity=quantity,
-                filled_price=price,
-                commission=quantity * price * Decimal("0.001"),
-                exchange_order_id=exchange_order_id,
-            )
-
-        # Update state
-        self.position = {
-            "entry_price": price,
-            "entry_time": datetime.now(timezone.utc),
+        # Store pending order for fill tracking
+        self.pending_order = {
+            "db_order_id": db_order_id,
+            "exchange_order_id": exchange_order_id,
+            "side": "buy",
+            "price": price,
             "quantity": quantity,
             "stop_loss": stop_loss,
             "take_profit": take_profit,
-            "order_id": exchange_order_id,
-            "entry_order_id": db_order_id,  # Store DB order ID for trade linking
-            "entry_score": score,
-            "entry_signals": signals.copy()
+            "score": score,
+            "signals": signals.copy(),
         }
+
+        # Update trade counter (will be committed when order fills)
         self.trades_today += 1
         self.last_trade_time = datetime.now(timezone.utc)
 
-        # Publish to Redis
-        await self._publish_trade_event("entry", price, quantity)
+        logger.info(f"Entry order pending: {exchange_order_id} | Price: {price:.2f}")
 
     async def _execute_exit(
         self,
@@ -760,7 +917,7 @@ class TradingBot:
 
         exchange_order_id = None
         if self.mode == "live":
-            # Place real order
+            # Place real market order (should fill immediately, but still verify)
             try:
                 order = await self.exchange.place_market_order(
                     symbol=self.symbol,
@@ -768,17 +925,10 @@ class TradingBot:
                     quantity=quantity
                 )
                 exchange_order_id = str(order.get("orderId"))
-                logger.info(f"Exit order placed: {exchange_order_id}")
+                logger.info(f"Exit order placed on exchange: {exchange_order_id}")
 
-                # Update order as filled
-                await update_order_filled(
-                    db_pool=self.db_pool,
-                    order_id=db_order_id,
-                    filled_quantity=quantity,
-                    filled_price=price,
-                    commission=quantity * price * Decimal("0.001"),
-                    exchange_order_id=exchange_order_id,
-                )
+                # Update order with exchange ID
+                await update_order_submitted(self.db_pool, db_order_id, exchange_order_id)
 
             except ExchangeError as e:
                 logger.error(f"Failed to place exit order: {e}")
@@ -792,34 +942,23 @@ class TradingBot:
                 )
                 return
         else:
+            # Paper trading - generate simulated order ID
             exchange_order_id = f"paper_{uuid4().hex[:8]}"
-            logger.info(f"[PAPER] Simulated exit: {exchange_order_id}")
+            logger.info(f"[PAPER] Exit order placed: {exchange_order_id}")
 
-            # Mark paper order as filled
-            await update_order_filled(
-                db_pool=self.db_pool,
-                order_id=db_order_id,
-                filled_quantity=quantity,
-                filled_price=price,
-                commission=quantity * price * Decimal("0.001"),
-                exchange_order_id=exchange_order_id,
-            )
+        # Store pending exit order for fill tracking
+        self.pending_order = {
+            "db_order_id": db_order_id,
+            "exchange_order_id": exchange_order_id,
+            "side": "sell",
+            "price": price,
+            "quantity": quantity,
+            "exit_reason": reason,
+            "score": score,
+            "signals": signals.copy(),
+        }
 
-        # Update capital
-        self.capital += pnl
-
-        # Log trade to database with order IDs
-        await self._log_trade(
-            price, reason, pnl, pnl_pct, score, signals,
-            entry_order_id=self.position.get("entry_order_id"),
-            exit_order_id=db_order_id,
-        )
-
-        # Publish to Redis
-        await self._publish_trade_event("exit", price, quantity, pnl)
-
-        # Clear position
-        self.position = None
+        logger.info(f"Exit order pending: {exchange_order_id} | Price: {price:.2f} | Reason: {reason}")
 
     async def _store_candles(self, candles: list):
         """Store candles in database."""
@@ -870,63 +1009,116 @@ class TradingBot:
             )
         return row["id"] if row else None
 
+    async def _create_trade_entry(
+        self,
+        entry_price: Decimal,
+        quantity: Decimal,
+        entry_time: datetime,
+        entry_order_id: UUID,
+    ) -> UUID:
+        """
+        Create trade entry in database when position opens.
+        Returns trade_id to track the ongoing trade.
+        """
+        # Calculate entry commission (0.1% of entry value)
+        entry_commission = quantity * entry_price * Decimal("0.001")
+
+        query = """
+            INSERT INTO trades (
+                run_id, symbol, side, entry_order_id,
+                opened_at, entry_price, quantity,
+                commission_total, status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            RETURNING id
+        """
+
+        async with self.db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                query,
+                self.run_id,
+                self.symbol,
+                "long",
+                entry_order_id,
+                entry_time,
+                entry_price,
+                quantity,
+                entry_commission,
+                "open",
+            )
+
+        trade_id = row["id"]
+
+        logger.info(
+            f"Trade entry created: id={trade_id}, entry={entry_price:.2f}, qty={quantity:.6f}",
+            extra={
+                "run_id": self.run_id,
+                "trade_id": str(trade_id),
+                "entry_order_id": str(entry_order_id),
+            }
+        )
+
+        return trade_id
+
     async def _log_trade(
         self,
+        trade_id: UUID,
         exit_price: Decimal,
         exit_reason: str,
         pnl: Decimal,
         pnl_pct: float,
         exit_score: float,
         exit_signals: Dict[str, float],
-        entry_order_id: Optional[UUID] = None,
         exit_order_id: Optional[UUID] = None,
     ):
-        """Log completed trade to database."""
+        """Update trade with exit data and mark as closed."""
         # Calculate duration
         entry_time = self.position["entry_time"]
         exit_time = datetime.now(timezone.utc)
         duration_seconds = int((exit_time - entry_time).total_seconds())
 
-        # Calculate commission (estimate 0.1% per side = 0.2% total)
+        # Calculate exit commission and add to total (0.1% of exit value)
         quantity = self.position["quantity"]
         entry_price = self.position["entry_price"]
-        commission_total = (quantity * entry_price + quantity * exit_price) * Decimal("0.001")
+        exit_commission = quantity * exit_price * Decimal("0.001")
 
-        metadata = {
-            "entry_score": self.position["entry_score"],
-            "exit_score": exit_score,
-            "entry_signals": self.position["entry_signals"],
-            "exit_signals": exit_signals
-        }
-
+        # Total commission = entry commission (already in DB) + exit commission
+        # We'll UPDATE by adding the exit commission to existing commission_total
         query = """
-            INSERT INTO trades (
-                run_id, symbol, side, entry_order_id, exit_order_id,
-                opened_at, closed_at, duration_seconds,
-                entry_price, exit_price, quantity,
-                pnl, pnl_percent, commission_total, metadata
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            UPDATE trades
+            SET
+                exit_order_id = $1,
+                exit_price = $2,
+                closed_at = $3,
+                duration_seconds = $4,
+                pnl = $5,
+                pnl_percent = $6,
+                commission_total = commission_total + $7,
+                status = 'closed'
+            WHERE id = $8
         """
 
         async with self.db_pool.acquire() as conn:
             await conn.execute(
                 query,
-                self.run_id,
-                self.symbol,
-                "long",
-                entry_order_id,
                 exit_order_id,
-                entry_time,
+                exit_price,
                 exit_time,
                 duration_seconds,
-                entry_price,
-                exit_price,
-                quantity,
                 pnl,
                 pnl_pct,
-                commission_total,
-                json.dumps(metadata)
+                exit_commission,
+                trade_id,
             )
+
+        logger.info(
+            f"Trade closed: id={trade_id}, entry={entry_price:.2f}, exit={exit_price:.2f}, "
+            f"pnl={pnl:.2f} ({pnl_pct:+.2f}%), duration={duration_seconds}s",
+            extra={
+                "run_id": self.run_id,
+                "trade_id": str(trade_id),
+                "exit_order_id": str(exit_order_id) if exit_order_id else None,
+            }
+        )
 
     async def _publish_heartbeat(self):
         """Publish heartbeat to Redis."""
