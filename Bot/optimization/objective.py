@@ -19,6 +19,7 @@ from .types import (
 )
 from backtesting.types import BacktestConfig
 from backtesting.vectorbt_engine import VectorbtBacktester
+from strategy.config import StrategyEngineConfig
 
 # Structured logging
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ class ObjectiveFunction:
         split: WalkForwardSplit,
         db_pool: asyncpg.Pool,
         search_space: WeightsSearchSpace,
+        strategy_config: StrategyEngineConfig,
         is_test: bool = False
     ):
         """
@@ -55,12 +57,14 @@ class ObjectiveFunction:
             split: Walk-forward split
             db_pool: Database connection pool
             search_space: Weights search space configuration
+            strategy_config: Strategy configuration from database
             is_test: Whether this is test phase (no pruning)
         """
         self.config = config
         self.split = split
         self.db_pool = db_pool
         self.search_space = search_space
+        self.strategy_config = strategy_config
         self.is_test = is_test
 
         # Use train or test dates depending on phase
@@ -156,18 +160,20 @@ class ObjectiveFunction:
         Raises:
             Exception: If backtest fails
         """
-        # Create backtest configuration
+        # Create backtest configuration with thresholds from database config
         backtest_config = BacktestConfig(
             symbol=self.config.symbol,
             timeframe=self.config.timeframe,
             start_date=self.start_date,
             end_date=self.end_date,
             initial_capital=self.config.initial_capital,
-            # Weights will be loaded from a temporary weights_set
-            # For optimization, we'll pass them directly to the backtester
-            # This requires modifying the backtester to accept weights parameter
-            # For now, we'll use a workaround through metadata
-            strategy_params={"weights": weights}
+            # Pass weights AND thresholds from database config
+            strategy_params={
+                "weights": weights,
+                "entry_threshold": self.strategy_config.strategy.entry_threshold,
+                "exit_threshold": self.strategy_config.strategy.exit_threshold,
+                "confirmation_candles": self.strategy_config.strategy.confirmation_candles,
+            }
         )
 
         # Create backtester
@@ -258,6 +264,7 @@ def create_objective_function(
     split: WalkForwardSplit,
     db_pool: asyncpg.Pool,
     search_space: WeightsSearchSpace,
+    strategy_config: StrategyEngineConfig,
     is_test: bool = False
 ) -> ObjectiveFunction:
     """
@@ -268,6 +275,7 @@ def create_objective_function(
         split: Walk-forward split
         db_pool: Database connection pool
         search_space: Weights search space
+        strategy_config: Strategy configuration from database
         is_test: Whether this is test evaluation
 
     Returns:
@@ -278,6 +286,7 @@ def create_objective_function(
         split=split,
         db_pool=db_pool,
         search_space=search_space,
+        strategy_config=strategy_config,
         is_test=is_test
     )
 
@@ -287,6 +296,7 @@ async def evaluate_weights(
     config: OptimizationConfig,
     split: WalkForwardSplit,
     db_pool: asyncpg.Pool,
+    strategy_config: StrategyEngineConfig,
     is_test: bool = False
 ) -> float:
     """
@@ -300,6 +310,7 @@ async def evaluate_weights(
         config: Optimization configuration
         split: Walk-forward split
         db_pool: Database connection pool
+        strategy_config: Strategy configuration from database
         is_test: Whether this is test evaluation
 
     Returns:
@@ -309,14 +320,20 @@ async def evaluate_weights(
     start_date = split.test_start if is_test else split.train_start
     end_date = split.test_end if is_test else split.train_end
 
-    # Create backtest configuration
+    # Create backtest configuration with thresholds from database config
     backtest_config = BacktestConfig(
         symbol=config.symbol,
         timeframe=config.timeframe,
         start_date=start_date,
         end_date=end_date,
         initial_capital=config.initial_capital,
-        strategy_params={"weights": weights}
+        # Pass weights AND thresholds from database config
+        strategy_params={
+            "weights": weights,
+            "entry_threshold": strategy_config.strategy.entry_threshold,
+            "exit_threshold": strategy_config.strategy.exit_threshold,
+            "confirmation_candles": strategy_config.strategy.confirmation_candles,
+        }
     )
 
     # Create backtester

@@ -31,6 +31,8 @@ from runs.context import create_run, run_context
 from runs.manager import RunManager
 from runs.errors import log_exception, ErrorCategory, ErrorSeverity
 
+from strategy.config import StrategyEngineConfig
+
 # Structured logging
 logger = logging.getLogger(__name__)
 
@@ -74,6 +76,7 @@ class OptimizationRunner:
         self.db_pool = db_pool
         self.search_space = search_space or create_search_space()
         self.run_id = run_id
+        self.strategy_config: Optional[StrategyEngineConfig] = None  # Loaded from DB
 
         # Validate configuration
         validate_config(config)
@@ -142,6 +145,9 @@ class OptimizationRunner:
         started_at = datetime.now(timezone.utc)
 
         try:
+            # Load strategy configuration from database
+            await self._load_strategy_config()
+
             # Generate walk-forward splits
             splits = await self._generate_splits()
 
@@ -165,6 +171,7 @@ class OptimizationRunner:
                     config=self.config,
                     split=split,
                     db_pool=self.db_pool,
+                    strategy_config=self.strategy_config,
                     is_test=True
                 )
 
@@ -273,6 +280,23 @@ class OptimizationRunner:
             )
             raise
 
+    async def _load_strategy_config(self):
+        """Load strategy configuration from database."""
+        try:
+            self.strategy_config = await StrategyEngineConfig.from_db(self.db_pool)
+            logger.info(
+                "Loaded strategy configuration from database",
+                extra={
+                    "entry_threshold": self.strategy_config.strategy.entry_threshold,
+                    "exit_threshold": self.strategy_config.strategy.exit_threshold,
+                    "confirmation_candles": self.strategy_config.strategy.confirmation_candles,
+                }
+            )
+        except ValueError as e:
+            logger.error(f"Failed to load configuration from database: {e}")
+            logger.error("Please create a configuration first using: python -m main config create")
+            raise
+
     async def _generate_splits(self):
         """Generate walk-forward splits from database."""
         logger.info("Generating walk-forward splits")
@@ -325,6 +349,7 @@ class OptimizationRunner:
             split=split,
             db_pool=self.db_pool,
             search_space=self.search_space,
+            strategy_config=self.strategy_config,
             is_test=False
         )
 

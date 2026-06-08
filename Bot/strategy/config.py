@@ -5,9 +5,12 @@ This module defines configuration dataclasses for all strategy engine components
 loaded from environment variables or database settings.
 """
 
+import logging
 from dataclasses import dataclass
-from typing import Optional
+
 from .types import PositionSizeMode, StopLossMode, TakeProfitMode
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -172,6 +175,93 @@ class StrategyEngineConfig:
         # Cooldown configuration
         cooldown = CooldownConfig(
             after_trade_seconds=int(os.getenv("COOLDOWN_AFTER_TRADE_SECONDS", "3600"))
+        )
+
+        return cls(
+            strategy=strategy,
+            risk=risk,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            cooldown=cooldown
+        )
+
+    @classmethod
+    async def from_db(cls, db_pool) -> "StrategyEngineConfig":
+        """
+        Load configuration from database.
+
+        Loads the most recent configuration from the config table.
+
+        Args:
+            db_pool: asyncpg database connection pool
+
+        Returns:
+            StrategyEngineConfig instance with values from database
+
+        Raises:
+            ValueError: If no configuration exists in database
+            ValueError: If any configuration value is invalid
+        """
+        import json
+
+        query = "SELECT config FROM config ORDER BY updated_at DESC LIMIT 1"
+
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(query)
+
+        if not row or not row["config"]:
+            raise ValueError(
+                "No configuration found in database. Please create a config first using 'python -m main config create'")
+
+        # Parse config
+        config = row["config"]
+        if isinstance(config, str):
+            config = json.loads(config)
+
+        logger.debug(f"Loaded config: {config}")
+
+        # Extract strategy config
+        strategy_data = config.get("strategy", {})
+        strategy = StrategyConfig(
+            entry_threshold=float(strategy_data.get("entry_threshold", 0.6)),
+            exit_threshold=float(strategy_data.get("exit_threshold", -0.3)),
+            confirmation_candles=int(strategy_data.get("confirmation_candles", 2))
+        )
+
+        # Extract risk config
+        risk_data = config.get("risk", {})
+        position_size_mode_str = risk_data.get("position_size_mode", "confidence")
+        risk = RiskConfig(
+            max_trades_per_day=int(risk_data.get("max_trades_per_day", 5)),
+            max_exposure_percent=float(risk_data.get("max_exposure_percent", 30.0)),
+            position_size_mode=PositionSizeMode(position_size_mode_str),
+            fixed_size_usdt=float(risk_data.get("fixed_size_usdt", 100.0)),
+            atr_multiplier=float(risk_data.get("atr_multiplier", 2.0)),
+            capital_risk_percent=float(risk_data.get("capital_risk_percent", 1.0))
+        )
+
+        # Extract stop-loss config
+        sl_data = config.get("stop_loss", {})
+        sl_mode_str = sl_data.get("mode", "atr")
+        stop_loss = StopLossConfig(
+            mode=StopLossMode(sl_mode_str),
+            atr_multiplier=float(sl_data.get("atr_multiplier", 2.0)),
+            fixed_percent=float(sl_data.get("fixed_percent", 2.0))
+        )
+
+        # Extract take-profit config
+        tp_data = config.get("take_profit", {})
+        tp_mode_str = tp_data.get("mode", "atr")
+        take_profit = TakeProfitConfig(
+            mode=TakeProfitMode(tp_mode_str),
+            atr_multiplier=float(tp_data.get("atr_multiplier", 3.0)),
+            fixed_percent=float(tp_data.get("fixed_percent", 4.0))
+        )
+
+        # Extract cooldown config
+        cooldown_data = config.get("cooldown", {})
+        cooldown = CooldownConfig(
+            after_trade_seconds=int(cooldown_data.get("after_trade_seconds", 3600))
         )
 
         return cls(

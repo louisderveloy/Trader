@@ -35,6 +35,7 @@ from backtesting.types import BacktestConfig, BacktestMode
 from backtesting.vectorbt_engine import VectorbtBacktester
 from runs.types import RunConfig, RunType, RunEnvironment, RunResult
 from runs.context import create_run, run_context
+from strategy.config import StrategyEngineConfig
 
 # Setup logging
 logging.basicConfig(
@@ -127,6 +128,7 @@ async def run_backtest(
     end_date: datetime,
     initial_capital: Decimal,
     weights: dict,
+    strategy_config: StrategyEngineConfig,
     engine: str = "vectorbt",
     save_results: bool = False,
     weights_set_id: Optional[int] = None
@@ -141,6 +143,7 @@ async def run_backtest(
         end_date: End date
         initial_capital: Initial capital
         weights: Indicator weights dict
+        strategy_config: Strategy configuration from database
         engine: Backtesting engine ('vectorbt' or 'event_driven')
         save_results: Whether to save results to database
         weights_set_id: Optional weights set ID for linking
@@ -157,20 +160,27 @@ async def run_backtest(
     logger.info(f"Initial capital: {initial_capital} USDT")
     logger.info(f"Engine: {engine}")
     logger.info(f"Weights: {json.dumps(weights, indent=2)}")
+    logger.info(f"Entry threshold: {strategy_config.strategy.entry_threshold}")
+    logger.info(f"Exit threshold: {strategy_config.strategy.exit_threshold}")
     logger.info("=" * 80)
 
     # Create database pool
     db_pool = await get_db_pool()
 
     try:
-        # Create backtest configuration
+        # Create backtest configuration with thresholds from database config
         config = BacktestConfig(
             symbol=symbol,
             timeframe=timeframe,
             start_date=start_date,
             end_date=end_date,
             initial_capital=initial_capital,
-            strategy_params={"weights": weights}
+            strategy_params={
+                "weights": weights,
+                "entry_threshold": strategy_config.strategy.entry_threshold,
+                "exit_threshold": strategy_config.strategy.exit_threshold,
+                "confirmation_candles": strategy_config.strategy.confirmation_candles,
+            }
         )
 
         # Create run configuration if saving results
@@ -324,9 +334,20 @@ async def run_backtest_cli(args):
 
     initial_capital = Decimal(str(args.initial_capital))
 
-    # Get weights
+    # Create database pool
     db_pool = await get_db_pool()
 
+    # Load strategy configuration from database
+    try:
+        strategy_config = await StrategyEngineConfig.from_db(db_pool)
+        logger.info("Loaded strategy configuration from database")
+    except ValueError as e:
+        logger.error(f"Failed to load configuration from database: {e}")
+        logger.error("Please create a configuration first using: python -m main config create")
+        await db_pool.close()
+        sys.exit(1)
+
+    # Get weights
     weights_set_id = None
     try:
         if args.weights_set_id:
@@ -370,6 +391,7 @@ async def run_backtest_cli(args):
         end_date=end_date,
         initial_capital=initial_capital,
         weights=weights,
+        strategy_config=strategy_config,
         engine=args.engine,
         save_results=args.save,
         weights_set_id=weights_set_id

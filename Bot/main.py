@@ -301,6 +301,16 @@ def cmd_status(args):
     sys.exit(exit_code)
 
 
+def cmd_config(args):
+    """Manage bot configuration."""
+    if args.config_cmd == 'create':
+        from scripts.configure import create_config_interactive
+        asyncio.run(create_config_interactive())
+    else:
+        logger.error("Unknown config command. Use 'create' to create a new configuration.")
+        sys.exit(1)
+
+
 def cmd_docker_entry(args):
     """Display system status and keep container alive."""
     async def _docker_entry():
@@ -359,6 +369,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Step 0: Create bot configuration (REQUIRED FIRST)
+  python -m main config create
+
   # Step 1: Fetch historical data (required for backtest/optimize)
   python -m main fetch --symbol BTCUSDT --start-date 2024-01-01 --end-date 2024-12-31
 
@@ -485,6 +498,17 @@ Examples:
         help='Skip mainnet confirmation prompt (dangerous!)')
 
     # -------------------------------------------------------------------------
+    # CONFIG subcommand
+    # -------------------------------------------------------------------------
+    config_parser = subparsers.add_parser('config',
+        help='Manage bot configuration')
+    config_subparsers = config_parser.add_subparsers(dest='config_cmd', help='Config commands')
+
+    # config create
+    config_create = config_subparsers.add_parser('create',
+        help='Create new configuration interactively')
+
+    # -------------------------------------------------------------------------
     # STATUS subcommand
     # -------------------------------------------------------------------------
     status_parser = subparsers.add_parser('status',
@@ -520,6 +544,11 @@ Examples:
         cmd_paper(args)
     elif args.command == 'live':
         cmd_live(args)
+    elif args.command == 'config':
+        if not args.config_cmd:
+            config_parser.print_help()
+            sys.exit(1)
+        cmd_config(args)
     elif args.command == 'status':
         cmd_status(args)
     elif args.command == 'docker_entry':

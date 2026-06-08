@@ -56,6 +56,7 @@ from runs.orders import (
     update_order_rejected,
 )
 from runs.errors import log_exception, ErrorCategory, ErrorSeverity
+from strategy.config import StrategyEngineConfig
 
 # Setup logging
 logging.basicConfig(
@@ -118,12 +119,8 @@ class TradingBot:
         self.weights: Dict[str, float] = {}
         self.is_running = False
 
-        # Configuration (loaded from database)
-        self.entry_threshold = 0.3
-        self.exit_threshold = -0.2
-        self.confirmation_candles = 2
-        self.max_trades_per_day = 5
-        self.cooldown_minutes = 60
+        # Configuration (loaded from database in start())
+        self.config: Optional[StrategyEngineConfig] = None
 
         # Tracking
         self.trades_today = 0
@@ -146,6 +143,7 @@ class TradingBot:
         try:
             # Initialize components
             await self._init_database()
+            await self._load_config()
             await self._init_exchange()
             await self._init_redis()
             await self._load_weights()
@@ -192,6 +190,21 @@ class TradingBot:
         dsn = dsn.replace("postgresql+asyncpg://", "postgresql://")
         self.db_pool = await asyncpg.create_pool(dsn=dsn, min_size=1, max_size=5)
         logger.info("Database connection established")
+
+    async def _load_config(self):
+        """Load configuration from database."""
+        try:
+            self.config = await StrategyEngineConfig.from_db(self.db_pool)
+            logger.info("Configuration loaded from database")
+            logger.info(f"  Entry threshold: {self.config.strategy.entry_threshold}")
+            logger.info(f"  Exit threshold: {self.config.strategy.exit_threshold}")
+            logger.info(f"  Confirmation candles: {self.config.strategy.confirmation_candles}")
+            logger.info(f"  Max trades/day: {self.config.risk.max_trades_per_day}")
+            logger.info(f"  Position size mode: {self.config.risk.position_size_mode.value}")
+        except ValueError as e:
+            logger.error(f"Failed to load configuration from database: {e}")
+            logger.error("Please create a configuration first using: python -m main config create")
+            raise
 
     async def _init_exchange(self):
         """Initialize exchange connection."""
@@ -261,17 +274,14 @@ class TradingBot:
         # Get current time for both start_date and end_date (live runs are open-ended)
         now = datetime.now(timezone.utc)
 
-        config_snapshot = {
+        # Create config snapshot using the loaded config
+        config_snapshot = self.config.to_snapshot()
+        config_snapshot.update({
             "mode": self.mode,
             "testnet": self.testnet,
             "weights": self.weights,
-            "entry_threshold": self.entry_threshold,
-            "exit_threshold": self.exit_threshold,
-            "confirmation_candles": self.confirmation_candles,
-            "max_trades_per_day": self.max_trades_per_day,
-            "cooldown_minutes": self.cooldown_minutes,
             "initial_capital": str(self.initial_capital),
-        }
+        })
 
         query = """
             INSERT INTO runs (
@@ -508,17 +518,18 @@ class TradingBot:
     ):
         """Check for entry conditions and execute if met."""
         # Check daily trade limit
-        if self.trades_today >= self.max_trades_per_day:
+        if self.trades_today >= self.config.risk.max_trades_per_day:
             return
 
         # Check cooldown
         if self.last_trade_time:
-            cooldown_end = self.last_trade_time + timedelta(minutes=self.cooldown_minutes)
+            cooldown_seconds = self.config.cooldown.after_trade_seconds
+            cooldown_end = self.last_trade_time + timedelta(seconds=cooldown_seconds)
             if datetime.now(timezone.utc) < cooldown_end:
                 return
 
         # Check entry threshold
-        if score >= self.entry_threshold:
+        if score >= self.config.strategy.entry_threshold:
             # Anti-repainting confirmation
             if self.pending_signal == "entry":
                 self.confirmation_count += 1
@@ -526,7 +537,7 @@ class TradingBot:
                 self.pending_signal = "entry"
                 self.confirmation_count = 1
 
-            if self.confirmation_count >= self.confirmation_candles:
+            if self.confirmation_count >= self.config.strategy.confirmation_candles:
                 # Execute entry
                 await self._execute_entry(price, score, signals)
                 self.pending_signal = None
@@ -557,14 +568,14 @@ class TradingBot:
             exit_reason = "take_profit"
 
         # Check signal-based exit
-        elif score <= self.exit_threshold:
+        elif score <= self.config.strategy.exit_threshold:
             if self.pending_signal == "exit":
                 self.confirmation_count += 1
             else:
                 self.pending_signal = "exit"
                 self.confirmation_count = 1
 
-            if self.confirmation_count >= self.confirmation_candles:
+            if self.confirmation_count >= self.config.strategy.confirmation_candles:
                 exit_reason = "signal"
 
         if exit_reason:
