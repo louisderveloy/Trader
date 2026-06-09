@@ -51,7 +51,7 @@ services:
   # Traefik (Reverse Proxy)
   # ==========================================
   traefik:
-    image: traefik:v3.0
+    image: traefik:v3.7
     container_name: trader-traefik
     restart: unless-stopped
     command:
