@@ -35,11 +35,10 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      # SECURITY: Bind to localhost only (127.0.0.1) instead of all interfaces (0.0.0.0)
-      # This prevents direct internet access to PostgreSQL
-      # External Grafana access must be configured via firewall (ufw)
+      # Expose on all interfaces for external Grafana connection
+      # SECURITY: Configure firewall (ufw) to allow ONLY Grafana server IP
       # See docs/A6_runbook.md for firewall setup instructions
-      - "127.0.0.1:5432:5432"
+      - "0.0.0.0:5432:5432"
     networks:
       - trader-network
     healthcheck:
@@ -84,9 +83,8 @@ services:
   # ==========================================
   bot:
     container_name: trader-bot
-    build:
-      context: ./bot
-      dockerfile: Dockerfile
+    image: ghcr.io/${GITHUB_USERNAME}/trader-bot:latest
+    pull_policy: always
     restart: unless-stopped
     env_file:
       - .env
@@ -112,9 +110,8 @@ services:
   # ==========================================
   api:
     container_name: trader-api
-    build:
-      context: ./api
-      dockerfile: Dockerfile
+    image: ghcr.io/${GITHUB_USERNAME}/trader-api:latest
+    pull_policy: always
     restart: unless-stopped
     env_file:
       - .env
@@ -143,12 +140,8 @@ services:
   # ==========================================
   dashboard:
     container_name: trader-dashboard
-    build:
-      context: ./dashboard
-      dockerfile: Dockerfile.prod  # Production Dockerfile with nginx
-      args:
-        VITE_API_BASE_URL: https://${DOMAIN_API}
-        # VITE_GRAFANA_BASE_URL: Set externally if using external Grafana
+    image: ghcr.io/${GITHUB_USERNAME}/trader-dashboard:latest
+    pull_policy: always
     restart: unless-stopped
     networks:
       - trader-network
