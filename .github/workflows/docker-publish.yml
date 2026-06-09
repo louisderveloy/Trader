@@ -157,8 +157,14 @@ jobs:
               -o docker-compose.prod.yml \
               https://raw.githubusercontent.com/${{ github.repository }}/main/docker-compose.prod.yml
 
+            # Login to GitHub Container Registry
+            echo "$GITHUB_TOKEN" | docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin
+
             # Pull latest images
             docker compose -f docker-compose.prod.yml pull
+
+            # Logout for security
+            docker logout ghcr.io
 
             # Restart services with zero-downtime (recreate only changed containers)
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
