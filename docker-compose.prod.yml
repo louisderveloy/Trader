@@ -93,6 +93,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     volumes:
       - bot_logs:/var/log/trader-bot
+      - ./db:/db  # Mount database migrations folder
     depends_on:
       postgres:
         condition: service_healthy

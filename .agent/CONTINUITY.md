@@ -2264,3 +2264,126 @@ docker compose -f docker-compose.prod.yml up -d
 - Easy rollback to previous image versions
 - PostgreSQL now accessible for external Grafana (with firewall protection)
 
+
+### 2026-06-09T[CURRENT_TIME]Z [CODE] Automatic Database Migrations on VPS Deployment
+
+**Status:** ✅ Implemented
+
+**Context:**
+Implemented automatic database migrations using Alembic during VPS deployment. Migrations now run automatically when the bot container starts, ensuring database schema is always up-to-date with the codebase.
+
+**Implementation Strategy (Hybrid Approach):**
+1. GitHub Actions workflow copies `/db` folder to VPS via SCP
+2. Bot container runs migrations automatically via entrypoint script
+3. Bot only starts if migrations succeed (fail-safe)
+
+**Files Created:**
+- `Bot/entrypoint.sh`:
+  - Waits for PostgreSQL readiness using `pg_isready`
+  - Runs `alembic upgrade head` from `/db` folder
+  - Exits with code 1 if migration fails (prevents bot startup)
+  - Starts bot with `python -m main docker_entry` if migration succeeds
+  - All migration logs captured by Docker
+
+**Files Modified:**
+
+1. **`Bot/Dockerfile`:**
+   - Added installation of `postgresql-client` (for pg_isready healthcheck)
+   - Copied `entrypoint.sh` to `/entrypoint.sh`
+   - Made entrypoint.sh executable with `chmod +x`
+   - Changed ENTRYPOINT from direct Python execution to `/entrypoint.sh`
+
+2. **`.github/workflows/docker-publish.yml`:**
+   - Added `Checkout code` step in `deploy-to-vps` job
+   - Added `Copy database migrations to VPS` step using SCP
+   - Copies entire `/db` folder before SSH deployment script runs
+   - Uses temporary SSH key file for secure SCP transfer
+
+3. **`docker-compose.prod.yml`:**
+   - Added bind mount for bot service: `./db:/db`
+   - Bot container now has access to latest migration files from VPS filesystem
+
+**Migration Workflow:**
+
+```
+Push to main
+  → Build images (bot, api, dashboard)
+  → Push to GHCR
+  → Checkout code in deploy job
+  → SCP /db folder to VPS
+  → SSH to VPS
+    → Download docker-compose.prod.yml
+    → Pull latest images
+    → docker compose up -d
+      → Bot container starts
+        → entrypoint.sh runs
+          → Wait for PostgreSQL (pg_isready)
+          → Run alembic upgrade head
+          → IF SUCCESS: start bot
+          → IF FAILURE: exit 1 (container crash)
+```
+
+**Error Handling:**
+- If migration fails: bot container exits with code 1
+- Docker restart policy will retry bot startup
+- Failed migrations are visible in: `docker compose logs bot`
+- Container status shows `Restarting` or `Exited (1)` when migration fails
+
+**Rollback Procedure:**
+```bash
+# SSH to VPS
+cd /home/user/trader
+
+# Rollback database manually
+docker compose -f docker-compose.prod.yml exec bot alembic downgrade <revision>
+
+# Rollback to previous image
+# Edit docker-compose.prod.yml: image: ghcr.io/user/trader-bot:main-sha-<previous>
+
+# Restart
+docker compose -f docker-compose.prod.yml up -d
+```
+
+**Verification Commands (on VPS):**
+```bash
+# Check /db folder was copied
+ls -la /home/user/trader/db/migrations/versions/
+
+# Check migration logs
+docker compose -f docker-compose.prod.yml logs bot | grep -i "alembic\|migration"
+
+# Check current database version
+docker compose -f docker-compose.prod.yml exec bot alembic current
+
+# Check bot status
+docker compose -f docker-compose.prod.yml ps
+```
+
+**Security & Best Practices:**
+- ✅ Migrations run in transaction (Alembic default)
+- ✅ Healthcheck before migration (pg_isready)
+- ✅ Fail-fast if migration fails
+- ✅ Idempotent (can run same migration multiple times safely)
+- ✅ Zero manual intervention after initial setup
+- ✅ All logs captured by Docker logging system
+
+**Testing Needed:**
+- ⏳ Create test migration locally: `alembic revision -m "test_auto_migration"`
+- ⏳ Commit and push to main
+- ⏳ Verify GitHub Actions workflow succeeds
+- ⏳ SSH to VPS and check logs show migration applied
+- ⏳ Verify `alembic current` shows latest revision
+- ⏳ Test migration failure scenario (break a migration file)
+- ⏳ Verify bot doesn't start when migration fails
+
+**Impact:**
+- ✅ Zero manual intervention for database migrations on deployment
+- ✅ Database schema always synchronized with codebase
+- ✅ Failed migrations prevent bot startup (prevents data corruption)
+- ✅ Clear audit trail in Docker logs
+- ✅ Supports multiple bot instances (migrations are idempotent)
+
+**Downtime:**
+- Minimal: ~5-30 seconds during bot restart while migrations run
+- For long migrations (>2min), adjust `healthcheck.start_period` in docker-compose.prod.yml
+
