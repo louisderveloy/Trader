@@ -263,16 +263,14 @@ async def check_services():
         dict: Status of each service
     """
     import asyncpg
-    import redis.asyncio as aioredis
 
     status = {
         "database": {"healthy": False, "message": ""},
-        "redis": {"healthy": False, "message": ""},
         "environment": {"healthy": False, "message": ""}
     }
 
     # Check environment variables
-    required_env_vars = ["DATABASE_URL", "REDIS_URL"]
+    required_env_vars = ["DATABASE_URL"]
     missing_vars = [var for var in required_env_vars if not os.getenv(var)]
 
     if missing_vars:
@@ -296,19 +294,6 @@ async def check_services():
         status["database"]["message"] = "Connected"
     except Exception as e:
         status["database"]["message"] = f"Error: {str(e)[:100]}"
-
-    # Check Redis
-    try:
-        redis_url = os.getenv("REDIS_URL", "")
-        redis_client = aioredis.from_url(redis_url, socket_connect_timeout=5)
-
-        await redis_client.ping()
-        await redis_client.aclose()
-
-        status["redis"]["healthy"] = True
-        status["redis"]["message"] = "Connected"
-    except Exception as e:
-        status["redis"]["message"] = f"Error: {str(e)[:100]}"
 
     return status
 
@@ -560,7 +545,7 @@ Examples:
     # STATUS subcommand
     # -------------------------------------------------------------------------
     status_parser = subparsers.add_parser('status',
-        help='Check system health (database, redis, environment)')
+        help='Check system health (database, environment)')
 
     # -------------------------------------------------------------------------
     # DOCKER_ENTRY subcommand

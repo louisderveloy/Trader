@@ -49,29 +49,6 @@ class Settings(BaseSettings):
         )
 
     # ==========================================
-    # REDIS
-    # ==========================================
-    redis_host: str = Field(default="redis", description="Redis host")
-    redis_port: int = Field(default=6379, description="Redis port")
-    redis_password: str = Field(default="", description="Redis password (optional)")
-    redis_db: int = Field(default=0, description="Redis database number")
-
-    @computed_field
-    @property
-    def redis_url(self) -> str:
-        """Construct Redis connection URL."""
-        if self.redis_password:
-            return f"redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/{self.redis_db}"
-        return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
-
-    redis_channel_events: str = Field(
-        default="bot:events", description="Redis channel for bot events"
-    )
-    redis_channel_commands: str = Field(
-        default="bot:commands", description="Redis channel for bot commands"
-    )
-
-    # ==========================================
     # JWT AUTHENTICATION
     # ==========================================
     jwt_secret_key: str = Field(

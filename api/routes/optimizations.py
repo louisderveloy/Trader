@@ -146,9 +146,8 @@ async def launch_optimization(
     Requires authentication and CSRF token.
     Rate limited to 2 requests per hour (expensive operation).
 
-    This endpoint creates a new study record and publishes a command to Redis
-    for the bot to execute the optimization. The endpoint returns immediately
-    with the study record.
+    This endpoint creates a new study record in the database.
+    The endpoint returns immediately with the study record.
 
     Args:
         http_request: FastAPI request object (for CSRF validation)
@@ -185,9 +184,6 @@ async def launch_optimization(
             )
 
         logger.info(f"Launched optimization study: {row['id']} - {row['study_name']}")
-
-        # TODO: Publish command to Redis to notify bot to start optimization
-        # This would be: await redis.publish('bot:commands', json.dumps({'type': 'start_optimization', 'study_id': row['id']}))
 
         return OptimizationResponse(**dict(row))
     except Exception as e:

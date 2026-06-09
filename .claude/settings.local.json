@@ -13,7 +13,8 @@
       "Bash(docker-compose build:*)",
       "Bash(curl:*)",
       "mcp__claude_ai_Context7__resolve-library-id",
-      "mcp__claude_ai_Context7__query-docs"
+      "mcp__claude_ai_Context7__query-docs",
+      "Bash(grep:*)"
     ]
   }
 }

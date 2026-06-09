@@ -16,7 +16,6 @@ networks:
 # ==========================================
 volumes:
   postgres_data:
-  redis_data:
   traefik_certs:
   bot_logs:
 
@@ -44,29 +43,9 @@ services:
     networks:
       - trader-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
       interval: 10s
       timeout: 5s
-      retries: 5
-
-  # ==========================================
-  # Redis
-  # ==========================================
-  redis:
-    image: redis:7-alpine
-    container_name: trader-redis
-    restart: unless-stopped
-    command: redis-server --appendonly yes
-    volumes:
-      - redis_data:/data
-    ports:
-      - "6379:6379"
-    networks:
-      - trader-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
       retries: 5
 
   # ==========================================
@@ -114,16 +93,19 @@ services:
     environment:
       ENVIRONMENT: prod
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379/0
     volumes:
       - bot_logs:/var/log/trader-bot
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     networks:
       - trader-network
+    healthcheck:
+      test: [ "CMD", "python", "-m", "main", "status" ]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
 
   # ==========================================
   # API (FastAPI)
@@ -139,15 +121,12 @@ services:
     environment:
       ENVIRONMENT: prod
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379/0
       API_HOST: 0.0.0.0
       API_PORT: 8000
       API_RELOAD: false  # Disable auto-reload in production
       API_WORKERS: 4  # Multiple workers for production
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     networks:
       - trader-network
