@@ -2,7 +2,7 @@
 FastAPI application entry point.
 
 This module initializes the FastAPI application with all routes, middleware,
-and lifespan management for database and Redis connections.
+and lifespan management for database connections.
 """
 
 import asyncio
@@ -20,8 +20,6 @@ from .database import DatabasePool
 from .db_config import apply_db_config_to_settings
 from .limiter import limiter
 from .middleware.security_headers import SecurityHeadersMiddleware
-from .redis.client import RedisPool
-from .redis.events import start_event_subscriber
 
 # Setup logging
 logging.basicConfig(
@@ -39,7 +37,7 @@ async def lifespan(app: FastAPI):
     """
     FastAPI lifespan context manager.
 
-    Handles startup and shutdown of database and Redis connections.
+    Handles startup and shutdown of database connections.
     """
     logger.info("Starting API server")
 
@@ -58,37 +56,12 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to load configuration from database: {e}. Using defaults.")
 
-    # Initialize Redis pool
-    try:
-        app.state.redis_pool = await RedisPool.create_pool()
-        logger.info("Redis pool initialized")
-    except Exception as e:
-        logger.error(f"Failed to initialize Redis pool: {e}")
-        raise
-
-    # Start Redis event subscriber
-    app.state.event_subscriber_task = asyncio.create_task(
-        start_event_subscriber(app.state.redis_pool)
-    )
-
     logger.info("API server startup complete")
 
     yield
 
     # Shutdown: Clean up resources
     logger.info("Shutting down API server")
-
-    # Cancel Redis subscriber task
-    if hasattr(app.state, "event_subscriber_task"):
-        app.state.event_subscriber_task.cancel()
-        try:
-            await app.state.event_subscriber_task
-        except asyncio.CancelledError:
-            logger.info("Event subscriber cancelled")
-
-    # Close Redis pool
-    if hasattr(app.state, "redis_pool"):
-        await RedisPool.close_pool()
 
     # Close database pool
     if hasattr(app.state, "db_pool"):

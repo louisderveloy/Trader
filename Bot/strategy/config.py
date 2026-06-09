@@ -186,7 +186,7 @@ class StrategyEngineConfig:
         )
 
     @classmethod
-    async def from_db(cls, db_pool) -> "StrategyEngineConfig":
+    async def from_db(cls, db_pool) -> tuple["StrategyEngineConfig", "UUID"]:
         """
         Load configuration from database.
 
@@ -196,15 +196,16 @@ class StrategyEngineConfig:
             db_pool: asyncpg database connection pool
 
         Returns:
-            StrategyEngineConfig instance with values from database
+            Tuple of (StrategyEngineConfig instance, config_id UUID)
 
         Raises:
             ValueError: If no configuration exists in database
             ValueError: If any configuration value is invalid
         """
         import json
+        from uuid import UUID
 
-        query = "SELECT config FROM config ORDER BY updated_at DESC LIMIT 1"
+        query = "SELECT id, config FROM config ORDER BY updated_at DESC LIMIT 1"
 
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(query)
@@ -264,13 +265,15 @@ class StrategyEngineConfig:
             after_trade_seconds=int(cooldown_data.get("after_trade_seconds", 3600))
         )
 
-        return cls(
+        config_instance = cls(
             strategy=strategy,
             risk=risk,
             stop_loss=stop_loss,
             take_profit=take_profit,
             cooldown=cooldown
         )
+
+        return config_instance, row["id"]
 
     def to_snapshot(self) -> dict:
         """

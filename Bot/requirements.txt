@@ -9,9 +9,6 @@ sqlalchemy>=2.0.35
 asyncpg>=0.30.0
 alembic>=1.14.0
 
-# Redis
-redis>=5.2.0
-
 # Exchange connectors
 python-binance>=1.0.19  # Binance official SDK
 ccxt>=4.4.0  # Multi-exchange abstraction (includes Binance support)

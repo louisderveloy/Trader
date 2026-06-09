@@ -2183,3 +2183,84 @@ docker compose exec bot python -m main paper --symbol BTCUSDT --testnet
 docker compose exec -T postgres psql -U trader -d trader_bot -c "SELECT id, symbol, pnl, pnl_percent, opened_at, closed_at FROM trades ORDER BY created_at DESC LIMIT 5;"
 ```
 
+
+### 2026-06-09T[CURRENT_TIME]Z [CODE] CI/CD Pipeline Implemented with GitHub Container Registry
+
+**Status:** ✅ Implemented
+
+**Context:**
+Set up automated CI/CD pipeline to build Docker images, push to GitHub Container Registry (GHCR), and deploy to VPS via SSH.
+
+**Implementation:**
+
+1. **Created `.github/workflows/docker-publish.yml`:**
+   - 4 parallel build jobs: bot, api, dashboard, each pushing to GHCR
+   - Deploy job runs after builds complete (only on main branch)
+   - Uses SSH to pull images and restart services on VPS
+   - Auto-prune old images (>72h) for cleanup
+   - Triggered on push to main/dev or manual dispatch
+
+2. **Modified `docker-compose.prod.yml`:**
+   - Replaced all `build:` sections with `image:` pointing to GHCR
+   - Bot: `ghcr.io/${GITHUB_USERNAME}/trader-bot:latest`
+   - API: `ghcr.io/${GITHUB_USERNAME}/trader-api:latest`
+   - Dashboard: `ghcr.io/${GITHUB_USERNAME}/trader-dashboard:latest`
+   - Added `pull_policy: always` to ensure latest images
+   - Changed PostgreSQL port from `127.0.0.1:5432:5432` to `0.0.0.0:5432:5432` for external Grafana access
+   - Updated comments to reflect firewall-based security instead of localhost binding
+
+3. **Fixed `.github/workflows/unit-tests.yml`:**
+   - Corrected path references from `Bot/` to `bot/` (lines 29, 32)
+   - Now matches actual directory structure (lowercase)
+
+**GitHub Actions Secrets Required:**
+- `VPS_HOST` - VPS IP address
+- `VPS_USER` - SSH username
+- `VPS_SSH_KEY` - Private SSH key for deployment
+- `VPS_DEPLOY_PATH` - Project path on VPS (e.g., `/home/ubuntu/trader`)
+- `GHCR_USERNAME` - GitHub username
+- `GHCR_TOKEN` - Personal Access Token with `read:packages` scope
+- `VITE_API_BASE_URL` - Dashboard build arg (e.g., `https://api.yourdomain.com`)
+- `VITE_GRAFANA_BASE_URL` - Dashboard build arg (optional)
+
+**VPS Setup Required (one-time):**
+1. Generate dedicated SSH key: `ssh-keygen -t ed25519 -C "github-actions"`
+2. Copy public key to VPS: `ssh-copy-id -i ~/.ssh/github_actions.pub user@vps`
+3. Add private key to GitHub Secrets as `VPS_SSH_KEY`
+4. Ensure `.env` file exists on VPS with all required variables
+5. Configure firewall for Grafana: `sudo ufw allow from [GRAFANA_IP] to any port 5432`
+
+**Deployment Flow:**
+```
+Push to main → Build images (parallel) → Push to GHCR → SSH to VPS → Pull latest → Restart services → Cleanup old images
+```
+
+**Files Modified:**
+- ✅ `.github/workflows/docker-publish.yml` (created)
+- ✅ `docker-compose.prod.yml` (modified)
+- ✅ `.github/workflows/unit-tests.yml` (fixed)
+
+**Next Steps:**
+- ⏳ Configure GitHub Secrets in repository settings
+- ⏳ Set up SSH key on VPS
+- ⏳ Test workflow by pushing to dev branch
+- ⏳ Verify images build and push successfully to GHCR
+- ⏳ Test deployment to VPS (main branch only)
+- ⏳ Configure firewall rules for PostgreSQL external access
+
+**Rollback Procedure:**
+```bash
+# On VPS, edit docker-compose.prod.yml to use specific commit SHA:
+# image: ghcr.io/username/trader-bot:main-sha-abc123
+
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+```
+
+**Impact:**
+- Zero-downtime deployments (only changed containers restart)
+- Automated builds on every push to main/dev
+- Centralized image registry (GHCR)
+- Easy rollback to previous image versions
+- PostgreSQL now accessible for external Grafana (with firewall protection)
+

@@ -63,7 +63,6 @@ export interface HealthResponse {
   status: 'healthy' | 'degraded'
   timestamp: string
   database: string
-  redis: string
 }
 
 // API error response

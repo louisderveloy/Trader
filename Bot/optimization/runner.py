@@ -311,7 +311,7 @@ class OptimizationRunner:
     async def _load_strategy_config(self):
         """Load strategy configuration from database."""
         try:
-            self.strategy_config = await StrategyEngineConfig.from_db(self.db_pool)
+            self.strategy_config, _ = await StrategyEngineConfig.from_db(self.db_pool)
             logger.info(
                 "Loaded strategy configuration from database",
                 extra={

@@ -53,8 +53,9 @@ class StrategyEngine:
     def __init__(
         self,
         config: StrategyEngineConfig,
-        run_id: UUID,
+        run_id: int,
         db_pool,
+        config_id: Optional[UUID] = None,
         risk_manager: Optional[RiskManager] = None
     ):
         """
@@ -62,13 +63,15 @@ class StrategyEngine:
 
         Args:
             config: Complete strategy engine configuration
-            run_id: Current run ID
+            run_id: Current run ID (integer)
             db_pool: asyncpg connection pool for database queries
+            config_id: Optional config ID from database (for score logging)
             risk_manager: Optional RiskManager instance (created if not provided)
         """
         self.config = config
         self.run_id = run_id
         self.db_pool = db_pool
+        self.config_id = config_id
 
         # Create risk manager if not provided
         self.risk_manager = risk_manager or RiskManager(
@@ -264,6 +267,15 @@ class StrategyEngine:
             symbol=symbol,
             candle_close=current_price,
             indicators=indicators_data
+        )
+
+        # Log score calculation for statistics
+        await self._log_score(
+            weighted_score=weighted_score,
+            weights_snapshot=weights_snapshot,
+            indicators_snapshot=indicators_snapshot,
+            current_time=current_time,
+            symbol=symbol
         )
 
         # Determine decision type based on current state and thresholds
@@ -575,6 +587,67 @@ class StrategyEngine:
                 "signal_id": str(signal_id),
                 "run_id": str(self.run_id),
                 "decision_type": decision.decision_type.value
+            }
+        )
+
+    async def _log_score(
+        self,
+        weighted_score: float,
+        weights_snapshot: WeightsSnapshot,
+        indicators_snapshot: IndicatorSnapshot,
+        current_time: datetime,
+        symbol: str,
+        order_id: Optional[UUID] = None
+    ):
+        """
+        Log score calculation to score_logs table for statistical analysis.
+
+        This method logs every score calculation, regardless of whether
+        it resulted in a trading decision or order.
+
+        Args:
+            weighted_score: Calculated weighted score
+            weights_snapshot: Snapshot of weights used
+            indicators_snapshot: Snapshot of indicator values
+            current_time: Timestamp of calculation
+            symbol: Trading symbol
+            order_id: Optional order ID if score resulted in an order
+        """
+        if self.config_id is None:
+            logger.warning(
+                "config_id not set, skipping score logging",
+                extra={"run_id": str(self.run_id)}
+            )
+            return
+
+        async with self.db_pool.acquire() as conn:
+            query = """
+                INSERT INTO score_logs (
+                    run_id, config_id, weights_set_id, order_id,
+                    time, symbol, weighted_score, indicators_snapshot
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                RETURNING id
+            """
+            score_log_id = await conn.fetchval(
+                query,
+                self.run_id,
+                self.config_id,
+                weights_snapshot.weights_set_id,
+                order_id,
+                current_time,
+                symbol,
+                Decimal(str(weighted_score)),
+                json.dumps(indicators_snapshot.to_dict())
+            )
+
+        logger.debug(
+            "Score logged to database",
+            extra={
+                "score_log_id": str(score_log_id),
+                "run_id": str(self.run_id),
+                "weighted_score": weighted_score,
+                "symbol": symbol
             }
         )
 
