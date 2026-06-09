@@ -2387,3 +2387,86 @@ docker compose -f docker-compose.prod.yml ps
 - Minimal: ~5-30 seconds during bot restart while migrations run
 - For long migrations (>2min), adjust `healthcheck.start_period` in docker-compose.prod.yml
 
+
+### 2026-06-09T21:00Z [CODE] Dashboard 404 Errors in Production - CSP and VITE_API_BASE_URL Fix
+
+**Status:** ✅ Fixed
+
+**Context:**
+User reported dashboard not communicating with API in production. Logs showed requests going to `/api.trader.derveloy.eu/...` instead of `https://api.trader.derveloy.eu/...`.
+
+**Root Causes Identified:**
+
+1. **VITE_API_BASE_URL GitHub Secret Missing Protocol:**
+   - Secret was configured as `api.trader.derveloy.eu` (without `https://`)
+   - Axios treats URLs without protocol as relative paths
+   - Result: Requests went to `https://trader.derveloy.eu/api.trader.derveloy.eu/...`
+   - **Fix Required**: Update secret to `https://api.trader.derveloy.eu`
+
+2. **Content Security Policy Too Restrictive:**
+   - `nginx.conf` had `connect-src 'self' https://*.yourdomain.com`
+   - Blocked API requests to `api.trader.derveloy.eu`
+   - **Fix Applied**: Changed to `https://*.derveloy.eu`
+
+3. **Scanner/Bot 404 Errors (Not an Issue):**
+   - Errors like `/js/lkk_ch.js`, `/js/twint_ch.js`, `/bot-connect.js`
+   - These are automated security scanners testing for vulnerabilities
+   - Normal behavior for public web servers, can be ignored
+
+**Files Modified:**
+
+1. **`dashboard/nginx.conf`:**
+   - Line 20: Changed CSP `connect-src` from `https://*.yourdomain.com` to `https://*.derveloy.eu`
+   - Line 61: Same change for index.html location block
+   - Allows API and Grafana requests to `*.derveloy.eu` domains
+
+2. **`.env.example`:**
+   - Added critical warning comment about protocol requirement on line 229
+   - Clarifies that `VITE_API_BASE_URL` must include `https://`
+
+3. **`QUICKFIX_DASHBOARD_404.md` (Created):**
+   - Step-by-step guide for user to fix GitHub Secrets
+   - Explains root cause and verification steps
+   - Documents scanner 404s as expected behavior
+
+**User Action Required:**
+
+1. Go to GitHub repository → Settings → Secrets and variables → Actions
+2. Update `VITE_API_BASE_URL` to: `https://api.trader.derveloy.eu`
+3. Update `VITE_GRAFANA_BASE_URL` (if used) to include `https://`
+4. Redeploy: Push to main or trigger workflow manually
+
+**Verification After Redeploy:**
+```bash
+# SSH to VPS
+docker compose -f docker-compose.prod.yml logs dashboard | tail -50
+
+# Browser console (F12 → Network tab)
+# Requests should go to: https://api.trader.derveloy.eu/auth/me
+# NOT: https://trader.derveloy.eu/api.trader.derveloy.eu/auth/me
+```
+
+**Common Axios URL Pitfall:**
+```javascript
+// ❌ Wrong (treated as relative path)
+baseURL: 'api.example.com'
+// Result: /api.example.com/...
+
+// ✅ Correct (treated as absolute URL)
+baseURL: 'https://api.example.com'
+// Result: https://api.example.com/...
+```
+
+**Impact:**
+- ✅ Dashboard will communicate with API correctly after secret update + redeploy
+- ✅ CSP now allows API requests to production domain
+- ✅ Documentation prevents future misconfiguration
+- ⏳ Requires user to update GitHub Secrets and redeploy
+
+**Testing Needed:**
+- ⏳ User updates GitHub Secrets with correct URLs
+- ⏳ Redeploy to production
+- ⏳ Verify API requests in browser Network tab
+- ⏳ Verify login functionality works
+- ⏳ Verify no CSP errors in browser console
+
