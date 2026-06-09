@@ -112,6 +112,7 @@ class TradingBot:
         self.capital = initial_capital
         self.position: Optional[Dict[str, Any]] = None  # Current position
         self.weights: Dict[str, float] = {}
+        self.weights_set_id: Optional[UUID] = None  # Active weights set ID for score logging
         self.is_running = False
         self.lock_connection: Optional[asyncpg.Connection] = None  # Connection holding instance lock
         self.config_listener_conn: Optional[asyncpg.Connection] = None  # Dedicated connection for LISTEN
@@ -119,6 +120,7 @@ class TradingBot:
 
         # Configuration (loaded from database in start())
         self.config: Optional[StrategyEngineConfig] = None
+        self.config_id: Optional[UUID] = None  # Database config ID for score logging
 
         # Tracking
         self.trades_today = 0
@@ -289,8 +291,9 @@ class TradingBot:
     async def _load_config(self):
         """Load configuration from database."""
         try:
-            self.config = await StrategyEngineConfig.from_db(self.db_pool)
+            self.config, self.config_id = await StrategyEngineConfig.from_db(self.db_pool)
             logger.info("Configuration loaded from database")
+            logger.info(f"  Config ID: {self.config_id}")
             logger.info(f"  Entry threshold: {self.config.strategy.entry_threshold}")
             logger.info(f"  Exit threshold: {self.config.strategy.exit_threshold}")
             logger.info(f"  Confirmation candles: {self.config.strategy.confirmation_candles}")
@@ -346,7 +349,7 @@ class TradingBot:
     async def _load_weights(self):
         """Load active weights from database."""
         query = """
-            SELECT weights FROM weights_sets
+            SELECT id, weights FROM weights_sets
             WHERE is_active = true
             LIMIT 1
         """
@@ -354,6 +357,8 @@ class TradingBot:
             row = await conn.fetchrow(query)
             if row:
                 weights = row["weights"]
+                self.weights_set_id = row["id"]
+
                 # Parse JSON string if needed
                 if isinstance(weights, str):
                     weights = json.loads(weights)
@@ -364,7 +369,7 @@ class TradingBot:
                     k.replace('weight_', ''): v
                     for k, v in weights.items()
                 }
-                logger.info(f"Loaded active weights: {json.dumps(self.weights, indent=2)}")
+                logger.info(f"Loaded active weights (set_id: {self.weights_set_id}): {json.dumps(self.weights, indent=2)}")
             else:
                 # Default weights
                 self.weights = {
@@ -372,7 +377,64 @@ class TradingBot:
                     "bollinger": 0.125, "atr": 0.125, "obv": 0.10,
                     "fear_greed": 0.10, "user_indicator": 0.05
                 }
+                self.weights_set_id = None
                 logger.warning("No active weights set, using defaults")
+
+    async def _log_score(
+        self,
+        weighted_score: float,
+        signals: Dict[str, float],
+        current_time: datetime,
+        order_id: Optional[UUID] = None
+    ):
+        """
+        Log score calculation to score_logs table for statistical analysis.
+
+        Args:
+            weighted_score: Calculated weighted score
+            signals: Dictionary of indicator signals
+            current_time: Timestamp of calculation
+            order_id: Optional order ID if score resulted in an order
+        """
+        # Skip logging if we don't have all required IDs
+        if self.run_id is None or self.config_id is None or self.weights_set_id is None:
+            logger.debug(
+                f"Skipping score logging - missing IDs: "
+                f"run_id={self.run_id}, config_id={self.config_id}, weights_set_id={self.weights_set_id}"
+            )
+            return
+
+        # Build indicators snapshot
+        indicators_snapshot = {
+            "timestamp": current_time.isoformat(),
+            "signals": signals,
+            "weights": self.weights
+        }
+
+        async with self.db_pool.acquire() as conn:
+            try:
+                query = """
+                    INSERT INTO score_logs (
+                        run_id, config_id, weights_set_id, order_id,
+                        time, symbol, weighted_score, indicators_snapshot
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    RETURNING id
+                """
+                score_log_id = await conn.fetchval(
+                    query,
+                    self.run_id,
+                    self.config_id,
+                    self.weights_set_id,
+                    order_id,
+                    current_time,
+                    self.symbol,
+                    Decimal(str(weighted_score)),
+                    json.dumps(indicators_snapshot)
+                )
+                logger.debug(f"Score logged to database (id: {score_log_id})")
+            except Exception as e:
+                logger.error(f"Failed to log score to database: {e}")
 
     async def _create_run_record(self):
         """Create run record in database."""
@@ -517,6 +579,10 @@ class TradingBot:
         weighted_score = self._calculate_weighted_score(signals)
 
         current_price = Decimal(str(candles[-1]["close"]))
+        current_time = candles[-1]["time"]  # Already a datetime object from exchange
+
+        # Log score to database for statistical analysis
+        await self._log_score(weighted_score, signals, current_time)
 
         # Get current balance for logging
         if self.mode == "live":
@@ -1590,7 +1656,7 @@ class TradingBot:
             old_config = self.config
 
             # Load new config
-            new_config = await StrategyEngineConfig.from_db(self.db_pool)
+            new_config, new_config_id = await StrategyEngineConfig.from_db(self.db_pool)
 
             # Log changes
             if old_config:
@@ -1608,6 +1674,8 @@ class TradingBot:
 
             # Update config
             self.config = new_config
+            self.config_id = new_config_id
+            logger.info(f"  New config ID: {new_config_id}")
 
             # Reload weights (they might have changed too)
             await self._load_weights()

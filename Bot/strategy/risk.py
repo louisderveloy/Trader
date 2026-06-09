@@ -33,7 +33,7 @@ class RiskManager:
 
     def __init__(
         self,
-        run_id: UUID,
+        run_id: int,
         risk_config: RiskConfig,
         cooldown_config: CooldownConfig,
         db_pool
@@ -42,7 +42,7 @@ class RiskManager:
         Initialize risk manager.
 
         Args:
-            run_id: Current run ID
+            run_id: Current run ID (integer)
             risk_config: Risk management configuration
             cooldown_config: Cooldown configuration
             db_pool: asyncpg connection pool for database queries

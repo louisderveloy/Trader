@@ -339,8 +339,8 @@ async def run_backtest_cli(args):
 
     # Load strategy configuration from database
     try:
-        strategy_config = await StrategyEngineConfig.from_db(db_pool)
-        logger.info("Loaded strategy configuration from database")
+        strategy_config, config_id = await StrategyEngineConfig.from_db(db_pool)
+        logger.info(f"Loaded strategy configuration from database (config_id: {config_id})")
     except ValueError as e:
         logger.error(f"Failed to load configuration from database: {e}")
         logger.error("Please create a configuration first using: python -m main config create")
