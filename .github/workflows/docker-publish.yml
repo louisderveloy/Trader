@@ -163,14 +163,15 @@ jobs:
             # Pull latest images
             docker compose -f docker-compose.prod.yml pull
 
-            # Logout for security
-            docker logout ghcr.io
 
             # Restart services with zero-downtime (recreate only changed containers)
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
 
             # Clean up old images
             docker image prune -af --filter "until=72h"
+            
+            # Logout for security
+            docker logout ghcr.io
 
             # Show running services
             docker compose -f docker-compose.prod.yml ps
