@@ -8,6 +8,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ${{ github.repository_owner }}/trader
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # Opt into Node 24 early
 
 jobs:
   # ==========================================
@@ -43,8 +44,8 @@ jobs:
       - name: Build and push Bot image
         uses: docker/build-push-action@v6
         with:
-          context: ./bot
-          file: ./bot/Dockerfile
+          context: ./Bot
+          file: ./Bot/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
