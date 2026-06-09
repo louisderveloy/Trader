@@ -90,6 +90,21 @@ Implementing Optuna-based optimization with walk-forward analysis for indicator 
 
 ## [DECISIONS]
 
+### 2026-06-09T14:30Z [CODE] P&L calculation in live/paper trading now deducts fees
+- **Issue:** Live and paper trading was logging GROSS P&L (before fees) to database, while backtesting correctly logged NET P&L (after fees). This created inconsistency and overstated profitability.
+- **Root cause:**
+  - Entry and exit commissions (0.1% each) were tracked separately in `commission_total` field
+  - The `pnl` and `pnl_percent` fields stored gross P&L without deducting these fees
+  - Capital updates used gross P&L, inflating available capital
+- **Fix implemented:**
+  - Store `entry_commission` in position state when entry order fills
+  - Calculate `net_pnl = gross_pnl - entry_commission - exit_commission` when exit order fills
+  - Update capital with NET P&L (not gross)
+  - Store NET P&L in database `pnl` and `pnl_percent` fields
+  - Updated all logging to show NET P&L with "[NET after fees]" label for clarity
+- **Impact:** Now consistent with backtesting engines. P&L values accurately reflect true profitability after all costs.
+- **Files modified:** `bot/scripts/trading.py` (lines 806-920, 1152-1180, 1323-1395)
+
 ### 2026-06-05T[CURRENT] [USER] Dashboard data sources: Real database vs mock data
 - **Decision:** Transition dashboard from mock/placeholder data to querying real PostgreSQL database
 - **Rationale:**

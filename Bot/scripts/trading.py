@@ -811,6 +811,9 @@ class TradingBot:
                 entry_signals = self.pending_order["signals"]
                 entry_time = datetime.now(timezone.utc)
 
+                # Calculate entry commission (0.1% of entry value)
+                entry_commission = quantity * filled_price * Decimal("0.001")
+
                 # Create trade entry in database
                 trade_id = await self._create_trade_entry(
                     entry_price=filled_price,
@@ -824,6 +827,7 @@ class TradingBot:
                     "entry_price": filled_price,
                     "entry_time": entry_time,
                     "quantity": quantity,
+                    "entry_commission": entry_commission,
                     "stop_loss": stop_loss,
                     "take_profit": take_profit,
                     "order_id": exchange_order_id,
@@ -858,11 +862,20 @@ class TradingBot:
             elif side == "sell":
                 # Exit order filled - trade completed
                 entry_price = self.position["entry_price"]
-                pnl = (filled_price - entry_price) * quantity
-                pnl_pct = (filled_price - entry_price) / entry_price * 100
+                entry_commission = self.position["entry_commission"]
 
-                # Update capital
-                self.capital += pnl
+                # Calculate exit commission (0.1% of exit value)
+                exit_commission = quantity * filled_price * Decimal("0.001")
+
+                # Calculate gross P&L
+                gross_pnl = (filled_price - entry_price) * quantity
+
+                # Calculate net P&L (deduct both entry and exit commissions)
+                net_pnl = gross_pnl - entry_commission - exit_commission
+                net_pnl_pct = (net_pnl / (entry_price * quantity)) * 100
+
+                # Update capital with NET P&L (after fees)
+                self.capital += net_pnl
 
                 # Update trade with exit data
                 exit_reason = self.pending_order["exit_reason"]
@@ -873,22 +886,24 @@ class TradingBot:
                     trade_id=self.position["trade_id"],
                     exit_price=filled_price,
                     exit_reason=exit_reason,
-                    pnl=pnl,
-                    pnl_pct=pnl_pct,
+                    net_pnl=net_pnl,
+                    net_pnl_pct=net_pnl_pct,
                     exit_score=exit_score,
                     exit_signals=exit_signals,
                     exit_order_id=order_id,
+                    exit_commission=exit_commission,
                 )
 
                 logger.info("=" * 60)
                 logger.info(f"POSITION CLOSED")
                 logger.info(f"Entry: {entry_price:.2f} | Exit: {filled_price:.2f}")
-                logger.info(f"P&L: {pnl:.2f} USDT ({pnl_pct:+.2f}%)")
+                logger.info(f"P&L: {net_pnl:.2f} USDT ({net_pnl_pct:+.2f}%) [NET after fees]")
+                logger.info(f"Fees: {entry_commission + exit_commission:.2f} USDT (entry: {entry_commission:.2f}, exit: {exit_commission:.2f})")
                 logger.info(f"Capital: {self.capital:.2f} USDT")
                 logger.info("=" * 60)
 
                 # Publish to Redis
-                await self._publish_trade_event("exit", filled_price, quantity, pnl)
+                await self._publish_trade_event("exit", filled_price, quantity, net_pnl)
 
                 # Send Discord notification for trade completion
                 if self.discord_notifier:
@@ -898,8 +913,8 @@ class TradingBot:
                             side="long",
                             entry_price=entry_price,
                             exit_price=filled_price,
-                            pnl=pnl,
-                            pnl_pct=float(pnl_pct),
+                            pnl=net_pnl,
+                            pnl_pct=float(net_pnl_pct),
                             reason=exit_reason,
                         )
                     except Exception as e:
@@ -1147,13 +1162,20 @@ class TradingBot:
 
         quantity = self.position["quantity"]
         entry_price = self.position["entry_price"]
-        pnl = (price - entry_price) * quantity
-        pnl_pct = (price - entry_price) / entry_price * 100
+        entry_commission = self.position["entry_commission"]
+
+        # Calculate estimated exit commission (0.1% of exit value)
+        exit_commission = quantity * price * Decimal("0.001")
+
+        # Calculate estimated net P&L (after fees)
+        gross_pnl = (price - entry_price) * quantity
+        net_pnl = gross_pnl - entry_commission - exit_commission
+        net_pnl_pct = (net_pnl / (entry_price * quantity)) * 100
 
         logger.info("=" * 60)
         logger.info(f"EXIT SIGNAL - Reason: {reason} | Score: {score:.3f}")
         logger.info(f"Entry: {entry_price:.2f} | Exit: {price:.2f}")
-        logger.info(f"P&L: {pnl:.2f} USDT ({pnl_pct:.2f}%)")
+        logger.info(f"Estimated P&L: {net_pnl:.2f} USDT ({net_pnl_pct:.2f}%) [NET after fees]")
         logger.info("=" * 60)
 
         # Log signal to database
@@ -1325,22 +1347,20 @@ class TradingBot:
         trade_id: UUID,
         exit_price: Decimal,
         exit_reason: str,
-        pnl: Decimal,
-        pnl_pct: float,
+        net_pnl: Decimal,
+        net_pnl_pct: float,
         exit_score: float,
         exit_signals: Dict[str, float],
         exit_order_id: Optional[UUID] = None,
+        exit_commission: Optional[Decimal] = None,
     ):
-        """Update trade with exit data and mark as closed."""
+        """Update trade with exit data and mark as closed. P&L values are NET (after fees)."""
         # Calculate duration
         entry_time = self.position["entry_time"]
         exit_time = datetime.now(timezone.utc)
         duration_seconds = int((exit_time - entry_time).total_seconds())
 
-        # Calculate exit commission and add to total (0.1% of exit value)
-        quantity = self.position["quantity"]
         entry_price = self.position["entry_price"]
-        exit_commission = quantity * exit_price * Decimal("0.001")
 
         # Total commission = entry commission (already in DB) + exit commission
         # We'll UPDATE by adding the exit commission to existing commission_total
@@ -1365,15 +1385,15 @@ class TradingBot:
                 exit_price,
                 exit_time,
                 duration_seconds,
-                pnl,
-                pnl_pct,
+                net_pnl,
+                net_pnl_pct,
                 exit_commission,
                 trade_id,
             )
 
         logger.info(
             f"Trade closed: id={trade_id}, entry={entry_price:.2f}, exit={exit_price:.2f}, "
-            f"pnl={pnl:.2f} ({pnl_pct:+.2f}%), duration={duration_seconds}s",
+            f"net_pnl={net_pnl:.2f} ({net_pnl_pct:+.2f}%) [after fees], duration={duration_seconds}s",
             extra={
                 "run_id": self.run_id,
                 "trade_id": str(trade_id),
