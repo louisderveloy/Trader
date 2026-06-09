@@ -24,8 +24,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ vars.REGISTRY_USERNAME }}
@@ -42,13 +45,15 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Bot image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./Bot
           file: ./Bot/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-bot:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-bot:buildcache,mode=max
 
   # ==========================================
   # Build and Push API Image
@@ -63,8 +68,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ vars.REGISTRY_USERNAME }}
@@ -81,13 +89,15 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push API image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./api
           file: ./api/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-api:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-api:buildcache,mode=max
 
   # ==========================================
   # Build and Push Dashboard Image
@@ -102,8 +112,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ vars.REGISTRY_USERNAME }}
@@ -120,7 +133,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Dashboard image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./dashboard
           file: ./dashboard/Dockerfile.prod
@@ -130,6 +143,8 @@ jobs:
           build-args: |
             VITE_API_BASE_URL=${{ secrets.VITE_API_BASE_URL }}
             VITE_GRAFANA_BASE_URL=${{ secrets.VITE_GRAFANA_BASE_URL }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-dashboard:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-dashboard:buildcache,mode=max
 
   # ==========================================
   # Deploy to VPS via SSH
