@@ -168,6 +168,15 @@ class RunManager:
                 f"Invalid status transition: {current_run.status.value} -> {new_status.value}"
             )
 
+        # SAFEGUARD: Prevent closing run with open positions
+        if new_status in {RunStatus.COMPLETED, RunStatus.CANCELLED, RunStatus.FAILED}:
+            open_trades_count = await self.get_open_trades_count(run_id)
+            if open_trades_count > 0:
+                raise ValueError(
+                    f"Cannot close run: {open_trades_count} open trade(s) found. "
+                    f"Please close all positions before ending the run."
+                )
+
         # Prepare timestamps
         now = datetime.now(timezone.utc)
         started_at = current_run.started_at
@@ -511,3 +520,60 @@ class RunManager:
 
         logger.debug(f"Found {len(active_runs)} active runs")
         return active_runs
+
+    async def get_open_trades_count(self, run_id: int) -> int:
+        """
+        Get count of open trades for a run.
+
+        Args:
+            run_id: Run ID
+
+        Returns:
+            Number of open trades
+
+        Raises:
+            asyncpg.PostgresError: Database error
+        """
+        async with self.db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT COUNT(*) as count
+                FROM trades
+                WHERE run_id = $1 AND status = 'open'
+                """,
+                run_id,
+            )
+
+        count = row["count"]
+        logger.debug(f"Run {run_id} has {count} open trade(s)")
+        return count
+
+    async def get_open_trades(self, run_id: int) -> list[dict]:
+        """
+        Get all open trades for a run.
+
+        Args:
+            run_id: Run ID
+
+        Returns:
+            List of open trade records
+
+        Raises:
+            asyncpg.PostgresError: Database error
+        """
+        async with self.db_pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    id, run_id, symbol, entry_price, quantity,
+                    opened_at, status
+                FROM trades
+                WHERE run_id = $1 AND status = 'open'
+                ORDER BY opened_at DESC
+                """,
+                run_id,
+            )
+
+        trades = [dict(row) for row in rows]
+        logger.debug(f"Run {run_id} has {len(trades)} open trade(s)")
+        return trades

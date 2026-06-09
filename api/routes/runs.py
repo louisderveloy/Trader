@@ -252,6 +252,25 @@ async def update_run_status(
                 detail=f"Invalid status transition: {current_status.value} -> {new_status.value}",
             )
 
+        # SAFEGUARD: Prevent closing run with open positions
+        if new_status in {RunStatus.COMPLETED, RunStatus.CANCELLED, RunStatus.FAILED}:
+            # Check for open trades in database
+            open_trades_count = await conn.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM trades
+                WHERE run_id = $1 AND status = 'open'
+                """,
+                run_id,
+            )
+
+            if open_trades_count > 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Cannot close run: {open_trades_count} open trade(s) found. "
+                           f"Please close all positions before ending the run.",
+                )
+
         # Update status
         update_query = """
             UPDATE runs

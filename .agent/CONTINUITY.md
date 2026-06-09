@@ -90,6 +90,45 @@ Implementing Optuna-based optimization with walk-forward analysis for indicator 
 
 ## [DECISIONS]
 
+### 2026-06-09T[CURRENT] [CODE] Implemented safeguards to prevent closing runs with open positions
+- **Issue:** When a run (paper/live/testnet) was stopped, there was NO verification that all positions were closed. This could lead to:
+  - Orphaned open trades in database with status='open' while run is marked COMPLETED
+  - Inconsistent state between bot memory, database, and exchange
+  - Potential lost positions in live trading
+- **Root cause:**
+  - `stop()` method in `bot/scripts/trading.py` simply shut down without checking `self.position` or `self.pending_order`
+  - API endpoint allowed status transitions to terminal states without validating open positions
+  - Backtesting properly handled this (force-close at end), but live/paper trading did not
+- **Fix implemented:**
+  1. **RunManager additions** (`bot/runs/manager.py`):
+     - Added `get_open_trades_count(run_id)` - Count open trades in database
+     - Added `get_open_trades(run_id)` - Retrieve all open trade records
+     - Modified `update_status()` to prevent closing run with open trades (raises ValueError)
+  2. **TradingBot additions** (`bot/scripts/trading.py`):
+     - Added `_ensure_all_positions_closed()` method that checks:
+       - In-memory pending order (`self.pending_order`) - cancels if entry order
+       - In-memory position (`self.position`) - force closes at market price
+       - Database open trades - logs warnings if found
+       - **For live mode only:** Binance API open orders - cancels all found
+     - Modified `stop()` to call `_ensure_all_positions_closed()` BEFORE updating run status
+  3. **API safeguard** (`api/routes/runs.py`):
+     - Added validation in `PATCH /runs/{run_id}/status` endpoint
+     - Prevents status change to COMPLETED/CANCELLED/FAILED if open trades exist
+     - Returns 400 error with helpful message
+- **Behavior difference by mode:**
+  - **Paper trading:** Only checks database for open trades
+  - **Live trading:** Checks database AND queries Binance API for open orders (ensures no orphaned exchange orders)
+- **Impact:**
+  - Database integrity maintained - no orphaned open trades when run closes
+  - Live trading safety - all exchange orders cancelled before shutdown
+  - Clear logging of safeguard actions during shutdown
+  - API prevents manual closure of runs with open positions
+- **Files modified:**
+  - `bot/runs/manager.py` (lines 487-568)
+  - `bot/scripts/trading.py` (lines 215-222, 1249-1368)
+  - `api/routes/runs.py` (lines 245-262)
+- **Result:** Consistent, safe run closure across all modes with multi-layered validation
+
 ### 2026-06-09T14:30Z [CODE] P&L calculation in live/paper trading now deducts fees
 - **Issue:** Live and paper trading was logging GROSS P&L (before fees) to database, while backtesting correctly logged NET P&L (after fees). This created inconsistency and overstated profitability.
 - **Root cause:**

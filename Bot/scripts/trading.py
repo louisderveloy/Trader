@@ -221,6 +221,10 @@ class TradingBot:
         logger.info("Stopping trading bot...")
         self.is_running = False
 
+        # SAFEGUARD: Check and close any open positions before shutdown
+        if self.db_pool and self.run_id:
+            await self._ensure_all_positions_closed()
+
         # Update run status
         if self.db_pool and self.run_id:
             try:
@@ -1242,6 +1246,144 @@ class TradingBot:
         }
 
         logger.info(f"Exit order pending: {exchange_order_id} | Price: {price:.2f} | Reason: {reason}")
+
+    async def _ensure_all_positions_closed(self):
+        """
+        Ensure all positions are closed before shutdown.
+
+        This method checks:
+        1. In-memory position (self.position)
+        2. In-memory pending order (self.pending_order)
+        3. Database open trades
+        4. For live mode: Binance API open orders
+
+        Any open positions are force-closed at market price.
+        Any pending orders are cancelled.
+        """
+        logger.info("=" * 80)
+        logger.info("SAFEGUARD: Checking for open positions before shutdown...")
+        logger.info("=" * 80)
+
+        has_open_positions = False
+
+        # 1. Check in-memory pending order
+        if self.pending_order:
+            logger.warning(f"Found pending order in memory: {self.pending_order.get('exchange_order_id')}")
+            has_open_positions = True
+
+            # Cancel pending order if it's an entry order
+            if self.pending_order.get("side") == "buy":
+                logger.info("Cancelling pending entry order...")
+                try:
+                    if self.mode == "live" and self.exchange:
+                        await self.exchange.cancel_order(
+                            self.symbol,
+                            self.pending_order.get("exchange_order_id")
+                        )
+                        logger.info("Pending entry order cancelled on exchange")
+
+                    # Update order status in database
+                    await update_order_cancelled(
+                        self.db_pool,
+                        self.pending_order.get("db_order_id"),
+                        "Cancelled due to shutdown"
+                    )
+                    self.pending_order = None
+                    logger.info("Pending entry order cancelled")
+                except Exception as e:
+                    logger.error(f"Failed to cancel pending order: {e}")
+
+        # 2. Check in-memory position
+        if self.position:
+            logger.warning(f"Found open position in memory: {self.position}")
+            has_open_positions = True
+
+            # Force close position at market price
+            logger.info("Force closing position at market price...")
+            try:
+                # Get current price
+                ticker = await self.exchange.get_ticker(self.symbol)
+                current_price = Decimal(str(ticker["last_price"]))
+
+                # Execute forced exit
+                await self._execute_exit(
+                    price=current_price,
+                    reason="Forced close on shutdown",
+                    score=0.0,
+                    signals={}
+                )
+
+                # Wait for exit order to be processed
+                # In paper mode, the order fills immediately
+                # In live mode, market orders typically fill immediately
+                await asyncio.sleep(2)
+
+                # Check if order was filled
+                if self.pending_order and self.pending_order.get("side") == "sell":
+                    # Force fill the exit order
+                    await self._check_pending_order(current_price)
+
+                logger.info("Position force closed successfully")
+            except Exception as e:
+                logger.error(f"Failed to force close position: {e}")
+
+        # 3. Check database for open trades
+        try:
+            from runs.manager import RunManager
+            run_manager = RunManager(self.db_pool)
+            open_trades = await run_manager.get_open_trades(self.run_id)
+
+            if open_trades:
+                logger.warning(f"Found {len(open_trades)} open trade(s) in database:")
+                for trade in open_trades:
+                    logger.warning(f"  - Trade ID {trade['id']}: {trade['symbol']} @ {trade['entry_price']}")
+                has_open_positions = True
+
+                # If we have open trades in DB but not in memory, log error
+                if not self.position:
+                    logger.error(
+                        "Database has open trades but no position in memory! "
+                        "This indicates a state synchronization issue."
+                    )
+        except Exception as e:
+            logger.error(f"Failed to check database for open trades: {e}")
+
+        # 4. For live mode: Check Binance API for open orders
+        if self.mode == "live" and self.exchange:
+            try:
+                logger.info("Checking Binance API for open orders...")
+                open_orders = await self.exchange.get_open_orders(self.symbol)
+
+                if open_orders:
+                    logger.warning(f"Found {len(open_orders)} open order(s) on Binance:")
+                    has_open_positions = True
+
+                    for order in open_orders:
+                        logger.warning(f"  - Order {order.get('order_id')}: {order.get('side')} {order.get('quantity')} @ {order.get('price')}")
+
+                        # Cancel each open order
+                        try:
+                            await self.exchange.cancel_order(
+                                self.symbol,
+                                order.get("order_id")
+                            )
+                            logger.info(f"Cancelled order {order.get('order_id')} on Binance")
+                        except Exception as e:
+                            logger.error(f"Failed to cancel order {order.get('order_id')}: {e}")
+                else:
+                    logger.info("No open orders found on Binance")
+            except Exception as e:
+                logger.error(f"Failed to check Binance for open orders: {e}")
+
+        # Summary
+        if has_open_positions:
+            logger.warning("=" * 80)
+            logger.warning("SAFEGUARD: Found and handled open positions")
+            logger.warning("=" * 80)
+        else:
+            logger.info("=" * 80)
+            logger.info("SAFEGUARD: No open positions found - safe to shutdown")
+            logger.info("=" * 80)
 
     async def _store_candles(self, candles: list):
         """Store candles in database."""
