@@ -12,6 +12,11 @@ WORKDIR /app
 COPY requirements.txt .
 COPY requirements-dev.txt .
 
+# Install system dependencies (PostgreSQL client for pg_isready healthcheck)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install dependencies
 # In dev mode, install both regular and dev dependencies
 # In prod mode, install only regular dependencies
@@ -23,5 +28,9 @@ RUN if [ "$INSTALL_DEV" = "true" ]; then \
 
 COPY . .
 
-# Use docker_entry command as entrypoint to keep container alive
-ENTRYPOINT [ "python", "-m", "main", "docker_entry" ]
+# Copy entrypoint script for database migrations
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Use entrypoint script to run migrations before starting bot
+ENTRYPOINT ["/entrypoint.sh"]

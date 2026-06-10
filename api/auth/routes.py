@@ -74,7 +74,8 @@ async def login(
         value=access_token,
         httponly=True,  # Cannot be accessed by JavaScript (XSS protection)
         secure=settings.environment == "prod",  # HTTPS only in production
-        samesite="strict",  # CSRF protection
+        samesite="lax",  # Allow cross-subdomain requests (strict blocks api.*.eu <-> app.*.eu)
+        domain=".derveloy.eu" if settings.environment == "prod" else None,  # Share cookie across subdomains in prod
         max_age=settings.jwt_access_token_expire_minutes * 60,  # Convert minutes to seconds
     )
 
@@ -102,8 +103,11 @@ async def logout(
     Returns:
         Logout success message
     """
-    # Clear the access_token cookie
-    response.delete_cookie(key="access_token")
+    # Clear the access_token cookie (must match domain used in set_cookie)
+    response.delete_cookie(
+        key="access_token",
+        domain=".derveloy.eu" if settings.environment == "prod" else None
+    )
 
     logger.info(f"Successful logout: username={user.username}")
 
@@ -141,7 +145,8 @@ async def get_csrf_token(
         value=csrf_token,
         httponly=False,  # Must be readable by JavaScript
         secure=settings.environment == "prod",
-        samesite="strict",
+        samesite="lax",  # Allow cross-subdomain requests (strict blocks api.*.eu <-> app.*.eu)
+        domain=".derveloy.eu" if settings.environment == "prod" else None,  # Share cookie across subdomains in prod
         max_age=3600  # 1 hour
     )
 

@@ -51,7 +51,7 @@ services:
   # Traefik (Reverse Proxy)
   # ==========================================
   traefik:
-    image: traefik:v3.0
+    image: traefik:v3.7
     container_name: trader-traefik
     restart: unless-stopped
     command:
@@ -93,6 +93,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     volumes:
       - bot_logs:/var/log/trader-bot
+      - ./db:/db  # Mount database migrations folder
     depends_on:
       postgres:
         condition: service_healthy

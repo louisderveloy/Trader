@@ -5,6 +5,9 @@ on:
     branches: "*"
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # Opt into Node 24 early
+
 jobs:
   python-test:
     name: Python Tests (pytest in container)

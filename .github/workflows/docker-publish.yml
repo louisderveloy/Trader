@@ -8,6 +8,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ${{ github.repository_owner }}/trader
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # Opt into Node 24 early
 
 jobs:
   # ==========================================
@@ -23,11 +24,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.GHCR_USERNAME }}
+          username: ${{ vars.REGISTRY_USERNAME }}
           password: ${{ secrets.GHCR_TOKEN }}
 
       - name: Extract metadata for Docker
@@ -41,13 +45,15 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Bot image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
-          context: ./bot
-          file: ./bot/Dockerfile
+          context: ./Bot
+          file: ./Bot/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-bot:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-bot:buildcache,mode=max
 
   # ==========================================
   # Build and Push API Image
@@ -62,11 +68,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.GHCR_USERNAME }}
+          username: ${{ vars.REGISTRY_USERNAME }}
           password: ${{ secrets.GHCR_TOKEN }}
 
       - name: Extract metadata for Docker
@@ -80,13 +89,15 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push API image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./api
           file: ./api/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-api:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-api:buildcache,mode=max
 
   # ==========================================
   # Build and Push Dashboard Image
@@ -101,11 +112,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.GHCR_USERNAME }}
+          username: ${{ vars.REGISTRY_USERNAME }}
           password: ${{ secrets.GHCR_TOKEN }}
 
       - name: Extract metadata for Docker
@@ -119,7 +133,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Dashboard image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./dashboard
           file: ./dashboard/Dockerfile.prod
@@ -129,6 +143,8 @@ jobs:
           build-args: |
             VITE_API_BASE_URL=${{ secrets.VITE_API_BASE_URL }}
             VITE_GRAFANA_BASE_URL=${{ secrets.VITE_GRAFANA_BASE_URL }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-dashboard:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-dashboard:buildcache,mode=max
 
   # ==========================================
   # Deploy to VPS via SSH
@@ -139,23 +155,49 @@ jobs:
     needs: [ build-and-push-bot, build-and-push-api, build-and-push-dashboard ]
     if: github.ref == 'refs/heads/main'  # Only deploy on main branch
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Copy database migrations to VPS
+        run: |
+          echo "${{ secrets.VPS_SSH_KEY }}" > /tmp/ssh_key
+          chmod 600 /tmp/ssh_key
+          scp -i /tmp/ssh_key -r -o StrictHostKeyChecking=no \
+            ./db ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:${{ secrets.VPS_DEPLOY_PATH }}/
+          rm /tmp/ssh_key
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          envs: GITHUB_TOKEN
           script: |
             cd ${{ secrets.VPS_DEPLOY_PATH }}
 
+            # Download latest docker-compose.prod.yml from main branch
+            curl -H "Authorization: token $GITHUB_TOKEN" \
+              -o docker-compose.prod.yml \
+              https://raw.githubusercontent.com/${{ github.repository }}/main/docker-compose.prod.yml
+
+            # Login to GitHub Container Registry
+            echo "$GITHUB_TOKEN" | docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin
+
             # Pull latest images
             docker compose -f docker-compose.prod.yml pull
+
 
             # Restart services with zero-downtime (recreate only changed containers)
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
 
             # Clean up old images
             docker image prune -af --filter "until=72h"
+            
+            # Logout for security
+            docker logout ghcr.io
 
             # Show running services
             docker compose -f docker-compose.prod.yml ps
