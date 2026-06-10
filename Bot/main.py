@@ -139,6 +139,8 @@ def cmd_optimize(args):
             opt_args.extend(['--n-trials', str(args.n_trials)])
         if args.n_splits:
             opt_args.extend(['--n-splits', str(args.n_splits)])
+        if args.multithread:
+            opt_args.append('--multithread')
     elif args.subcmd == 'list':
         if args.limit:
             opt_args.extend(['--limit', str(args.limit)])
@@ -487,6 +489,8 @@ Examples:
         help='Optimization objective')
     opt_run.add_argument('--n-trials', type=int, help='Number of trials per split')
     opt_run.add_argument('--n-splits', type=int, help='Number of walk-forward splits')
+    opt_run.add_argument('--multithread', action='store_true',
+        help='Enable multithreaded optimization (use all CPU cores)')
 
     # optimize list
     opt_list = opt_subparsers.add_parser('list', help='List optimization studies')

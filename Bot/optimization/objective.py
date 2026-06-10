@@ -44,7 +44,7 @@ class ObjectiveFunction:
         self,
         config: OptimizationConfig,
         split: WalkForwardSplit,
-        db_pool: asyncpg.Pool,
+        db_url: str,
         search_space: WeightsSearchSpace,
         strategy_config: StrategyEngineConfig,
         is_test: bool = False
@@ -55,17 +55,18 @@ class ObjectiveFunction:
         Args:
             config: Optimization configuration
             split: Walk-forward split
-            db_pool: Database connection pool
+            db_url: Database URL string (not pool - for multiprocessing compatibility)
             search_space: Weights search space configuration
             strategy_config: Strategy configuration from database
             is_test: Whether this is test phase (no pruning)
         """
         self.config = config
         self.split = split
-        self.db_pool = db_pool
+        self.db_url = db_url
         self.search_space = search_space
         self.strategy_config = strategy_config
         self.is_test = is_test
+
 
         # Use train or test dates depending on phase
         if is_test:
@@ -160,40 +161,52 @@ class ObjectiveFunction:
         Raises:
             Exception: If backtest fails
         """
-        # Create backtest configuration with thresholds from database config
-        backtest_config = BacktestConfig(
-            symbol=self.config.symbol,
-            timeframe=self.config.timeframe,
-            start_date=self.start_date,
-            end_date=self.end_date,
-            initial_capital=self.config.initial_capital,
-            # Pass weights AND thresholds from database config
-            strategy_params={
-                "weights": weights,
-                "entry_threshold": self.strategy_config.strategy.entry_threshold,
-                "exit_threshold": self.strategy_config.strategy.exit_threshold,
-                "confirmation_candles": self.strategy_config.strategy.confirmation_candles,
-            }
+        # Create a fresh pool for this backtest in the current event loop
+        # This avoids event loop binding issues in multiprocessing contexts
+        db_pool = await asyncpg.create_pool(
+            dsn=self.db_url,
+            min_size=1,
+            max_size=3
         )
 
-        # Create backtester
-        backtester = VectorbtBacktester(
-            config=backtest_config,
-            db_pool=self.db_pool
-        )
+        try:
+            # Create backtest configuration with thresholds from database config
+            backtest_config = BacktestConfig(
+                symbol=self.config.symbol,
+                timeframe=self.config.timeframe,
+                start_date=self.start_date,
+                end_date=self.end_date,
+                initial_capital=self.config.initial_capital,
+                # Pass weights AND thresholds from database config
+                strategy_params={
+                    "weights": weights,
+                    "entry_threshold": self.strategy_config.strategy.entry_threshold,
+                    "exit_threshold": self.strategy_config.strategy.exit_threshold,
+                    "confirmation_candles": self.strategy_config.strategy.confirmation_candles,
+                }
+            )
 
-        # Run backtest
-        result = await backtester.run()
+            # Create backtester with fresh pool
+            backtester = VectorbtBacktester(
+                config=backtest_config,
+                db_pool=db_pool
+            )
 
-        # Handle failed backtest or missing metrics
-        if result is None or result.metrics is None:
-            logger.warning("Backtest returned no metrics, returning -inf score")
-            return float('-inf')
+            # Run backtest
+            result = await backtester.run()
 
-        # Extract score based on optimization objective
-        score = self._extract_score(result.metrics)
+            # Handle failed backtest or missing metrics
+            if result is None or result.metrics is None:
+                logger.warning("Backtest returned no metrics, returning -inf score")
+                return float('-inf')
 
-        return score
+            # Extract score based on optimization objective
+            score = self._extract_score(result.metrics)
+
+            return score
+        finally:
+            # Always close the pool, even if backtest fails
+            await db_pool.close()
 
     def _extract_score(self, metrics) -> float:
         """
@@ -262,7 +275,7 @@ class ObjectiveFunction:
 def create_objective_function(
     config: OptimizationConfig,
     split: WalkForwardSplit,
-    db_pool: asyncpg.Pool,
+    db_url: str,
     search_space: WeightsSearchSpace,
     strategy_config: StrategyEngineConfig,
     is_test: bool = False
@@ -273,7 +286,7 @@ def create_objective_function(
     Args:
         config: Optimization configuration
         split: Walk-forward split
-        db_pool: Database connection pool
+        db_url: Database URL string (not pool - for multiprocessing compatibility)
         search_space: Weights search space
         strategy_config: Strategy configuration from database
         is_test: Whether this is test evaluation
@@ -284,7 +297,7 @@ def create_objective_function(
     return ObjectiveFunction(
         config=config,
         split=split,
-        db_pool=db_pool,
+        db_url=db_url,
         search_space=search_space,
         strategy_config=strategy_config,
         is_test=is_test
@@ -295,7 +308,7 @@ async def evaluate_weights(
     weights: Dict[str, float],
     config: OptimizationConfig,
     split: WalkForwardSplit,
-    db_pool: asyncpg.Pool,
+    db_url: str,
     strategy_config: StrategyEngineConfig,
     is_test: bool = False
 ) -> float:
@@ -309,69 +322,75 @@ async def evaluate_weights(
         weights: Indicator weights dictionary
         config: Optimization configuration
         split: Walk-forward split
-        db_pool: Database connection pool
+        db_url: Database URL string (not pool - for multiprocessing compatibility)
         strategy_config: Strategy configuration from database
         is_test: Whether this is test evaluation
 
     Returns:
         Objective score
     """
-    # Use train or test dates
-    start_date = split.test_start if is_test else split.train_start
-    end_date = split.test_end if is_test else split.train_end
+    # Create pool for this evaluation
+    db_pool = await asyncpg.create_pool(dsn=db_url, min_size=1, max_size=2)
 
-    # Create backtest configuration with thresholds from database config
-    backtest_config = BacktestConfig(
-        symbol=config.symbol,
-        timeframe=config.timeframe,
-        start_date=start_date,
-        end_date=end_date,
-        initial_capital=config.initial_capital,
-        # Pass weights AND thresholds from database config
-        strategy_params={
-            "weights": weights,
-            "entry_threshold": strategy_config.strategy.entry_threshold,
-            "exit_threshold": strategy_config.strategy.exit_threshold,
-            "confirmation_candles": strategy_config.strategy.confirmation_candles,
-        }
-    )
+    try:
+        # Use train or test dates
+        start_date = split.test_start if is_test else split.train_start
+        end_date = split.test_end if is_test else split.train_end
 
-    # Create backtester
-    backtester = VectorbtBacktester(
-        config=backtest_config,
-        db_pool=db_pool
-    )
+        # Create backtest configuration with thresholds from database config
+        backtest_config = BacktestConfig(
+            symbol=config.symbol,
+            timeframe=config.timeframe,
+            start_date=start_date,
+            end_date=end_date,
+            initial_capital=config.initial_capital,
+            # Pass weights AND thresholds from database config
+            strategy_params={
+                "weights": weights,
+                "entry_threshold": strategy_config.strategy.entry_threshold,
+                "exit_threshold": strategy_config.strategy.exit_threshold,
+                "confirmation_candles": strategy_config.strategy.confirmation_candles,
+            }
+        )
 
-    # Run backtest
-    result = await backtester.run()
+        # Create backtester
+        backtester = VectorbtBacktester(
+            config=backtest_config,
+            db_pool=db_pool
+        )
 
-    # Handle failed backtest
-    if result is None or result.metrics is None:
-        logger.error("Backtest failed or returned no metrics")
-        return float('-inf')  # Return worst possible score
+        # Run backtest
+        result = await backtester.run()
 
-    # Extract score based on objective (metrics is BacktestMetrics object, not dict)
-    if config.objective == OptimizationObjective.SHARPE_RATIO:
-        score = result.metrics.sharpe_ratio
-    elif config.objective == OptimizationObjective.SORTINO_RATIO:
-        score = result.metrics.sortino_ratio
-    elif config.objective == OptimizationObjective.PROFIT_FACTOR:
-        score = result.metrics.profit_factor
-    elif config.objective == OptimizationObjective.WIN_RATE:
-        score = result.metrics.win_rate
-    elif config.objective == OptimizationObjective.TOTAL_RETURN:
-        score = float(result.metrics.total_return)
-    else:
-        raise ValueError(f"Unsupported optimization objective: {config.objective}")
+        # Handle failed backtest
+        if result is None or result.metrics is None:
+            logger.error("Backtest failed or returned no metrics")
+            return float('-inf')  # Return worst possible score
 
-    logger.info(
-        "Weights evaluated",
-        extra={
-            "phase": "test" if is_test else "train",
-            "split_index": split.split_index,
-            "score": score,
-            "weights": weights
-        }
-    )
+        # Extract score based on objective (metrics is BacktestMetrics object, not dict)
+        if config.objective == OptimizationObjective.SHARPE_RATIO:
+            score = result.metrics.sharpe_ratio
+        elif config.objective == OptimizationObjective.SORTINO_RATIO:
+            score = result.metrics.sortino_ratio
+        elif config.objective == OptimizationObjective.PROFIT_FACTOR:
+            score = result.metrics.profit_factor
+        elif config.objective == OptimizationObjective.WIN_RATE:
+            score = result.metrics.win_rate
+        elif config.objective == OptimizationObjective.TOTAL_RETURN:
+            score = float(result.metrics.total_return)
+        else:
+            raise ValueError(f"Unsupported optimization objective: {config.objective}")
 
-    return score
+        logger.info(
+            "Weights evaluated",
+            extra={
+                "phase": "test" if is_test else "train",
+                "split_index": split.split_index,
+                "score": score,
+                "weights": weights
+            }
+        )
+
+        return score
+    finally:
+        await db_pool.close()

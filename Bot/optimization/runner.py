@@ -167,12 +167,16 @@ class OptimizationRunner:
                 # Optimize on training set
                 train_result = await self._optimize_split(split)
 
+                # Get database URL for test evaluation
+                db_url = os.getenv("DATABASE_URL", "")
+                db_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
+
                 # Evaluate best params on test set
                 test_score = await evaluate_weights(
                     weights=train_result["best_params"],
                     config=self.config,
                     split=split,
-                    db_pool=self.db_pool,
+                    db_url=db_url,
                     strategy_config=self.strategy_config,
                     is_test=True
                 )
@@ -362,7 +366,9 @@ class OptimizationRunner:
             extra={
                 "split_index": split.split_index,
                 "train_start": split.train_start.isoformat(),
-                "train_end": split.train_end.isoformat()
+                "train_end": split.train_end.isoformat(),
+                "n_jobs": self.config.n_jobs,
+                "parallel": self.config.n_jobs != 1
             }
         )
 
@@ -371,29 +377,50 @@ class OptimizationRunner:
         # Create Optuna study
         study = self._create_study()
 
-        # Create objective function for this split
+        # Get database URL from environment (not the pool object)
+        db_url = os.getenv("DATABASE_URL", "")
+        db_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
+
+        # Create objective function for this split - pass URL, not pool
         objective_func = create_objective_function(
             config=self.config,
             split=split,
-            db_pool=self.db_pool,
+            db_url=db_url,
             search_space=self.search_space,
             strategy_config=self.strategy_config,
             is_test=False
         )
 
         # Define async wrapper for Optuna (Optuna expects sync functions)
-        # Use nest_asyncio to allow nested event loops
+        # Use nest_asyncio for robust multiprocessing support
         def sync_objective(trial: optuna.Trial) -> float:
             import asyncio
             import nest_asyncio
+
+            # nest_asyncio allows nested event loops, which is essential for
+            # multiprocessing with asyncio. This works reliably with asyncpg
+            # and avoids "different loop" errors in worker processes.
             nest_asyncio.apply()
-            loop = asyncio.get_event_loop()
+
+            try:
+                # Get or create event loop for this process
+                loop = asyncio.get_event_loop()
+                if loop.is_closed():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+            except RuntimeError:
+                # No event loop in current thread
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            # Run the async objective function
             return loop.run_until_complete(objective_func(trial))
 
         # Run optimization
         study.optimize(
             sync_objective,
             n_trials=self.config.n_trials,
+            n_jobs=self.config.n_jobs,
             show_progress_bar=True
         )
 
@@ -425,9 +452,35 @@ class OptimizationRunner:
         """
         Create Optuna study with configured sampler and pruner.
 
+        For parallel optimization (n_jobs > 1), automatically configures
+        database storage to allow multiple worker processes to share trials.
+
         Returns:
             optuna.Study object
         """
+        # Determine storage URL
+        storage = None
+        if self.config.n_jobs > 1:
+            # Parallel optimization requires database storage
+            if not self.config.storage:
+                # Auto-configure database storage
+                dsn = os.getenv("DATABASE_URL", "")
+                dsn = dsn.replace("postgresql+asyncpg://", "postgresql://")
+
+                # Use same database, different schema for Optuna
+                # This keeps Optuna's internal tables separate from our application tables
+                if "?" in dsn:
+                    storage = f"{dsn}&options=-c%20search_path%3Doptuna,public"
+                else:
+                    storage = f"{dsn}?options=-c%20search_path%3Doptuna,public"
+
+                logger.info(f"Parallel mode: using database storage (optuna schema)")
+            else:
+                storage = self.config.storage
+        else:
+            # Serial optimization can use in-memory storage or configured storage
+            storage = self.config.storage
+
         # Create sampler
         if self.config.sampler == "tpe":
             sampler = optuna.samplers.TPESampler()
@@ -461,7 +514,7 @@ class OptimizationRunner:
             direction="maximize",  # Always maximize (Sharpe, Sortino, etc.)
             sampler=sampler,
             pruner=pruner,
-            storage=self.config.storage,  # Use storage if provided for persistence
+            storage=storage,  # Use storage if provided for persistence
             load_if_exists=True  # Allow resuming existing studies
         )
 
@@ -471,7 +524,9 @@ class OptimizationRunner:
                 "study_name": self.config.study_name,
                 "sampler": self.config.sampler,
                 "pruner": self.config.pruner,
-                "storage": self.config.storage or "in-memory"
+                "storage": storage or "in-memory",
+                "n_jobs": self.config.n_jobs,
+                "parallel_mode": self.config.n_jobs > 1
             }
         )
 
