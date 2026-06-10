@@ -7,8 +7,7 @@ It integrates with the vectorbt backtester for fast evaluation of indicator weig
 
 import logging
 import os
-from typing import Dict, Any, Optional
-from decimal import Decimal
+from typing import Dict
 import asyncpg
 import optuna
 
@@ -24,15 +23,6 @@ from strategy.config import StrategyEngineConfig
 
 # Structured logging
 logger = logging.getLogger(__name__)
-
-# Process-local connection pool cache
-# With asyncio.run() creating fresh event loops per trial,
-# we create fresh pools too. This is acceptable because:
-# 1. asyncpg's internal connection pooling still provides benefit
-# 2. Pool creation cost is ~50ms, but optimization gains from parallel trials dominate
-# 3. Avoids complex event loop/pool lifecycle management
-# 4. Simple and reliable - no task context mismatches
-_process_pools: Dict[int, asyncpg.Pool] = {}
 
 
 async def _get_or_create_pool(
