@@ -90,6 +90,18 @@ Implementing Optuna-based optimization with walk-forward analysis for indicator 
 
 ## [DECISIONS]
 
+### 2026-06-10T[CODE] Fix: stale run DB records after container restart
+- **Problem:** When container is killed (SIGKILL from CI/CD deploy timeout, or `docker compose restart`), runs stay in `status='running'` in DB. On next startup, the pre-flight `check_existing_runs` gate (which checked DB status) blocked the next trading start with sys.exit(1).
+- **Root causes:**
+  1. SIGKILL gives no time for graceful DB cleanup → run stays `'running'`
+  2. `stop()` used `if not self.is_running: return` as guard, which skipped DB update if killed between `_create_run_record()` and `self.is_running = True`
+  3. Pre-flight in `cmd_paper/cmd_live` used DB status (stale) instead of advisory lock (crash-safe) as the gate
+- **Fix:**
+  1. `InstanceLockManager.is_lock_held()`: queries `pg_locks` to check if advisory lock is held without acquiring it — used by pre-flight
+  2. `InstanceLockManager.cleanup_stale_runs()`: marks any `running/pending` runs as `cancelled` (with JSON note) — called in `start()` immediately after advisory lock acquisition guarantees sole instance
+  3. `stop()` guard: changed from `is_running` flag to `_stop_called` flag so cleanup always runs when `run_id` is set
+  4. `stop_grace_period: 60s` in both docker-compose files — gives graceful shutdown time before Docker escalates to SIGKILL
+
 ### 2026-06-09T[CURRENT] [CODE] Implemented safeguards to prevent closing runs with open positions
 - **Issue:** When a run (paper/live/testnet) was stopped, there was NO verification that all positions were closed. This could lead to:
   - Orphaned open trades in database with status='open' while run is marked COMPLETED

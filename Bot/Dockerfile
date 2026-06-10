@@ -26,11 +26,12 @@ RUN if [ "$INSTALL_DEV" = "true" ]; then \
         python -m pip install --no-cache-dir -r requirements.txt; \
     fi
 
-COPY . .
-
 # Copy entrypoint script for database migrations
+# Strip Windows CRLF line endings in case the file was checked out on Windows
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
+
+COPY . .
 
 # Use entrypoint script to run migrations before starting bot
 ENTRYPOINT ["/entrypoint.sh"]

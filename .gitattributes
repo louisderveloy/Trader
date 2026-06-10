@@ -1,0 +1,45 @@
+# Default: normalize line endings to LF on commit, checkout as-is
+* text=auto eol=lf
+
+# Shell scripts must always be LF — CRLF breaks the shebang on Linux
+*.sh text eol=lf
+
+# Python files — LF
+*.py text eol=lf
+
+# Docker files — LF
+Dockerfile* text eol=lf
+docker-compose*.yml text eol=lf
+
+# Config / data files — LF
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.cfg text eol=lf
+*.ini text eol=lf
+*.env text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.sql text eol=lf
+
+# Windows-only files that should keep CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary files — no line-ending conversion
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.otf binary
+*.pyc binary
+*.pyd binary
+*.so binary
+*.gz binary
+*.zip binary
