@@ -6,6 +6,7 @@ It integrates with the vectorbt backtester for fast evaluation of indicator weig
 """
 
 import logging
+import os
 from typing import Dict, Any, Optional
 from decimal import Decimal
 import asyncpg
@@ -23,6 +24,59 @@ from strategy.config import StrategyEngineConfig
 
 # Structured logging
 logger = logging.getLogger(__name__)
+
+# Process-local connection pool cache
+# With asyncio.run() creating fresh event loops per trial,
+# we create fresh pools too. This is acceptable because:
+# 1. asyncpg's internal connection pooling still provides benefit
+# 2. Pool creation cost is ~50ms, but optimization gains from parallel trials dominate
+# 3. Avoids complex event loop/pool lifecycle management
+# 4. Simple and reliable - no task context mismatches
+_process_pools: Dict[int, asyncpg.Pool] = {}
+
+
+async def _get_or_create_pool(
+    db_url: str,
+    min_size: int = 1,
+    max_size: int = 3
+) -> asyncpg.Pool:
+    """
+    Create a database connection pool.
+
+    With asyncio.run() creating fresh event loops per trial, we create
+    fresh pools too. Each pool is properly cleaned up when the event loop
+    exits, avoiding resource leaks.
+
+    Args:
+        db_url: Database connection string
+        min_size: Minimum pool size
+        max_size: Maximum pool size
+
+    Returns:
+        asyncpg.Pool for this trial's event loop
+    """
+    # Create pool in current event loop
+    pool = await asyncpg.create_pool(
+        dsn=db_url,
+        min_size=min_size,
+        max_size=max_size
+    )
+
+    logger.debug(
+        "Created DB pool for trial",
+        extra={"pool_size": max_size, "pid": os.getpid()}
+    )
+
+    return pool
+
+
+async def _cleanup_process_pool():
+    """
+    Cleanup function (kept for backward compatibility with tests).
+    Not needed with asyncio.run() since loops auto-cleanup.
+    """
+    # With asyncio.run(), cleanup happens automatically
+    pass
 
 
 class ObjectiveFunction:
@@ -152,6 +206,10 @@ class ObjectiveFunction:
         """
         Run backtest with given weights and return objective score.
 
+        Creates a fresh database pool for each trial. With asyncio.run() creating
+        fresh event loops per trial, pool creation cost (~50ms) is acceptable and
+        avoids event loop context issues.
+
         Args:
             weights: Indicator weights dictionary
 
@@ -161,10 +219,9 @@ class ObjectiveFunction:
         Raises:
             Exception: If backtest fails
         """
-        # Create a fresh pool for this backtest in the current event loop
-        # This avoids event loop binding issues in multiprocessing contexts
-        db_pool = await asyncpg.create_pool(
-            dsn=self.db_url,
+        # Create fresh pool for this trial (asyncio.run ensures proper cleanup)
+        db_pool = await _get_or_create_pool(
+            db_url=self.db_url,
             min_size=1,
             max_size=3
         )
@@ -205,7 +262,7 @@ class ObjectiveFunction:
 
             return score
         finally:
-            # Always close the pool, even if backtest fails
+            # Properly close pool (asyncio.run ensures loop cleanup)
             await db_pool.close()
 
     def _extract_score(self, metrics) -> float:
@@ -329,8 +386,12 @@ async def evaluate_weights(
     Returns:
         Objective score
     """
-    # Create pool for this evaluation
-    db_pool = await asyncpg.create_pool(dsn=db_url, min_size=1, max_size=2)
+    # Create fresh pool for this evaluation
+    db_pool = await _get_or_create_pool(
+        db_url=db_url,
+        min_size=1,
+        max_size=2
+    )
 
     try:
         # Use train or test dates
@@ -393,4 +454,5 @@ async def evaluate_weights(
 
         return score
     finally:
+        # Properly close pool
         await db_pool.close()

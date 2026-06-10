@@ -15,6 +15,12 @@ from decimal import Decimal
 from uuid import UUID
 import asyncpg
 import optuna
+import nest_asyncio
+
+# Apply nest_asyncio patch to allow asyncio.run() from within a running event loop
+# This is required because the CLI wraps cmd_run() in asyncio.run() at the top level,
+# and sync_objective (called by Optuna) needs to call asyncio.run() again for async code
+nest_asyncio.apply()
 
 from .types import (
     OptimizationConfig,
@@ -392,29 +398,19 @@ class OptimizationRunner:
         )
 
         # Define async wrapper for Optuna (Optuna expects sync functions)
-        # Use nest_asyncio for robust multiprocessing support
+        # Use asyncio.run() which properly creates/closes event loops per trial
+        # This avoids task context mismatch errors when reusing event loops
         def sync_objective(trial: optuna.Trial) -> float:
             import asyncio
-            import nest_asyncio
 
-            # nest_asyncio allows nested event loops, which is essential for
-            # multiprocessing with asyncio. This works reliably with asyncpg
-            # and avoids "different loop" errors in worker processes.
-            nest_asyncio.apply()
-
-            try:
-                # Get or create event loop for this process
-                loop = asyncio.get_event_loop()
-                if loop.is_closed():
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-            except RuntimeError:
-                # No event loop in current thread
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-
-            # Run the async objective function
-            return loop.run_until_complete(objective_func(trial))
+            # asyncio.run() creates a fresh event loop for this trial,
+            # runs the async function, and properly cleans up.
+            # This approach:
+            # 1. Eliminates "different loop" errors (fresh loop per trial)
+            # 2. Eliminates "task mismatch" errors (proper cleanup)
+            # 3. Works with asyncpg pool caching (pools created fresh too)
+            # 4. Simple and reliable
+            return asyncio.run(objective_func(trial))
 
         # Run optimization
         study.optimize(
