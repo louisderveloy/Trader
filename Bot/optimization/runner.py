@@ -380,8 +380,8 @@ class OptimizationRunner:
 
         split_start_time = time.time()
 
-        # Create Optuna study
-        study = self._create_study()
+        # Create Optuna study (unique per split to avoid trial contamination)
+        study = self._create_study(split_index=split.split_index)
 
         # Get database URL from environment (not the pool object)
         db_url = os.getenv("DATABASE_URL", "")
@@ -444,12 +444,15 @@ class OptimizationRunner:
             "optimization_time": split_optimization_time
         }
 
-    def _create_study(self) -> optuna.Study:
+    def _create_study(self, split_index: int = 0) -> optuna.Study:
         """
         Create Optuna study with configured sampler and pruner.
 
-        For parallel optimization (n_jobs > 1), automatically configures
-        database storage to allow multiple worker processes to share trials.
+        Each split gets a unique study name to prevent trial contamination
+        between walk-forward splits.
+
+        Args:
+            split_index: Walk-forward split index (appended to study name)
 
         Returns:
             optuna.Study object
@@ -504,9 +507,10 @@ class OptimizationRunner:
             logger.warning(f"Unknown pruner {self.config.pruner}, using median")
             pruner = optuna.pruners.MedianPruner()
 
-        # Create study
+        # Create study with unique name per split
+        split_study_name = f"{self.config.study_name}_split_{split_index}"
         study = optuna.create_study(
-            study_name=self.config.study_name,
+            study_name=split_study_name,
             direction="maximize",  # Always maximize (Sharpe, Sortino, etc.)
             sampler=sampler,
             pruner=pruner,
@@ -517,7 +521,7 @@ class OptimizationRunner:
         logger.info(
             "Optuna study created",
             extra={
-                "study_name": self.config.study_name,
+                "study_name": split_study_name,
                 "sampler": self.config.sampler,
                 "pruner": self.config.pruner,
                 "storage": storage or "in-memory",
