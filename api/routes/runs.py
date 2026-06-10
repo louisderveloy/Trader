@@ -505,11 +505,12 @@ async def kill_run(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> RunCommandResponse:
     """
-    Force-kill (SIGKILL) a run. **Backtest only.**
+    Force-kill (SIGKILL) a run. **Backtest and optimization only.**
 
     Killing paper/live is rejected (409): SIGKILL bypasses position-close and
-    would leave exchange positions open (security review Finding #3). Use stop
-    for paper/live.
+    would leave exchange positions open (security review Finding #3). Backtest and
+    optimization have no exchange positions, so killing them is safe. Use stop for
+    paper/live.
     """
     await validate_csrf_token(request)
 
@@ -517,10 +518,10 @@ async def kill_run(
         row = await conn.fetchrow("SELECT status, run_type FROM runs WHERE id = $1", run_id)
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run {run_id} not found")
-        if row["run_type"] != "backtest":
+        if row["run_type"] not in ("backtest", "optimization"):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Kill is only allowed for backtest runs; use stop for paper/live",
+                detail="Kill is only allowed for backtest and optimization runs; use stop for paper/live",
             )
         if row["status"] not in ("running", "pending"):
             raise HTTPException(

@@ -1,38 +1,36 @@
 /**
  * Optimizations API endpoints.
  *
- * API client functions for managing Optuna optimization studies.
+ * An optimization is a run (run_type='optimization'). Launch goes through the
+ * /optimizations namespace; stop/kill/logs reuse the generic /runs/{id}/...
+ * endpoints (keyed by run_id).
  */
 
 import { apiClient } from './client'
 
-export interface OptimizationTrial {
-  trial_number: number
-  value: number
-  state: 'complete' | 'pruned' | 'fail'
-  params: Record<string, unknown>
-  metrics: Record<string, unknown>
-}
+export type OptimizationStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
 
 export interface Optimization {
-  id: number
-  run_id: string
-  name: string
-  direction: 'maximize' | 'minimize'
-  objective: 'sharpe' | 'sortino' | 'profit_factor'
-  n_trials: number
-  n_jobs: number
-  sampler: string
-  pruner: string
-  best_value: number | null
-  best_params: Record<string, unknown> | null
-  best_trial: OptimizationTrial | null
-  walk_forward_splits: number
-  walk_forward_train_ratio: number
-  status: 'running' | 'completed' | 'failed' | 'stopped'
+  run_id: number
+  status: OptimizationStatus
+  symbol: string | null
+  timeframe: string | null
   created_at: string
   started_at: string | null
   completed_at: string | null
+  study_name: string
+  objective: string | null
+  n_trials: number | null
+  n_splits: number | null
+  study_id: string | null
+  best_value: number | null
+  best_params: Record<string, unknown> | null
+  weights_set_id: string | null
 }
 
 export interface OptimizationListResponse {
@@ -42,35 +40,64 @@ export interface OptimizationListResponse {
   offset: number
 }
 
+export type OptimizationObjective =
+  | 'sharpe_ratio'
+  | 'sortino_ratio'
+  | 'profit_factor'
+  | 'win_rate'
+  | 'total_return'
+
 export interface LaunchOptimizationRequest {
-  name: string
-  objective: 'sharpe' | 'sortino' | 'profit_factor'
+  study_name: string
+  symbol: string
+  timeframe: string
+  objective: OptimizationObjective
   n_trials: number
-  n_jobs: number
+  n_splits: number
+  // Optional / advanced
+  start_date?: string
+  end_date?: string
+  train_ratio?: number
+  walk_forward_mode?: 'sliding' | 'expanding'
+  sampler?: 'tpe' | 'random' | 'grid' | 'cmaes'
+  pruner?: 'median' | 'hyperband' | 'none'
+  multithread?: boolean
+}
+
+export interface LaunchOptimizationResponse {
+  run_id: number
+  command_id: number
+  status: string
+  message: string
 }
 
 /**
- * Get list of optimization studies
+ * Get list of optimization runs (newest first)
  */
-export async function getOptimizations(limit: number = 100, offset: number = 0): Promise<OptimizationListResponse> {
+export async function getOptimizations(
+  limit: number = 100,
+  offset: number = 0
+): Promise<OptimizationListResponse> {
   const response = await apiClient.get<OptimizationListResponse>('/optimizations', {
-    params: { limit, offset }
+    params: { limit, offset },
   })
   return response.data
 }
 
 /**
- * Get optimization study by ID
+ * Get a single optimization run by its run id
  */
-export async function getOptimization(studyId: number): Promise<Optimization> {
-  const response = await apiClient.get<Optimization>(`/optimizations/${studyId}`)
+export async function getOptimization(runId: number): Promise<Optimization> {
+  const response = await apiClient.get<Optimization>(`/optimizations/${runId}`)
   return response.data
 }
 
 /**
- * Launch new optimization study
+ * Launch a new optimization run
  */
-export async function launchOptimization(request: LaunchOptimizationRequest): Promise<Optimization> {
-  const response = await apiClient.post<Optimization>('/optimizations', request)
+export async function launchOptimization(
+  request: LaunchOptimizationRequest
+): Promise<LaunchOptimizationResponse> {
+  const response = await apiClient.post<LaunchOptimizationResponse>('/optimizations', request)
   return response.data
 }

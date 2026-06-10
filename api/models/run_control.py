@@ -189,6 +189,122 @@ class StartRunRequest(BaseModel):
         return "testnet" if self.testnet else "live"
 
 
+class OptimizationObjectiveStart(str, Enum):
+    """Optuna optimization objective (mirrors the bot's OptimizationObjective)."""
+
+    SHARPE_RATIO = "sharpe_ratio"
+    SORTINO_RATIO = "sortino_ratio"
+    PROFIT_FACTOR = "profit_factor"
+    WIN_RATE = "win_rate"
+    TOTAL_RETURN = "total_return"
+
+
+class WalkForwardModeStart(str, Enum):
+    """Walk-forward analysis mode."""
+
+    SLIDING = "sliding"
+    EXPANDING = "expanding"
+
+
+class SamplerStart(str, Enum):
+    """Optuna sampler."""
+
+    TPE = "tpe"
+    RANDOM = "random"
+    GRID = "grid"
+    CMAES = "cmaes"
+
+
+class PrunerStart(str, Enum):
+    """Optuna pruner."""
+
+    MEDIAN = "median"
+    HYPERBAND = "hyperband"
+    NONE = "none"
+
+
+class StartOptimizationRequest(BaseModel):
+    """Validated request to start an Optuna optimization run.
+
+    Same security boundary as :class:`StartRunRequest`: every field that ends up
+    as a CLI argument is allowlisted here before it reaches the command channel or
+    the supervisor. Unknown fields are rejected.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    study_name: str = Field(..., min_length=1, max_length=100, description="Study name")
+    symbol: str = Field(default=settings.binance_default_symbol, description="Trading pair (USDC quote)")
+    timeframe: str = Field(default=settings.binance_default_timeframe, description="Candle timeframe")
+
+    start_date: Optional[date] = Field(default=None, description="Optional data start date (ISO)")
+    end_date: Optional[date] = Field(default=None, description="Optional data end date (ISO)")
+
+    objective: OptimizationObjectiveStart = Field(
+        default=OptimizationObjectiveStart.SHARPE_RATIO, description="Metric to maximise"
+    )
+    n_trials: int = Field(default=100, ge=1, le=100_000, description="Trials per walk-forward split")
+    n_splits: int = Field(default=4, ge=1, le=100, description="Number of walk-forward splits")
+    train_ratio: Optional[float] = Field(default=None, gt=0, lt=1, description="Training data ratio (0-1)")
+    walk_forward_mode: Optional[WalkForwardModeStart] = Field(default=None, description="Walk-forward mode")
+    sampler: Optional[SamplerStart] = Field(default=None, description="Optuna sampler")
+    pruner: Optional[PrunerStart] = Field(default=None, description="Optuna pruner")
+    multithread: bool = Field(default=False, description="Use all CPU cores (sets n_jobs=-1)")
+
+    @field_validator("symbol")
+    @classmethod
+    def _validate_symbol(cls, v: str) -> str:
+        v = v.strip().upper()
+        allowed = settings.available_symbols_list
+        if v not in allowed:
+            raise ValueError(f"symbol must be one of {allowed}")
+        return v
+
+    @field_validator("timeframe")
+    @classmethod
+    def _validate_timeframe(cls, v: str) -> str:
+        v = v.strip()
+        if v not in ALLOWED_TIMEFRAMES:
+            raise ValueError(f"timeframe must be one of {sorted(ALLOWED_TIMEFRAMES)}")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_dates(self) -> "StartOptimizationRequest":
+        if self.start_date and self.end_date and self.end_date <= self.start_date:
+            raise ValueError("end_date must be after start_date")
+        return self
+
+    def to_command_params(self) -> dict[str, Any]:
+        """Normalised, JSON-safe params stored in ``run_commands.params``.
+
+        The supervisor rebuilds the ``optimize run`` argv from these and
+        re-validates them against its own allowlist.
+        """
+        params: dict[str, Any] = {
+            "run_type": "optimization",
+            "study_name": self.study_name,
+            "symbol": self.symbol,
+            "timeframe": self.timeframe,
+            "objective": self.objective.value,
+            "n_trials": self.n_trials,
+            "n_splits": self.n_splits,
+            "multithread": self.multithread,
+        }
+        if self.start_date:
+            params["start_date"] = self.start_date.isoformat()
+        if self.end_date:
+            params["end_date"] = self.end_date.isoformat()
+        if self.train_ratio is not None:
+            params["train_ratio"] = self.train_ratio
+        if self.walk_forward_mode:
+            params["walk_forward_mode"] = self.walk_forward_mode.value
+        if self.sampler:
+            params["sampler"] = self.sampler.value
+        if self.pruner:
+            params["pruner"] = self.pruner.value
+        return params
+
+
 class StartRunResponse(BaseModel):
     """Returned when a start command is accepted (run created in PENDING)."""
 

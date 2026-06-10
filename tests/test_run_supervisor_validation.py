@@ -169,3 +169,97 @@ def test_build_argv_paper_minimal():
     assert "--run-id" in argv and "9" in argv
     assert "--testnet" not in argv
     assert "--confirm" not in argv
+
+
+# ==========================================
+# Optimization run validation + argv
+# ==========================================
+
+
+def _optimize_params(**overrides):
+    params = {
+        "run_type": "optimization",
+        "study_name": "btc_test",
+        "symbol": "BTCUSDC",
+        "timeframe": "15m",
+        "objective": "sharpe_ratio",
+        "n_trials": 50,
+        "n_splits": 4,
+        "multithread": False,
+    }
+    params.update(overrides)
+    return params
+
+
+def test_valid_optimization_params_pass():
+    clean = _validate_start_params(_optimize_params())
+    assert clean["run_type"] == "optimization"
+    assert clean["study_name"] == "btc_test"
+    assert clean["objective"] == "sharpe_ratio"
+    assert clean["n_trials"] == 50
+    assert clean["n_splits"] == 4
+
+
+def test_optimization_requires_study_name():
+    with pytest.raises(CommandValidationError):
+        _validate_start_params(_optimize_params(study_name="  "))
+
+
+def test_optimization_bad_objective_rejected():
+    with pytest.raises(CommandValidationError):
+        _validate_start_params(_optimize_params(objective="max_money"))
+
+
+def test_optimization_bad_train_ratio_rejected():
+    # train_ratio must be strictly within (0, 1).
+    with pytest.raises(CommandValidationError):
+        _validate_start_params(_optimize_params(train_ratio=1.5))
+
+
+def test_optimization_bad_n_trials_rejected():
+    with pytest.raises(CommandValidationError):
+        _validate_start_params(_optimize_params(n_trials=0))
+
+
+def test_optimization_non_allowlisted_symbol_rejected():
+    # The same symbol allowlist applies to optimization runs.
+    with pytest.raises(CommandValidationError):
+        _validate_start_params(_optimize_params(symbol="ETHUSDC"))
+
+
+def test_optimization_bad_sampler_rejected():
+    with pytest.raises(CommandValidationError):
+        _validate_start_params(_optimize_params(sampler="magic"))
+
+
+def test_build_argv_optimization_shape():
+    # Two-token `optimize run` subcommand with --study-name and --run-id.
+    clean = _validate_start_params(_optimize_params(multithread=True))
+    argv = _build_argv(77, clean)
+    assert argv[1:5] == ["-m", "main", "optimize", "run"]
+    assert "--study-name" in argv and "btc_test" in argv
+    assert "--run-id" in argv and "77" in argv
+    assert "--symbol" in argv and "BTCUSDC" in argv
+    assert "--objective" in argv and "sharpe_ratio" in argv
+    assert "--multithread" in argv
+
+
+def test_build_argv_optimization_optional_flags():
+    clean = _validate_start_params(
+        _optimize_params(
+            start_date="2024-01-01",
+            end_date="2024-06-01",
+            train_ratio=0.75,
+            walk_forward_mode="sliding",
+            sampler="tpe",
+            pruner="median",
+        )
+    )
+    argv = _build_argv(8, clean)
+    assert "--start-date" in argv and "2024-01-01" in argv
+    assert "--train-ratio" in argv and "0.75" in argv
+    assert "--walk-forward-mode" in argv and "sliding" in argv
+    assert "--sampler" in argv and "tpe" in argv
+    assert "--pruner" in argv and "median" in argv
+    # multithread defaults to False -> no flag.
+    assert "--multithread" not in argv

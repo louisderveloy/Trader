@@ -59,7 +59,15 @@ _ALLOWED_TIMEFRAMES = {
 _ALLOWED_ENGINES = {"vectorbt", "event_driven"}
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _UUID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
-_RUN_TYPES = {"backtest", "paper", "live"}
+_RUN_TYPES = {"backtest", "paper", "live", "optimization"}
+
+# Optimization-specific allowlists (mirror the optimize CLI choices).
+_ALLOWED_OBJECTIVES = {
+    "sharpe_ratio", "sortino_ratio", "profit_factor", "win_rate", "total_return",
+}
+_ALLOWED_WALK_FORWARD_MODES = {"sliding", "expanding"}
+_ALLOWED_SAMPLERS = {"tpe", "random", "grid", "cmaes"}
+_ALLOWED_PRUNERS = {"median", "hyperband", "none"}
 
 NOTIFY_CHANNEL = "run_command"
 POLL_INTERVAL_SECONDS = 30
@@ -139,12 +147,103 @@ def _validate_start_params(params: dict[str, Any]) -> dict[str, Any]:
             raise CommandValidationError("live requires boolean 'testnet'")
         clean["testnet"] = testnet
 
+    elif run_type == "optimization":
+        study_name = str(params.get("study_name", "")).strip()
+        if not study_name:
+            raise CommandValidationError("optimization requires a non-empty study_name")
+        clean["study_name"] = study_name
+
+        # Dates are optional for optimization (the runner falls back to all data).
+        for key in ("start_date", "end_date"):
+            val = params.get(key)
+            if val is not None:
+                if not isinstance(val, str) or not _DATE_RE.fullmatch(val):
+                    raise CommandValidationError(f"invalid {key}: {val!r}")
+                clean[key] = val
+
+        objective = params.get("objective")
+        if objective is not None:
+            if objective not in _ALLOWED_OBJECTIVES:
+                raise CommandValidationError(f"invalid objective: {objective!r}")
+            clean["objective"] = objective
+
+        for key in ("n_trials", "n_splits"):
+            val = params.get(key)
+            if val is not None:
+                # bool is a subclass of int; reject it explicitly.
+                if not isinstance(val, int) or isinstance(val, bool) or val <= 0:
+                    raise CommandValidationError(f"invalid {key}: {val!r}")
+                clean[key] = val
+
+        train_ratio = params.get("train_ratio")
+        if train_ratio is not None:
+            if (
+                not isinstance(train_ratio, (int, float))
+                or isinstance(train_ratio, bool)
+                or not (0 < float(train_ratio) < 1)
+            ):
+                raise CommandValidationError(f"invalid train_ratio: {train_ratio!r}")
+            clean["train_ratio"] = float(train_ratio)
+
+        wfm = params.get("walk_forward_mode")
+        if wfm is not None:
+            if wfm not in _ALLOWED_WALK_FORWARD_MODES:
+                raise CommandValidationError(f"invalid walk_forward_mode: {wfm!r}")
+            clean["walk_forward_mode"] = wfm
+
+        sampler = params.get("sampler")
+        if sampler is not None:
+            if sampler not in _ALLOWED_SAMPLERS:
+                raise CommandValidationError(f"invalid sampler: {sampler!r}")
+            clean["sampler"] = sampler
+
+        pruner = params.get("pruner")
+        if pruner is not None:
+            if pruner not in _ALLOWED_PRUNERS:
+                raise CommandValidationError(f"invalid pruner: {pruner!r}")
+            clean["pruner"] = pruner
+
+        if params.get("multithread"):
+            clean["multithread"] = True
+
     return clean
 
 
 def _build_argv(run_id: int, params: dict[str, Any]) -> list[str]:
     """Build the validated argv for the child process (no shell)."""
     run_type = params["run_type"]
+
+    if run_type == "optimization":
+        # Two-token subcommand: `optimize run`.
+        argv = [
+            sys.executable, "-m", "main", "optimize", "run",
+            "--study-name", params["study_name"],
+            "--symbol", params["symbol"],
+            "--timeframe", params["timeframe"],
+            "--run-id", str(run_id),
+        ]
+        if "start_date" in params:
+            argv += ["--start-date", params["start_date"]]
+        if "end_date" in params:
+            argv += ["--end-date", params["end_date"]]
+        if "objective" in params:
+            argv += ["--objective", params["objective"]]
+        if "n_trials" in params:
+            argv += ["--n-trials", str(params["n_trials"])]
+        if "n_splits" in params:
+            argv += ["--n-splits", str(params["n_splits"])]
+        if "train_ratio" in params:
+            argv += ["--train-ratio", str(params["train_ratio"])]
+        if "walk_forward_mode" in params:
+            argv += ["--walk-forward-mode", params["walk_forward_mode"]]
+        if "sampler" in params:
+            argv += ["--sampler", params["sampler"]]
+        if "pruner" in params:
+            argv += ["--pruner", params["pruner"]]
+        if params.get("multithread"):
+            argv += ["--multithread"]
+        return argv
+
     argv = [
         sys.executable, "-m", "main", run_type,
         "--symbol", params["symbol"],
@@ -367,12 +466,13 @@ class RunSupervisor:
         if not child:
             logger.warning(f"Kill: no child for run {run_id}")
             return
-        if child.run_type != "backtest":
-            # Belt-and-braces: the API already blocks this.
-            raise RuntimeError("kill is only allowed for backtest runs")
+        if child.run_type not in ("backtest", "optimization"):
+            # Belt-and-braces: the API already blocks this. Killing paper/live would
+            # bypass position-close; killing a backtest/optimization is safe.
+            raise RuntimeError("kill is only allowed for backtest and optimization runs")
         if not child.is_alive():
             return
-        logger.info(f"Sending SIGKILL to backtest run {run_id} (pid={child.pid})")
+        logger.info(f"Sending SIGKILL to {child.run_type} run {run_id} (pid={child.pid})")
         self._signal(child, signal.SIGKILL)
 
     def _signal(self, child: Child, sig: signal.Signals) -> None:

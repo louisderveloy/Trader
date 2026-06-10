@@ -143,8 +143,18 @@ def cmd_optimize(args):
             opt_args.extend(['--n-trials', str(args.n_trials)])
         if args.n_splits:
             opt_args.extend(['--n-splits', str(args.n_splits)])
+        if getattr(args, 'train_ratio', None) is not None:
+            opt_args.extend(['--train-ratio', str(args.train_ratio)])
+        if getattr(args, 'walk_forward_mode', None):
+            opt_args.extend(['--walk-forward-mode', args.walk_forward_mode])
+        if getattr(args, 'sampler', None):
+            opt_args.extend(['--sampler', args.sampler])
+        if getattr(args, 'pruner', None):
+            opt_args.extend(['--pruner', args.pruner])
         if args.multithread:
             opt_args.append('--multithread')
+        if getattr(args, 'run_id', None) is not None:
+            opt_args.extend(['--run-id', str(args.run_id)])
     elif args.subcmd == 'list':
         if args.limit:
             opt_args.extend(['--limit', str(args.limit)])
@@ -503,7 +513,7 @@ Examples:
     # optimize run
     opt_run = opt_subparsers.add_parser('run', help='Run new optimization study')
     opt_run.add_argument('--study-name', required=True, help='Study name')
-    opt_run.add_argument('--symbol', default='BTCUSDT', help='Trading symbol')
+    opt_run.add_argument('--symbol', default='BTCUSDC', help='Trading symbol (default: BTCUSDC)')
     opt_run.add_argument('--timeframe', default='15m', help='Candle timeframe')
     opt_run.add_argument('--start-date', help='Start date (ISO format)')
     opt_run.add_argument('--end-date', help='End date (ISO format)')
@@ -512,8 +522,17 @@ Examples:
         help='Optimization objective')
     opt_run.add_argument('--n-trials', type=int, help='Number of trials per split')
     opt_run.add_argument('--n-splits', type=int, help='Number of walk-forward splits')
+    opt_run.add_argument('--train-ratio', type=float, help='Training data ratio (0-1)')
+    opt_run.add_argument('--walk-forward-mode', choices=['sliding', 'expanding'],
+        help='Walk-forward mode')
+    opt_run.add_argument('--sampler', choices=['tpe', 'random', 'grid', 'cmaes'],
+        help='Optuna sampler')
+    opt_run.add_argument('--pruner', choices=['median', 'hyperband', 'none'],
+        help='Optuna pruner')
     opt_run.add_argument('--multithread', action='store_true',
         help='Enable multithreaded optimization (use all CPU cores)')
+    opt_run.add_argument('--run-id', type=int, default=None,
+        help='Adopt a pre-created PENDING run (used by the dashboard supervisor)')
 
     # optimize list
     opt_list = opt_subparsers.add_parser('list', help='List optimization studies')
