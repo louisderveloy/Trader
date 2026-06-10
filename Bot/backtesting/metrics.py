@@ -89,10 +89,17 @@ def calculate_metrics(
         metrics.avg_loss = sum(t.net_pnl for t in losing_trades) / len(losing_trades)
         metrics.largest_loss = min(t.net_pnl for t in losing_trades)
 
-    # Profit factor
+    # Profit factor = sum(wins) / abs(sum(losses))
+    # Perfect strategy (only wins, no losses) should have high profit factor, not 0.0
     total_wins = sum(t.net_pnl for t in winning_trades) if winning_trades else Decimal("0")
     total_losses = abs(sum(t.net_pnl for t in losing_trades)) if losing_trades else Decimal("0")
-    metrics.profit_factor = float(total_wins / total_losses) if total_losses > 0 else 0.0
+
+    if total_losses > 0:
+        # Normal case: some losses exist
+        metrics.profit_factor = float(total_wins / total_losses)
+    else:
+        # No losses: return 999.0 if there are wins (perfect strategy), else 0.0
+        metrics.profit_factor = 999.0 if total_wins > 0 else 0.0
 
     # Risk metrics from equity curve
     if not equity_curve.empty:

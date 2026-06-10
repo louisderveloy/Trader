@@ -119,6 +119,10 @@ async def cmd_run(args):
         config.sampler = args.sampler
     if args.pruner:
         config.pruner = args.pruner
+    if args.multithread:
+        import multiprocessing
+        config.n_jobs = -1  # Use all CPU cores
+        logger.info(f"Multithreading enabled: will use all {multiprocessing.cpu_count()} CPU cores")
 
     # Connect to database
     db_pool = await get_db_pool()
@@ -313,6 +317,8 @@ def main():
                             help='Optuna sampler')
     run_parser.add_argument('--pruner', choices=['median', 'hyperband', 'none'],
                             help='Optuna pruner')
+    run_parser.add_argument('--multithread', action='store_true',
+                            help='Enable multithreaded optimization (use all CPU cores)')
 
     # List command
     list_parser = subparsers.add_parser('list', help='List optimization studies')

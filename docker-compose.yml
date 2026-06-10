@@ -50,6 +50,7 @@ services:
   # ==========================================
   bot:
     container_name: trader-bot
+    cpu_count: 4
     build:
       context: ./bot
       dockerfile: Dockerfile

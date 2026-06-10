@@ -139,6 +139,7 @@ class OptimizationConfig:
     sampler: str = "tpe"  # Tree-structured Parzen Estimator (best for continuous params)
     pruner: str = "median"  # Median pruner (good default)
     storage: Optional[str] = None  # Optuna storage URL (e.g., postgresql://...)
+    n_jobs: int = 1  # Number of parallel jobs (1=serial, -1=all CPUs)
 
     def __post_init__(self):
         """Validate configuration."""
@@ -229,7 +230,8 @@ class OptimizationConfig:
             "end_date": self.end_date.isoformat() if self.end_date else None,
             "sampler": self.sampler,
             "pruner": self.pruner,
-            "storage": self.storage
+            "storage": self.storage,
+            "n_jobs": self.n_jobs
         }
 
 

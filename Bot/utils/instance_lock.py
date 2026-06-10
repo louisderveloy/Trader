@@ -12,6 +12,7 @@ Locks are automatically released when the database connection closes.
 
 import logging
 from typing import Optional, Dict, Any
+
 import asyncpg
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ class InstanceLockManager:
     # These must be positive integers in the range [0, 2^31-1]
     LOCK_KEYS = {
         'paper': 1827364950,  # hash('paper_trading') & 0x7FFFFFFF
-        'live': 1923847563,   # hash('live_trading') & 0x7FFFFFFF
+        'live': 1923847563,  # hash('live_trading') & 0x7FFFFFFF
     }
 
     @staticmethod

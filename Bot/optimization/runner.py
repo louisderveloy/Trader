@@ -15,6 +15,12 @@ from decimal import Decimal
 from uuid import UUID
 import asyncpg
 import optuna
+import nest_asyncio
+
+# Apply nest_asyncio patch to allow asyncio.run() from within a running event loop
+# This is required because the CLI wraps cmd_run() in asyncio.run() at the top level,
+# and sync_objective (called by Optuna) needs to call asyncio.run() again for async code
+nest_asyncio.apply()
 
 from .types import (
     OptimizationConfig,
@@ -167,12 +173,16 @@ class OptimizationRunner:
                 # Optimize on training set
                 train_result = await self._optimize_split(split)
 
+                # Get database URL for test evaluation
+                db_url = os.getenv("DATABASE_URL", "")
+                db_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
+
                 # Evaluate best params on test set
                 test_score = await evaluate_weights(
                     weights=train_result["best_params"],
                     config=self.config,
                     split=split,
-                    db_pool=self.db_pool,
+                    db_url=db_url,
                     strategy_config=self.strategy_config,
                     is_test=True
                 )
@@ -362,38 +372,51 @@ class OptimizationRunner:
             extra={
                 "split_index": split.split_index,
                 "train_start": split.train_start.isoformat(),
-                "train_end": split.train_end.isoformat()
+                "train_end": split.train_end.isoformat(),
+                "n_jobs": self.config.n_jobs,
+                "parallel": self.config.n_jobs != 1
             }
         )
 
         split_start_time = time.time()
 
-        # Create Optuna study
-        study = self._create_study()
+        # Create Optuna study (unique per split to avoid trial contamination)
+        study = self._create_study(split_index=split.split_index)
 
-        # Create objective function for this split
+        # Get database URL from environment (not the pool object)
+        db_url = os.getenv("DATABASE_URL", "")
+        db_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
+
+        # Create objective function for this split - pass URL, not pool
         objective_func = create_objective_function(
             config=self.config,
             split=split,
-            db_pool=self.db_pool,
+            db_url=db_url,
             search_space=self.search_space,
             strategy_config=self.strategy_config,
             is_test=False
         )
 
         # Define async wrapper for Optuna (Optuna expects sync functions)
-        # Use nest_asyncio to allow nested event loops
+        # Use asyncio.run() which properly creates/closes event loops per trial
+        # This avoids task context mismatch errors when reusing event loops
         def sync_objective(trial: optuna.Trial) -> float:
             import asyncio
-            import nest_asyncio
-            nest_asyncio.apply()
-            loop = asyncio.get_event_loop()
-            return loop.run_until_complete(objective_func(trial))
+
+            # asyncio.run() creates a fresh event loop for this trial,
+            # runs the async function, and properly cleans up.
+            # This approach:
+            # 1. Eliminates "different loop" errors (fresh loop per trial)
+            # 2. Eliminates "task mismatch" errors (proper cleanup)
+            # 3. Works with asyncpg pool caching (pools created fresh too)
+            # 4. Simple and reliable
+            return asyncio.run(objective_func(trial))
 
         # Run optimization
         study.optimize(
             sync_objective,
             n_trials=self.config.n_trials,
+            n_jobs=self.config.n_jobs,
             show_progress_bar=True
         )
 
@@ -421,13 +444,22 @@ class OptimizationRunner:
             "optimization_time": split_optimization_time
         }
 
-    def _create_study(self) -> optuna.Study:
+    def _create_study(self, split_index: int = 0) -> optuna.Study:
         """
         Create Optuna study with configured sampler and pruner.
+
+        Each split gets a unique study name to prevent trial contamination
+        between walk-forward splits.
+
+        Args:
+            split_index: Walk-forward split index (appended to study name)
 
         Returns:
             optuna.Study object
         """
+        # Optuna n_jobs>1 uses threading internally; in-memory storage is thread-safe
+        storage = self.config.storage
+
         # Create sampler
         if self.config.sampler == "tpe":
             sampler = optuna.samplers.TPESampler()
@@ -455,23 +487,26 @@ class OptimizationRunner:
             logger.warning(f"Unknown pruner {self.config.pruner}, using median")
             pruner = optuna.pruners.MedianPruner()
 
-        # Create study
+        # Create study with unique name per split
+        split_study_name = f"{self.config.study_name}_split_{split_index}"
         study = optuna.create_study(
-            study_name=self.config.study_name,
+            study_name=split_study_name,
             direction="maximize",  # Always maximize (Sharpe, Sortino, etc.)
             sampler=sampler,
             pruner=pruner,
-            storage=self.config.storage,  # Use storage if provided for persistence
+            storage=storage,  # Use storage if provided for persistence
             load_if_exists=True  # Allow resuming existing studies
         )
 
         logger.info(
             "Optuna study created",
             extra={
-                "study_name": self.config.study_name,
+                "study_name": split_study_name,
                 "sampler": self.config.sampler,
                 "pruner": self.config.pruner,
-                "storage": self.config.storage or "in-memory"
+                "storage": storage or "in-memory",
+                "n_jobs": self.config.n_jobs,
+                "parallel_mode": self.config.n_jobs > 1
             }
         )
 

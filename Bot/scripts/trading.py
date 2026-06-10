@@ -30,11 +30,11 @@ Usage:
 
 import argparse
 import asyncio
+import json
 import logging
 import os
-import sys
 import signal
-import json
+import sys
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from typing import Optional, Dict, Any
@@ -79,12 +79,12 @@ class TradingBot:
     """
 
     def __init__(
-        self,
-        symbol: str,
-        timeframe: str,
-        mode: str,
-        testnet: bool,
-        initial_capital: Decimal = Decimal("10000")
+            self,
+            symbol: str,
+            timeframe: str,
+            mode: str,
+            testnet: bool,
+            initial_capital: Decimal = Decimal("10000")
     ):
         """
         Initialize trading bot.
@@ -321,7 +321,6 @@ class TradingBot:
         await self.exchange.connect()
         logger.info(f"Exchange connection established ({'testnet' if self.testnet else 'mainnet'})")
 
-
     async def _init_discord(self):
         """Initialize Discord notifier."""
         webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
@@ -369,7 +368,8 @@ class TradingBot:
                     k.replace('weight_', ''): v
                     for k, v in weights.items()
                 }
-                logger.info(f"Loaded active weights (set_id: {self.weights_set_id}): {json.dumps(self.weights, indent=2)}")
+                logger.info(
+                    f"Loaded active weights (set_id: {self.weights_set_id}): {json.dumps(self.weights, indent=2)}")
             else:
                 # Default weights
                 self.weights = {
@@ -381,11 +381,11 @@ class TradingBot:
                 logger.warning("No active weights set, using defaults")
 
     async def _log_score(
-        self,
-        weighted_score: float,
-        signals: Dict[str, float],
-        current_time: datetime,
-        order_id: Optional[UUID] = None
+            self,
+            weighted_score: float,
+            signals: Dict[str, float],
+            current_time: datetime,
+            order_id: Optional[UUID] = None
     ):
         """
         Log score calculation to score_logs table for statistical analysis.
@@ -473,7 +473,7 @@ class TradingBot:
                 now,  # start_date
                 now,  # end_date (will be updated on completion)
                 json.dumps(config_snapshot),
-                now   # started_at
+                now  # started_at
             )
             self.run_id = row["id"]
 
@@ -734,7 +734,8 @@ class TradingBot:
             signal_val = signals[indicator]
             weight_val = self.weights.get(indicator, 0.0)
             contrib_val = contributions[indicator]
-            logger.info(f"  {indicator:15s}: signal={signal_val:+.3f}, weight={weight_val:.3f}, contrib={contrib_val:+.4f}")
+            logger.info(
+                f"  {indicator:15s}: signal={signal_val:+.3f}, weight={weight_val:.3f}, contrib={contrib_val:+.4f}")
         logger.info(f"Raw score (before clamp): {score:+.4f}")
 
         clamped_score = max(-1.0, min(1.0, score))
@@ -822,7 +823,7 @@ class TradingBot:
             filled_price = order_price * (Decimal("1") + slippage_pct)
             commission = quantity * filled_price * Decimal("0.001")
 
-            logger.info(f"[PAPER] Order filled at {filled_price} (slippage: {slippage_pct*100:.3f}%)")
+            logger.info(f"[PAPER] Order filled at {filled_price} (slippage: {slippage_pct * 100:.3f}%)")
 
         if is_filled:
             # Update order as filled
@@ -943,7 +944,8 @@ class TradingBot:
                 logger.info(f"POSITION CLOSED")
                 logger.info(f"Entry: {entry_price:.2f} | Exit: {filled_price:.2f}")
                 logger.info(f"P&L: {net_pnl:.2f} USDT ({net_pnl_pct:+.2f}%) [NET after fees]")
-                logger.info(f"Fees: {entry_commission + exit_commission:.2f} USDT (entry: {entry_commission:.2f}, exit: {exit_commission:.2f})")
+                logger.info(
+                    f"Fees: {entry_commission + exit_commission:.2f} USDT (entry: {entry_commission:.2f}, exit: {exit_commission:.2f})")
                 logger.info(f"Capital: {self.capital:.2f} USDT")
                 logger.info("=" * 60)
 
@@ -969,11 +971,11 @@ class TradingBot:
             self.pending_order = None
 
     async def _check_entry(
-        self,
-        score: float,
-        price: Decimal,
-        candles: list,
-        signals: Dict[str, float]
+            self,
+            score: float,
+            price: Decimal,
+            candles: list,
+            signals: Dict[str, float]
     ):
         """Check for entry conditions and execute if met."""
         # Check daily trade limit
@@ -1006,11 +1008,11 @@ class TradingBot:
             self.confirmation_count = 0
 
     async def _check_exit(
-        self,
-        score: float,
-        price: Decimal,
-        candles: list,
-        signals: Dict[str, float]
+            self,
+            score: float,
+            price: Decimal,
+            candles: list,
+            signals: Dict[str, float]
     ):
         """Check for exit conditions and execute if met."""
         if not self.position:
@@ -1079,10 +1081,10 @@ class TradingBot:
             return self.capital
 
     async def _execute_entry(
-        self,
-        price: Decimal,
-        score: float,
-        signals: Dict[str, float]
+            self,
+            price: Decimal,
+            score: float,
+            signals: Dict[str, float]
     ):
         """Execute entry order."""
         # Get available capital (actual balance in live mode, simulated in paper mode)
@@ -1192,11 +1194,11 @@ class TradingBot:
         logger.info(f"Entry order pending: {exchange_order_id} | Price: {price:.2f}")
 
     async def _execute_exit(
-        self,
-        price: Decimal,
-        reason: str,
-        score: float,
-        signals: Dict[str, float]
+            self,
+            price: Decimal,
+            reason: str,
+            score: float,
+            signals: Dict[str, float]
     ):
         """Execute exit order."""
         if not self.position:
@@ -1397,7 +1399,8 @@ class TradingBot:
                     has_open_positions = True
 
                     for order in open_orders:
-                        logger.warning(f"  - Order {order.get('order_id')}: {order.get('side')} {order.get('quantity')} @ {order.get('price')}")
+                        logger.warning(
+                            f"  - Order {order.get('order_id')}: {order.get('side')} {order.get('quantity')} @ {order.get('price')}")
 
                         # Cancel each open order
                         try:
@@ -1445,11 +1448,11 @@ class TradingBot:
                 )
 
     async def _log_signal(
-        self,
-        signal_type: str,
-        price: Decimal,
-        score: float,
-        signals: Dict[str, float]
+            self,
+            signal_type: str,
+            price: Decimal,
+            score: float,
+            signals: Dict[str, float]
     ) -> Optional[UUID]:
         """Log signal to database and return signal ID."""
         query = """
@@ -1473,11 +1476,11 @@ class TradingBot:
         return row["id"] if row else None
 
     async def _create_trade_entry(
-        self,
-        entry_price: Decimal,
-        quantity: Decimal,
-        entry_time: datetime,
-        entry_order_id: UUID,
+            self,
+            entry_price: Decimal,
+            quantity: Decimal,
+            entry_time: datetime,
+            entry_order_id: UUID,
     ) -> UUID:
         """
         Create trade entry in database when position opens.
@@ -1523,16 +1526,16 @@ class TradingBot:
         return trade_id
 
     async def _log_trade(
-        self,
-        trade_id: UUID,
-        exit_price: Decimal,
-        exit_reason: str,
-        net_pnl: Decimal,
-        net_pnl_pct: float,
-        exit_score: float,
-        exit_signals: Dict[str, float],
-        exit_order_id: Optional[UUID] = None,
-        exit_commission: Optional[Decimal] = None,
+            self,
+            trade_id: UUID,
+            exit_price: Decimal,
+            exit_reason: str,
+            net_pnl: Decimal,
+            net_pnl_pct: float,
+            exit_score: float,
+            exit_signals: Dict[str, float],
+            exit_order_id: Optional[UUID] = None,
+            exit_commission: Optional[Decimal] = None,
     ):
         """Update trade with exit data and mark as closed. P&L values are NET (after fees)."""
         # Calculate duration
@@ -1580,7 +1583,6 @@ class TradingBot:
                 "exit_order_id": str(exit_order_id) if exit_order_id else None,
             }
         )
-
 
     def _parse_timeframe_minutes(self, timeframe: str) -> int:
         """Parse timeframe string to minutes."""
@@ -1662,15 +1664,20 @@ class TradingBot:
             if old_config:
                 logger.info("Configuration changes detected:")
                 if old_config.strategy.entry_threshold != new_config.strategy.entry_threshold:
-                    logger.info(f"  Entry threshold: {old_config.strategy.entry_threshold} → {new_config.strategy.entry_threshold}")
+                    logger.info(
+                        f"  Entry threshold: {old_config.strategy.entry_threshold} → {new_config.strategy.entry_threshold}")
                 if old_config.strategy.exit_threshold != new_config.strategy.exit_threshold:
-                    logger.info(f"  Exit threshold: {old_config.strategy.exit_threshold} → {new_config.strategy.exit_threshold}")
+                    logger.info(
+                        f"  Exit threshold: {old_config.strategy.exit_threshold} → {new_config.strategy.exit_threshold}")
                 if old_config.strategy.confirmation_candles != new_config.strategy.confirmation_candles:
-                    logger.info(f"  Confirmation candles: {old_config.strategy.confirmation_candles} → {new_config.strategy.confirmation_candles}")
+                    logger.info(
+                        f"  Confirmation candles: {old_config.strategy.confirmation_candles} → {new_config.strategy.confirmation_candles}")
                 if old_config.risk.max_trades_per_day != new_config.risk.max_trades_per_day:
-                    logger.info(f"  Max trades/day: {old_config.risk.max_trades_per_day} → {new_config.risk.max_trades_per_day}")
+                    logger.info(
+                        f"  Max trades/day: {old_config.risk.max_trades_per_day} → {new_config.risk.max_trades_per_day}")
                 if old_config.risk.position_size_mode != new_config.risk.position_size_mode:
-                    logger.info(f"  Position size mode: {old_config.risk.position_size_mode.value} → {new_config.risk.position_size_mode.value}")
+                    logger.info(
+                        f"  Position size mode: {old_config.risk.position_size_mode.value} → {new_config.risk.position_size_mode.value}")
 
             # Update config
             self.config = new_config
@@ -1708,11 +1715,11 @@ class TradingBot:
 
 
 async def run_trading_loop(
-    symbol: str,
-    timeframe: str,
-    mode: str,
-    testnet: bool,
-    verbose: bool = False
+        symbol: str,
+        timeframe: str,
+        mode: str,
+        testnet: bool,
+        verbose: bool = False
 ):
     """
     Main entry point for trading loop.
@@ -1785,15 +1792,15 @@ def parse_args():
     )
 
     parser.add_argument('--mode', choices=['paper', 'live'], required=True,
-        help='Trading mode')
+                        help='Trading mode')
     parser.add_argument('--symbol', default='BTCUSDT',
-        help='Trading symbol (default: BTCUSDT)')
+                        help='Trading symbol (default: BTCUSDT)')
     parser.add_argument('--timeframe', default='15m',
-        help='Candle timeframe (default: 15m)')
+                        help='Candle timeframe (default: 15m)')
     parser.add_argument('--testnet', action='store_true',
-        help='Use Binance testnet (required for live mode testing)')
+                        help='Use Binance testnet (required for live mode testing)')
     parser.add_argument('-v', '--verbose', action='store_true',
-        help='Enable verbose logging')
+                        help='Enable verbose logging')
 
     return parser.parse_args()
 
