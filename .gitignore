@@ -223,3 +223,4 @@ volumes/redis/
 volumes/grafana/
 volumes/traefik/
 volumes/bot_logs/
+.claude/worktrees

@@ -2264,3 +2264,33 @@ docker compose -f docker-compose.prod.yml up -d
 - Easy rollback to previous image versions
 - PostgreSQL now accessible for external Grafana (with firewall protection)
 
+### 2026-06-10T[CURRENT] [CODE] Optimization Bug Fix Session — Bugs C/B/A Resolved ✅
+
+**Status:** ✅ Complete
+
+**Context:** Walk-forward optimization returned 0.00 for all train/test splits in both single-process and multithread modes.
+
+**Bug C (HIGH) — Zero trades due to unreachable thresholds:**
+- Root cause: Weighted score was small (±0.5 typical) but DB entry_threshold=0.6 was unreachable. Exit_threshold=0.3 (positive) caused premature exits.
+- Fix: (a) Normalize weighted_score by dividing by sum of absolute weights + clip to [-1,1] in both `vectorbt_engine.py` and `strategy/engine.py`. (b) Updated DB config thresholds: entry 0.6→0.3, exit 0.3→-0.2.
+- Commit: `24f1116`
+
+**Bug B (MED) — Study name collision across walk-forward splits:**
+- Root cause: All splits used same study name. With `load_if_exists=True`, Split 2 loaded Split 1's trials.
+- Fix: Append `_split_{split_index}` to study name in `runner.py:_create_study()`.
+- Commit: `b8c824f`
+
+**Bug A (LOW) — Unnecessary complex DB storage config for parallel mode:**
+- Root cause: Complex optuna schema auto-configuration was dead code (logs showed "in memory" storage).
+- Fix: Simplified to use `self.config.storage` directly.
+- Commit: `a27830b`
+
+**Cleanup — Dead code removal in objective.py:**
+- Removed unused `_process_pools: Dict[int, asyncpg.Pool]` dict and unused imports (`Any`, `Optional`, `Decimal`).
+- Commit: `1ff7c6b`
+
+**Verification results (non-zero Sharpe ratios):**
+- Single-process: Split 1 train=1.77, test=1.89; Split 2 train=-0.64, test=-2.56
+- Multithread: Split 1 train=1.05, test=1.89; Split 2 train=-0.40, test=-2.56
+- Results differ between modes (expected: different random seeds/thread scheduling)
+
