@@ -15,7 +15,8 @@ export interface TokenResponse {
 
 export interface User {
   username: string
-  email: string
+  email: string | null
+  role?: 'admin' | 'viewer'
 }
 
 // Run types
@@ -56,6 +57,45 @@ export interface RunListResponse {
 export interface RunStatusUpdate {
   status: string
   reason?: string
+}
+
+// Run control (start/stop/kill + logs)
+export type StartRunType = 'backtest' | 'paper' | 'live'
+
+export interface StartRunRequest {
+  run_type: StartRunType
+  symbol?: string
+  timeframe?: string
+  // backtest
+  start_date?: string
+  end_date?: string
+  initial_capital?: number
+  weights_set_id?: string
+  engine?: 'vectorbt' | 'event_driven'
+  save?: boolean
+  // live
+  testnet?: boolean
+  confirm_phrase?: string
+}
+
+export interface StartRunResponse {
+  run_id: number
+  command_id: number
+  status: string
+  message: string
+}
+
+export interface RunCommandResponse {
+  run_id: number
+  command_id: number
+  kind: string
+  message: string
+}
+
+export interface RunLogsResponse {
+  run_id: number
+  lines: string[]
+  truncated: boolean
 }
 
 // Health check types

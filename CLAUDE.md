@@ -19,7 +19,7 @@ multi-projets.
      bot.yourdomain.com    api.yourdomain.com
      (Vue.js)              (FastAPI)
                                │
-                          Redis pub/sub
+                    PostgreSQL LISTEN/NOTIFY
                                │
                            Bot Python
                                │
@@ -30,9 +30,11 @@ multi-projets.
 
 ### Règle fondamentale de communication
 
-- Le bot publie ses événements sur Redis (jamais d'appel HTTP synchrone vers l'API).
-- L'API consomme Redis et expose les données au dashboard.
-- Le dashboard envoie des commandes via l'API → Redis → bot.
+- La communication bot ↔ API ↔ dashboard passe par **PostgreSQL** : l'état est écrit
+  en base, et les commandes/événements sont diffusés via **PostgreSQL LISTEN/NOTIFY**
+  (équivalent d'un pub/sub ; aucun Redis). Le bot n'appelle jamais l'API en HTTP synchrone.
+- L'API lit la base (et écrit des commandes dans `run_commands`, diffusées par NOTIFY).
+- Le dashboard envoie des commandes via l'API → `run_commands` + NOTIFY → superviseur du bot.
 - Le bot continue de tourner même si l'API ou le dashboard est down.
 
 ---
@@ -69,13 +71,12 @@ docker-compose.prod.yml     → production VPS
 | Frontend dashboard     | Vue 3 + Vite + Pinia + Vue Router + TailwindCSS               |
 | Visualisation          | Grafana (hébergé séparément, connecté PostgreSQL/TimescaleDB) |
 | Base de données        | PostgreSQL + extension TimescaleDB                            |
-| Cache / messaging      | Redis (pub/sub + queue)                                       |
+| Messaging / commandes  | PostgreSQL LISTEN/NOTIFY (pub/sub natif, pas de Redis)        |
 | Reverse proxy          | Traefik (production uniquement)                               |
 | Optimisation           | Optuna                                                        |
 | Backtesting rapide     | vectorbt                                                      |
 | Backtesting validation | custom event-driven                                           |
 | Migrations DB          | Alembic                                                       |
-| Linting Python         | ruff                                                          |
 | Linting JS             | eslint                                                        |
 | Tests Python           | pytest                                                        |
 | CI/CD                  | GitHub Actions                                                |

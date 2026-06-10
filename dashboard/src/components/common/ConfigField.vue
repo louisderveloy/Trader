@@ -55,7 +55,7 @@ interface Props {
   label: string
   tooltip: string // French tooltip (mandatory)
   modelValue: string | number
-  type?: 'text' | 'number' | 'email' | 'password'
+  type?: 'text' | 'number' | 'email' | 'password' | 'date'
   disabled?: boolean
   helpText?: string
   min?: number

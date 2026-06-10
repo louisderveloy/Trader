@@ -123,6 +123,9 @@ services:
       API_PORT: 8000
       API_RELOAD: false  # Disable auto-reload in production
       API_WORKERS: 4  # Multiple workers for production
+    volumes:
+      # Read-only access to per-run bot logs for GET /runs/{id}/logs.
+      - bot_logs:/var/log/trader-bot:ro
     depends_on:
       postgres:
         condition: service_healthy

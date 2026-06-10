@@ -69,4 +69,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # Modern browsers use CSP instead
         response.headers["X-XSS-Protection"] = "1; mode=block"
 
+        # Limit referrer leakage to third parties
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+
+        # Deny powerful browser features the dashboard never needs
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+
         return response

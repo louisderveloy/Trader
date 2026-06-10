@@ -84,17 +84,20 @@ class TradingBot:
             timeframe: str,
             mode: str,
             testnet: bool,
-            initial_capital: Decimal = Decimal("10000")
+            initial_capital: Decimal = Decimal("10000"),
+            run_id: Optional[int] = None,
     ):
         """
         Initialize trading bot.
 
         Args:
-            symbol: Trading symbol (e.g., BTCUSDT)
+            symbol: Trading symbol (e.g., BTCUSDC)
             timeframe: Candle timeframe (e.g., 15m)
             mode: Trading mode ('paper' or 'live')
             testnet: Whether to use testnet
             initial_capital: Initial capital for paper trading
+            run_id: Pre-created PENDING run to adopt (dashboard supervisor); when
+                None the bot creates its own run record (CLI behaviour).
         """
         self.symbol = symbol
         self.timeframe = timeframe
@@ -108,7 +111,9 @@ class TradingBot:
         self.discord_notifier: Optional[DiscordNotifier] = None
 
         # State
-        self.run_id: Optional[int] = None  # Set when run record is created
+        # When provided, the bot adopts this existing PENDING run instead of
+        # creating a new one (see _create_run_record).
+        self.run_id: Optional[int] = run_id
         self.capital = initial_capital
         self.position: Optional[Dict[str, Any]] = None  # Current position
         self.weights: Dict[str, float] = {}
@@ -453,6 +458,38 @@ class TradingBot:
             "weights": self.weights,
             "initial_capital": str(self.initial_capital),
         })
+
+        if self.run_id is not None:
+            # Adopt a pre-created PENDING run (dashboard supervisor flow): flip it
+            # to RUNNING and enrich its snapshot. Fail loudly if it's not adoptable
+            # (already running, terminal, or missing) — never silently create one.
+            adopt_query = """
+                UPDATE runs
+                SET status = 'running',
+                    environment = $2,
+                    symbol = $3,
+                    timeframe = $4,
+                    config_snapshot = $5,
+                    started_at = COALESCE(started_at, $6)
+                WHERE id = $1 AND status = 'pending'
+                RETURNING id
+            """
+            async with self.db_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    adopt_query,
+                    self.run_id,
+                    environment,
+                    self.symbol,
+                    self.timeframe,
+                    json.dumps(config_snapshot),
+                    now,
+                )
+            if not row:
+                raise RuntimeError(
+                    f"Cannot adopt run {self.run_id}: not found or not in 'pending' state"
+                )
+            logger.info(f"Adopted pre-created run record: {self.run_id}")
+            return
 
         query = """
             INSERT INTO runs (
@@ -1719,7 +1756,8 @@ async def run_trading_loop(
         timeframe: str,
         mode: str,
         testnet: bool,
-        verbose: bool = False
+        verbose: bool = False,
+        run_id: Optional[int] = None,
 ):
     """
     Main entry point for trading loop.
@@ -1730,6 +1768,7 @@ async def run_trading_loop(
         mode: 'paper' or 'live'
         testnet: Use testnet
         verbose: Enable verbose logging
+        run_id: Pre-created PENDING run to adopt (dashboard supervisor)
     """
     load_dotenv()
 
@@ -1770,7 +1809,8 @@ async def run_trading_loop(
         symbol=symbol,
         timeframe=timeframe,
         mode=mode,
-        testnet=testnet
+        testnet=testnet,
+        run_id=run_id,
     )
 
     try:
