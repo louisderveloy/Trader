@@ -457,28 +457,8 @@ class OptimizationRunner:
         Returns:
             optuna.Study object
         """
-        # Determine storage URL
-        storage = None
-        if self.config.n_jobs > 1:
-            # Parallel optimization requires database storage
-            if not self.config.storage:
-                # Auto-configure database storage
-                dsn = os.getenv("DATABASE_URL", "")
-                dsn = dsn.replace("postgresql+asyncpg://", "postgresql://")
-
-                # Use same database, different schema for Optuna
-                # This keeps Optuna's internal tables separate from our application tables
-                if "?" in dsn:
-                    storage = f"{dsn}&options=-c%20search_path%3Doptuna,public"
-                else:
-                    storage = f"{dsn}?options=-c%20search_path%3Doptuna,public"
-
-                logger.info(f"Parallel mode: using database storage (optuna schema)")
-            else:
-                storage = self.config.storage
-        else:
-            # Serial optimization can use in-memory storage or configured storage
-            storage = self.config.storage
+        # Optuna n_jobs>1 uses threading internally; in-memory storage is thread-safe
+        storage = self.config.storage
 
         # Create sampler
         if self.config.sampler == "tpe":
