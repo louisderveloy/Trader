@@ -227,14 +227,12 @@ class ObjectiveFunction:
         )
 
         try:
-            # Create backtest configuration with thresholds from database config
             backtest_config = BacktestConfig(
                 symbol=self.config.symbol,
                 timeframe=self.config.timeframe,
                 start_date=self.start_date,
                 end_date=self.end_date,
                 initial_capital=self.config.initial_capital,
-                # Pass weights AND thresholds from database config
                 strategy_params={
                     "weights": weights,
                     "entry_threshold": self.strategy_config.strategy.entry_threshold,
@@ -398,14 +396,12 @@ async def evaluate_weights(
         start_date = split.test_start if is_test else split.train_start
         end_date = split.test_end if is_test else split.train_end
 
-        # Create backtest configuration with thresholds from database config
         backtest_config = BacktestConfig(
             symbol=config.symbol,
             timeframe=config.timeframe,
             start_date=start_date,
             end_date=end_date,
             initial_capital=config.initial_capital,
-            # Pass weights AND thresholds from database config
             strategy_params={
                 "weights": weights,
                 "entry_threshold": strategy_config.strategy.entry_threshold,

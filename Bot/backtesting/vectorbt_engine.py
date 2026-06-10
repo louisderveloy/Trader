@@ -381,20 +381,36 @@ class VectorbtBacktester(BacktesterBase):
         # Fill any NaN values with 0 (neutral)
         self.signals_df = self.signals_df.fillna(0.0)
 
-        # Calculate weighted score: Σ (signal_i × weight_i)
-        weighted_score = (
-            self.signals_df['ema_signal'] * weights.get('ema', 0.15) +
-            self.signals_df['macd_signal'] * weights.get('macd', 0.20) +
-            self.signals_df['rsi_signal'] * weights.get('rsi', 0.15) +
-            self.signals_df['stoch_rsi_signal'] * weights.get('stoch_rsi', 0.10) +
-            self.signals_df['bollinger_signal'] * weights.get('bollinger', 0.10) +
-            self.signals_df['atr_signal'] * weights.get('atr', 0.10) +
-            self.signals_df['obv_signal'] * weights.get('obv', 0.10) +
-            self.signals_df['fear_greed_signal'] * weights.get('fear_greed', 0.05) +
-            self.signals_df['user_signal'] * weights.get('user_indicator', 0.0)
+        # Calculate weighted score: Σ (signal_i × weight_i) / Σ |weight_i|
+        # Normalize by sum of absolute weights so score fills [-1, 1] range
+        # This matches the strategy engine behavior where weights sum to 1.0
+        used_weights = {
+            'ema': weights.get('ema', 0.15),
+            'macd': weights.get('macd', 0.20),
+            'rsi': weights.get('rsi', 0.15),
+            'stoch_rsi': weights.get('stoch_rsi', 0.10),
+            'bollinger': weights.get('bollinger', 0.10),
+            'atr': weights.get('atr', 0.10),
+            'obv': weights.get('obv', 0.10),
+            'fear_greed': weights.get('fear_greed', 0.05),
+            'user_indicator': weights.get('user_indicator', 0.0),
+        }
+        weight_sum = sum(abs(w) for w in used_weights.values())
+
+        raw_score = (
+            self.signals_df['ema_signal'] * used_weights['ema'] +
+            self.signals_df['macd_signal'] * used_weights['macd'] +
+            self.signals_df['rsi_signal'] * used_weights['rsi'] +
+            self.signals_df['stoch_rsi_signal'] * used_weights['stoch_rsi'] +
+            self.signals_df['bollinger_signal'] * used_weights['bollinger'] +
+            self.signals_df['atr_signal'] * used_weights['atr'] +
+            self.signals_df['obv_signal'] * used_weights['obv'] +
+            self.signals_df['fear_greed_signal'] * used_weights['fear_greed'] +
+            self.signals_df['user_signal'] * used_weights['user_indicator']
         )
 
-        self.signals_df['weighted_score'] = weighted_score
+        weighted_score = raw_score / weight_sum if weight_sum > 0 else raw_score
+        self.signals_df['weighted_score'] = np.clip(weighted_score, -1.0, 1.0)
 
         # DEBUG: Log individual signal distributions
         logger.debug(
@@ -464,17 +480,10 @@ class VectorbtBacktester(BacktesterBase):
         exits = weighted_score < exit_threshold
 
         logger.info(
-            "Generated entry/exit signals",
-            extra={
-                "entry_threshold": entry_threshold,
-                "exit_threshold": exit_threshold,
-                "weighted_score_min": float(weighted_score.min()),
-                "weighted_score_max": float(weighted_score.max()),
-                "weighted_score_mean": float(weighted_score.mean()),
-                "total_entry_signals": int(entries.sum()),
-                "total_exit_signals": int(exits.sum()),
-                "total_candles": len(weighted_score)
-            }
+            f"[SIGNALS] entry_thresh={entry_threshold}, exit_thresh={exit_threshold}, "
+            f"score_range=[{float(weighted_score.min()):.4f}, {float(weighted_score.max()):.4f}], "
+            f"score_mean={float(weighted_score.mean()):.4f}, "
+            f"entries={int(entries.sum())}, exits={int(exits.sum())}, candles={len(weighted_score)}"
         )
 
         return entries, exits

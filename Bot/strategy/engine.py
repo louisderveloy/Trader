@@ -189,13 +189,14 @@ class StrategyEngine:
                     f"Signal for {indicator} must be in [-1, 1], got {signal}"
                 )
 
-        # Calculate weighted sum
-        weighted_score = 0.0
+        # Calculate weighted sum normalized by total weight
+        raw_score = 0.0
         for indicator, weight in weights.items():
             signal = indicator_signals.get(indicator, 0.0)
-            weighted_score += signal * weight
+            raw_score += signal * weight
 
-        # Clamp to [-1, 1] (should already be in range, but just to be safe)
+        weight_sum = sum(abs(w) for w in weights.values())
+        weighted_score = raw_score / weight_sum if weight_sum > 0 else raw_score
         weighted_score = max(-1.0, min(1.0, weighted_score))
 
         logger.debug(
