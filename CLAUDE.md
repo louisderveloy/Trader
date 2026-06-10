@@ -343,6 +343,19 @@ Navigateur → Traefik (prod) → Vue.js → API (FastAPI avec JWT)
 - Tests end-to-end : backtest reproductible (même seed = même résultat)
 - CI GitHub Actions : lint + tests sur chaque PR
 
+### Lancer les tests
+
+```bash
+# Tous les tests Python (dans le container bot)
+docker compose exec bot bash -c "python -m pytest /tests"
+
+# Avec verbosité et couverture
+docker compose exec bot bash -c "python -m pytest /tests -v --cov=/app --cov-report=term-missing"
+
+# Un fichier ou dossier spécifique
+docker compose exec bot bash -c "python -m pytest /tests/test_strategy_engine.py -v"
+```
+
 ---
 
 ## Objectif principal
