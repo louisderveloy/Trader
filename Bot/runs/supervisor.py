@@ -42,7 +42,16 @@ logger = logging.getLogger(__name__)
 
 # --- allowlists (independent copy from the API; defense in depth) -----------
 
-_SYMBOL_RE = re.compile(r"^[A-Z]{2,10}USDC$")
+def _allowed_symbols() -> set[str]:
+    """Selectable symbols, from AVAILABLE_SYMBOLS env (default BTCUSDC).
+
+    Membership in this allowlist is itself the anti-injection guard: a flag-like
+    or otherwise malicious value can never be a configured symbol.
+    """
+    raw = os.getenv("AVAILABLE_SYMBOLS", "BTCUSDC")
+    return {s.strip().upper() for s in raw.split(",") if s.strip()} or {"BTCUSDC"}
+
+
 _ALLOWED_TIMEFRAMES = {
     "1m", "3m", "5m", "15m", "30m",
     "1h", "2h", "4h", "6h", "8h", "12h", "1d",
@@ -91,8 +100,8 @@ def _validate_start_params(params: dict[str, Any]) -> dict[str, Any]:
     if run_type not in _RUN_TYPES:
         raise CommandValidationError(f"invalid run_type: {run_type!r}")
 
-    symbol = str(params.get("symbol", ""))
-    if not _SYMBOL_RE.fullmatch(symbol):
+    symbol = str(params.get("symbol", "")).upper()
+    if symbol not in _allowed_symbols():
         raise CommandValidationError(f"invalid symbol: {symbol!r}")
 
     timeframe = str(params.get("timeframe", ""))

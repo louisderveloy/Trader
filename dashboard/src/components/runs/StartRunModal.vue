@@ -24,14 +24,21 @@
           </div>
 
           <!-- Shared: symbol + timeframe -->
-          <ConfigField
-            id="symbol"
-            label="Symbole"
-            tooltip="Paire de trading en USDC uniquement (ex: BTCUSDC). L'USDT n'est pas autorisé dans l'UE."
-            :model-value="form.symbol"
-            type="text"
-            @update:model-value="form.symbol = String($event).toUpperCase()"
-          />
+          <div>
+            <label for="symbol" class="block text-sm font-medium text-gray-700 mb-1">
+              Symbole
+            </label>
+            <select
+              id="symbol"
+              v-model="form.symbol"
+              class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            >
+              <option v-for="s in symbols" :key="s" :value="s">{{ s }}</option>
+            </select>
+            <p class="mt-1 text-xs text-gray-500">
+              Paires disponibles (USDC uniquement ; l'USDT n'est pas autorisé dans l'UE)
+            </p>
+          </div>
 
           <div>
             <label for="timeframe" class="block text-sm font-medium text-gray-700 mb-1">
@@ -68,11 +75,12 @@
             <ConfigField
               id="initial-capital"
               label="Capital initial (USDC)"
-              tooltip="Capital de départ simulé pour le backtest."
+              tooltip="Capital de départ simulé pour le backtest. Entier positif (0 < x < 2 147 483 647)."
               :model-value="form.initial_capital"
               type="number"
-              :min="10"
-              :step="100"
+              :min="1"
+              :max="2147483646"
+              :step="1"
               @update:model-value="form.initial_capital = Number($event)"
             />
             <div>
@@ -166,8 +174,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import ConfigField from '@/components/common/ConfigField.vue'
+import { getSymbols } from '@/api/runs'
 import type { StartRunRequest, StartRunType } from '@/api/types'
 
 interface Props {
@@ -184,6 +193,21 @@ const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h'
 const MAINNET_PHRASE = 'I UNDERSTAND'
 
 const network = ref<'testnet' | 'mainnet'>('testnet')
+
+// Selectable symbols come from the API (driven by AVAILABLE_SYMBOLS).
+const symbols = ref<string[]>(['BTCUSDC'])
+
+onMounted(async () => {
+  try {
+    const res = await getSymbols()
+    if (res.symbols.length) {
+      symbols.value = res.symbols
+      form.symbol = res.default || res.symbols[0]
+    }
+  } catch {
+    // Keep the safe default if the endpoint is unavailable.
+  }
+})
 
 const form = reactive({
   run_type: 'backtest' as StartRunType,
@@ -222,11 +246,14 @@ const submitLabel = computed(() => (isMainnet.value ? 'Démarrer (MAINNET)' : 'D
 const canSubmit = computed(() => {
   if (!form.symbol || !form.timeframe) return false
   if (form.run_type === 'backtest') {
+    const cap = Number(form.initial_capital)
     return (
       !!form.start_date &&
       !!form.end_date &&
       form.end_date > form.start_date &&
-      Number(form.initial_capital) >= 10
+      Number.isInteger(cap) &&
+      cap > 0 &&
+      cap < 2147483647
     )
   }
   if (form.run_type === 'live' && network.value === 'mainnet') {

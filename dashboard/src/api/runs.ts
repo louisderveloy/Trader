@@ -12,6 +12,7 @@ import type {
   RunStatusUpdate,
   StartRunRequest,
   StartRunResponse,
+  SymbolsResponse,
 } from './types'
 
 /**
@@ -87,5 +88,13 @@ export async function killRun(runId: number): Promise<RunCommandResponse> {
  */
 export async function getRunLogs(runId: number): Promise<RunLogsResponse> {
   const response = await apiClient.get<RunLogsResponse>(`/runs/${runId}/logs`)
+  return response.data
+}
+
+/**
+ * List the trading symbols selectable when starting a run
+ */
+export async function getSymbols(): Promise<SymbolsResponse> {
+  const response = await apiClient.get<SymbolsResponse>('/runs/symbols')
   return response.data
 }

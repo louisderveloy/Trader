@@ -8,7 +8,6 @@ allowlist *before* it reaches the database command channel or the supervisor
 ISO, symbol upper-cased) so raw client strings never flow into an argv array.
 """
 
-import re
 import secrets
 from datetime import date
 from enum import Enum
@@ -21,9 +20,6 @@ from ..config import settings
 
 # --- Allowlists -------------------------------------------------------------
 
-# USDC only: USDT is not authorised in the EU and will never be traded here.
-SYMBOL_RE = re.compile(r"^[A-Z]{2,10}USDC$")
-
 ALLOWED_TIMEFRAMES = {
     "1m", "3m", "5m", "15m", "30m",
     "1h", "2h", "4h", "6h", "8h", "12h", "1d",
@@ -32,9 +28,9 @@ ALLOWED_TIMEFRAMES = {
 # Phrase the operator must type to start a real-money (mainnet) live run.
 MAINNET_CONFIRM_PHRASE = "I UNDERSTAND"
 
-# Bounds for backtest starting capital (USDC).
-MIN_INITIAL_CAPITAL = 10.0
-MAX_INITIAL_CAPITAL = 1_000_000.0
+# Backtest starting capital must be a positive integer below the signed 32-bit
+# maximum (0 < x < 2^31 - 1).
+MAX_INITIAL_CAPITAL = 2_147_483_647
 
 
 class RunTypeStart(str, Enum):
@@ -68,7 +64,7 @@ class StartRunRequest(BaseModel):
     # Backtest-only
     start_date: Optional[date] = Field(default=None, description="Backtest start date (ISO)")
     end_date: Optional[date] = Field(default=None, description="Backtest end date (ISO)")
-    initial_capital: Optional[float] = Field(default=None, description="Backtest starting capital (USDC)")
+    initial_capital: Optional[int] = Field(default=None, description="Backtest starting capital (USDC), positive integer")
     weights_set_id: Optional[UUID] = Field(default=None, description="Weights set to use (active set if null)")
     engine: Optional[BacktestEngine] = Field(default=None, description="Backtest engine")
     save: bool = Field(default=True, description="Persist backtest results to the run record")
@@ -83,10 +79,9 @@ class StartRunRequest(BaseModel):
     @classmethod
     def _validate_symbol(cls, v: str) -> str:
         v = v.strip().upper()
-        if not SYMBOL_RE.fullmatch(v):
-            raise ValueError(
-                "symbol must be an uppercase USDC pair (e.g. BTCUSDC); USDT is not allowed"
-            )
+        allowed = settings.available_symbols_list
+        if v not in allowed:
+            raise ValueError(f"symbol must be one of {allowed}")
         return v
 
     @field_validator("timeframe")
@@ -99,12 +94,12 @@ class StartRunRequest(BaseModel):
 
     @field_validator("initial_capital")
     @classmethod
-    def _validate_capital(cls, v: Optional[float]) -> Optional[float]:
+    def _validate_capital(cls, v: Optional[int]) -> Optional[int]:
         if v is None:
             return v
-        if not (MIN_INITIAL_CAPITAL <= v <= MAX_INITIAL_CAPITAL):
+        if not (0 < v < MAX_INITIAL_CAPITAL):
             raise ValueError(
-                f"initial_capital must be between {MIN_INITIAL_CAPITAL} and {MAX_INITIAL_CAPITAL}"
+                f"initial_capital must be a positive integer below {MAX_INITIAL_CAPITAL}"
             )
         return v
 
@@ -120,7 +115,7 @@ class StartRunRequest(BaseModel):
             if self.engine is None:
                 self.engine = BacktestEngine.VECTORBT
             if self.initial_capital is None:
-                self.initial_capital = settings.backtest_initial_capital
+                self.initial_capital = int(settings.backtest_initial_capital)
             # Live-only fields are meaningless here.
             self.testnet = None
             self.confirm_phrase = None

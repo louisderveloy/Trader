@@ -146,6 +146,22 @@ class Settings(BaseSettings):
     binance_default_symbol: str = Field(
         default="BTCUSDC", description="Default trading symbol (USDC only; USDT not authorised in EU)"
     )
+    # Symbols offered in the dashboard's run-start combo box. Comma-separated;
+    # the first entry is treated as the default. USDC quote only.
+    available_symbols: str = Field(
+        default="BTCUSDC", description="Comma-separated list of selectable trading symbols"
+    )
+
+    @computed_field
+    @property
+    def available_symbols_list(self) -> list[str]:
+        """Parse available symbols into an upper-cased, de-duplicated list."""
+        seen: list[str] = []
+        for raw in self.available_symbols.split(","):
+            sym = raw.strip().upper()
+            if sym and sym not in seen:
+                seen.append(sym)
+        return seen or [self.binance_default_symbol.upper()]
     binance_default_timeframe: str = Field(
         default="15m", description="Default timeframe"
     )

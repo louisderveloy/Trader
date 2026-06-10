@@ -98,6 +98,11 @@ export interface RunLogsResponse {
   truncated: boolean
 }
 
+export interface SymbolsResponse {
+  symbols: string[]
+  default: string
+}
+
 // Health check types
 export interface HealthResponse {
   status: 'healthy' | 'degraded'

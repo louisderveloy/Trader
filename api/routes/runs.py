@@ -201,6 +201,21 @@ async def get_active_runs(
     return items
 
 
+@router.get("/symbols")
+async def list_symbols(
+    principal: Principal = Depends(require_viewer),
+) -> dict:
+    """
+    List the trading symbols selectable when starting a run.
+
+    Driven by the ``AVAILABLE_SYMBOLS`` env var (comma-separated, USDC quote).
+    The first entry is the default. Defined before ``/{run_id}`` so the literal
+    path wins over the integer path parameter.
+    """
+    symbols = settings.available_symbols_list
+    return {"symbols": symbols, "default": symbols[0]}
+
+
 @router.get("/{run_id}", response_model=RunResponse)
 async def get_run(
     run_id: int,

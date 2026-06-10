@@ -43,8 +43,8 @@ def test_valid_backtest_params_pass():
 
 
 def test_valid_paper_params_pass():
-    clean = _validate_start_params({"run_type": "paper", "symbol": "ETHUSDC", "timeframe": "1h"})
-    assert clean == {"run_type": "paper", "symbol": "ETHUSDC", "timeframe": "1h"}
+    clean = _validate_start_params({"run_type": "paper", "symbol": "BTCUSDC", "timeframe": "1h"})
+    assert clean == {"run_type": "paper", "symbol": "BTCUSDC", "timeframe": "1h"}
 
 
 def test_valid_live_params_require_boolean_testnet():
@@ -60,15 +60,29 @@ def test_usdt_symbol_rejected():
         _validate_start_params(_backtest_params(symbol="BTCUSDT"))
 
 
-def test_lowercase_symbol_rejected():
-    with pytest.raises(CommandValidationError):
-        _validate_start_params(_backtest_params(symbol="btcusdc"))
+def test_lowercase_symbol_normalized():
+    # Symbols are case-insensitive: lowercase is upper-cased then allowlisted.
+    clean = _validate_start_params(_backtest_params(symbol="btcusdc"))
+    assert clean["symbol"] == "BTCUSDC"
 
 
 def test_flag_like_symbol_rejected():
     # Argument-injection attempt: a value that argparse would read as a flag.
+    # Membership in the configured allowlist makes this impossible.
     with pytest.raises(CommandValidationError):
         _validate_start_params(_backtest_params(symbol="--confirm"))
+
+
+def test_symbol_not_in_allowlist_rejected():
+    # Well-formed USDC pair that is not in AVAILABLE_SYMBOLS (default BTCUSDC).
+    with pytest.raises(CommandValidationError):
+        _validate_start_params(_backtest_params(symbol="ETHUSDC"))
+
+
+def test_available_symbols_env_extends_allowlist(monkeypatch):
+    monkeypatch.setenv("AVAILABLE_SYMBOLS", "BTCUSDC,ETHUSDC")
+    clean = _validate_start_params(_backtest_params(symbol="ETHUSDC"))
+    assert clean["symbol"] == "ETHUSDC"
 
 
 def test_invalid_timeframe_rejected():
