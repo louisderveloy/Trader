@@ -651,6 +651,14 @@ Features implemented:
 
 ## [DISCOVERIES]
 
+### 2026-06-11T19:50Z [TOOL] Walk-forward TEST score always 0.0 — weight-key namespace mismatch
+**Symptom:** Every optuna_studies run had `test_score = 0.0` on every split (and study `best_value = 0.0`), while `train_score` was non-zero. Not a multithreading issue.
+**Root cause:** `WeightsSearchSpace.suggest_weights()` builds the backtester weights with UNPREFIXED keys (`{"ema":..,"macd":..,"user_indicator":0.05}`, normalized) — training used these → real scores. But Optuna registers params as `weight_<ind>`, so `study.best_params` is PREFIXED/un-normalized/missing the fixed weight. `runner._run_optimization` passed that prefixed dict into `evaluate_weights(is_test=True)`; the engine reads `weights.get('ema', default)` → every key missed → test silently ran on DEFAULT weights, fully decoupled from training. On the recent 4-split windows defaults made 0 trades → `BacktestMetrics()` default `sharpe_ratio=0.0` → exactly 0.0.
+**Same bug corrupted weights_sets** (saved `study.best_params` prefixed; strategy engine expects unprefixed `bot/strategy/types.py:52`).
+**Fix:** `suggest_weights` now records exact weights via `trial.set_user_attr("weights", ...)`; shared `_assemble()` + new `weights_from_params()` fallback; runner uses `study.best_trial.user_attrs["weights"]` for test eval AND save. Defensive warning added in `vectorbt_engine.py` when a non-empty weights dict has no recognised indicator keys.
+**Evidence:** post-fix run `fix-verify-trials` (80 trials, 3 splits) split 1 `test=1.5806` (was always 0.0); stored `best_params` now unprefixed and sum ~1.0.
+**Incidental quirk (out of scope):** a 0-trade backtest scores Sharpe 0.0, which beats a losing config's negative Sharpe — so with too few trials the optimizer can pick "do nothing." Explains why a 12-trial run was all-zero even after the fix.
+
 ### 2026-06-03T19:35Z [TOOL] Bot/ directory case sensitivity
 Windows filesystem allowed both Bot/ and bot/ during rename operation. Used mv Bot bot_new && mv bot_new bot to avoid case conflicts.
 

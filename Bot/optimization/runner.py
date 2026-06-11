@@ -208,9 +208,13 @@ class OptimizationRunner:
                 db_url = os.getenv("DATABASE_URL", "")
                 db_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
 
-                # Evaluate best params on test set
+                # Evaluate the best weights on the test set. Use the resolved
+                # (unprefixed, normalized) weights the best trial actually used —
+                # NOT study.best_params, whose prefixed keys silently fall back to
+                # default weights in the backtester.
+                best_weights = train_result["best_weights"]
                 test_score = await evaluate_weights(
-                    weights=train_result["best_params"],
+                    weights=best_weights,
                     config=self.config,
                     split=split,
                     db_url=db_url,
@@ -223,7 +227,7 @@ class OptimizationRunner:
                     split=split,
                     train_score=train_result["best_value"],
                     test_score=test_score,
-                    best_params=train_result["best_params"],
+                    best_params=best_weights,
                     n_trials=train_result["n_trials"],
                     optimization_time_seconds=train_result["optimization_time"]
                 )
@@ -232,7 +236,7 @@ class OptimizationRunner:
                 # Track overall best
                 if test_score > best_overall_value:
                     best_overall_value = test_score
-                    best_overall_params = train_result["best_params"]
+                    best_overall_params = best_weights
 
                 logger.info(
                     f"Split {split.split_index + 1} completed",
@@ -458,6 +462,13 @@ class OptimizationRunner:
         best_value = study.best_value
         best_params = study.best_params
 
+        # Resolve the EXACT weights the best trial used (unprefixed, normalized,
+        # including fixed weights). Prefer the per-trial recorded weights; fall back
+        # to reconstructing them from the prefixed best_params if unavailable.
+        best_weights = study.best_trial.user_attrs.get("weights")
+        if not best_weights:
+            best_weights = self.search_space.weights_from_params(best_params)
+
         logger.info(
             f"Split {split.split_index} optimization completed",
             extra={
@@ -471,6 +482,7 @@ class OptimizationRunner:
         return {
             "best_value": best_value,
             "best_params": best_params,
+            "best_weights": best_weights,
             "n_trials": len(study.trials),
             "optimization_time": split_optimization_time
         }

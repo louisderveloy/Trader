@@ -327,35 +327,22 @@ class WeightsSearchSpace:
         if self.max_weight <= self.min_weight:
             raise ValueError(f"max_weight must be greater than min_weight: {self.max_weight} <= {self.min_weight}")
 
-    def suggest_weights(self, trial) -> Dict[str, float]:
+    def _assemble(self, raw: Dict[str, float]) -> Dict[str, float]:
         """
-        Suggest indicator weights using Optuna trial.
+        Build the final weights dict (unprefixed keys) from raw optimizable values.
 
-        Fixed weights (from fixed_weights dict) are not optimized and keep their fixed values.
-        The remaining weights are optimized and normalized together.
+        Adds the fixed weights and normalizes, matching the format the backtester /
+        strategy engine expect (``{"ema": 0.13, "macd": 0.18, ...}``). This is the
+        single source of truth shared by :meth:`suggest_weights` (live trial) and
+        :meth:`weights_from_params` (reconstruction from ``study.best_params``).
 
         Args:
-            trial: Optuna trial object
+            raw: Mapping of optimizable indicator name -> suggested value (unprefixed).
 
         Returns:
-            Dict mapping indicator names to weights
+            Dict mapping indicator names to final (optionally normalized) weights.
         """
-        weights = {}
-
-        # Separate indicators into fixed and optimizable
-        optimizable_indicators = [
-            ind for ind in self.indicators
-            if ind not in self.fixed_weights
-        ]
-
-        # Suggest weights for optimizable indicators only
-        for indicator in optimizable_indicators:
-            weight = trial.suggest_float(
-                f"weight_{indicator}",
-                self.min_weight,
-                self.max_weight
-            )
-            weights[indicator] = weight
+        weights = dict(raw)
 
         # Add fixed weights (these are not optimized)
         for indicator, fixed_value in self.fixed_weights.items():
@@ -369,3 +356,71 @@ class WeightsSearchSpace:
                 weights = {k: v / total for k, v in weights.items()}
 
         return weights
+
+    def suggest_weights(self, trial) -> Dict[str, float]:
+        """
+        Suggest indicator weights using Optuna trial.
+
+        Fixed weights (from fixed_weights dict) are not optimized and keep their fixed values.
+        The remaining weights are optimized and normalized together.
+
+        The resolved (unprefixed, normalized) weights are also stored on the trial via
+        ``trial.set_user_attr("weights", ...)`` so the runner can reuse the *exact*
+        weights this trial used for test evaluation and persistence, instead of
+        re-reading Optuna's prefixed/un-normalized ``study.best_params``.
+
+        Args:
+            trial: Optuna trial object
+
+        Returns:
+            Dict mapping indicator names to weights
+        """
+        # Separate indicators into fixed and optimizable
+        optimizable_indicators = [
+            ind for ind in self.indicators
+            if ind not in self.fixed_weights
+        ]
+
+        # Suggest weights for optimizable indicators only.
+        # Optuna registers the param under the prefixed name "weight_<ind>",
+        # while the backtester reads the unprefixed "<ind>" key.
+        raw = {
+            indicator: trial.suggest_float(
+                f"weight_{indicator}",
+                self.min_weight,
+                self.max_weight,
+            )
+            for indicator in optimizable_indicators
+        }
+
+        weights = self._assemble(raw)
+
+        # Record the exact weights used so the runner can retrieve them later
+        # (per-trial attribute, thread-safe under n_jobs > 1).
+        trial.set_user_attr("weights", weights)
+
+        return weights
+
+    def weights_from_params(self, params: Dict[str, float]) -> Dict[str, float]:
+        """
+        Reconstruct the backtester weights dict from raw Optuna params.
+
+        ``study.best_params`` uses prefixed names (``weight_ema``), is not normalized
+        and omits the fixed weights. This strips the ``weight_`` prefix and re-applies
+        the same assembly as :meth:`suggest_weights`. Used as a fallback when a trial's
+        recorded ``weights`` user-attr is unavailable.
+
+        Args:
+            params: Mapping of prefixed param name -> value (e.g. ``{"weight_ema": 0.5}``).
+
+        Returns:
+            Dict mapping unprefixed indicator names to final normalized weights.
+        """
+        prefix = "weight_"
+        raw = {
+            (name[len(prefix):] if name.startswith(prefix) else name): value
+            for name, value in params.items()
+            # Only keep optimizable indicators; fixed ones are re-added by _assemble.
+            if (name[len(prefix):] if name.startswith(prefix) else name) not in self.fixed_weights
+        }
+        return self._assemble(raw)

@@ -257,6 +257,19 @@ class VectorbtBacktester(BacktesterBase):
         # Load weights from strategy_params (or use defaults)
         weights = self.config.strategy_params.get('weights', self._get_default_weights())
 
+        # Defensive guard: the weights dict must use unprefixed indicator keys
+        # (e.g. "ema", "macd"). If a caller passes a wrong namespace (e.g. Optuna's
+        # prefixed "weight_ema"), every weights.get('ema', default) lookup misses and
+        # the backtest silently runs on DEFAULT weights — which previously produced
+        # meaningless (often zero) walk-forward test scores. Warn loudly instead.
+        if weights and not any(ind in weights for ind in self._get_default_weights()):
+            logger.warning(
+                "[WEIGHTS] Supplied weights dict has no recognised indicator keys "
+                "(got %s) — falling back to DEFAULT weights. Pass unprefixed keys "
+                "like 'ema'/'macd', not 'weight_ema'.",
+                list(weights.keys()),
+            )
+
         close = self.candles_df['close'].astype(float)
         high = self.candles_df['high'].astype(float)
         low = self.candles_df['low'].astype(float)
