@@ -651,6 +651,14 @@ Features implemented:
 
 ## [DISCOVERIES]
 
+### 2026-06-12 [UI+API] Optimisations — filter & sort bar (server-side SQL)
+Added a filter/sort bar to `OptimizationsView.vue`, applied **server-side** (user rejected a client-side version). Filters: symbol, objective, status (pending/running/completed/failed/cancelled), "jeu de poids activé uniquement" toggle. Sort: completed_at | best_value, asc/desc. Server pagination retained (limit 20).
+- **API** (`api/routes/optimizations.py`): new query params validated via Enums (`OptStatusFilter`, `OptObjectiveFilter`, `OptSortField`, `SortDirection`) + symbol `pattern=^[A-Za-z0-9._-]+$`. `_build_filter_clause()` binds all values as `$n` params; ORDER BY column comes from a whitelist map (`_SORT_COLUMNS`), direction from the enum → **no user input interpolated into SQL**. Objective filter reads JSONB `COALESCE(config_snapshot->'params'->>'objective', ...->'optimization_config'->>'objective')`. Count uses `COUNT(DISTINCT r.id)` (joins can fan out a run across studies). ORDER BY adds `NULLS LAST, r.id DESC` for stable paging.
+- New facet endpoint `GET /optimizations/symbols` (distinct symbols from opt runs) — **declared before `/{run_id}`** so the literal path wins over the int converter.
+- **Migration 015** (`015_indexes_optimization_filter_sort`): partial indexes `ix_runs_opt_status_symbol (status,symbol)` and `ix_runs_opt_completed_at (completed_at DESC)`, both `WHERE run_type='optimization'`. alembic head now 015.
+- **Frontend**: `api/optimizations.ts` `getOptimizations(query)` + `getOptimizationSymbols()`; store holds filter/sort refs + `applyFilters()`/`fetchSymbols()`; view binds via `storeToRefs`, watches filters→`applyFilters` (resets offset 0). Reverted the client-side limit-1000 hack.
+- **Verified**: alembic 014→015 ok, both indexes present; `vue-tsc` exit 0; authed curls — filter/sort/active_only/symbols all 200 & correct; **input validation: invalid sort_by/status/objective/sort_dir and a `BTC';DROP` symbol all → 422**, valid → 200, unauth → 401. Dashboard restarted; served modules contain `applyFilters`/`fetchSymbols`/`storeToRefs`.
+
 ### 2026-06-12T00:00Z [TOOL] Weight-set activation — follow-ups resolved
 Resolved the three follow-ups from the 21:30 entry plus disabled polling:
 - **`runs.weights_set_id` never written** by the runner (was NULL for all completed optimizations). Extended `RunManager.link_optuna_study(run_id, study_id, weights_set_id=None)` to `SET weights_set_id = COALESCE($3, weights_set_id)`; runner now passes it. Backfilled existing rows via migration **014_backfill_runs_weights_set_id** (data-only, idempotent; alembic head now 014). Verified: all completed opt runs populated.

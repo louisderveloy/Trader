@@ -72,17 +72,39 @@ export interface LaunchOptimizationResponse {
   message: string
 }
 
+export type OptimizationSortField = 'completed_at' | 'best_value'
+export type SortDirection = 'asc' | 'desc'
+
+export interface OptimizationQuery {
+  limit?: number
+  offset?: number
+  symbol?: string
+  objective?: string
+  status?: OptimizationStatus
+  active_only?: boolean
+  sort_by?: OptimizationSortField
+  sort_dir?: SortDirection
+}
+
 /**
- * Get list of optimization runs (newest first)
+ * Get list of optimization runs with server-side filtering/sorting/pagination.
+ * Only defined keys are sent; the backend validates every filter/sort value.
  */
 export async function getOptimizations(
-  limit: number = 100,
-  offset: number = 0
+  query: OptimizationQuery = {}
 ): Promise<OptimizationListResponse> {
   const response = await apiClient.get<OptimizationListResponse>('/optimizations', {
-    params: { limit, offset },
+    params: query,
   })
   return response.data
+}
+
+/**
+ * Distinct symbols present in optimization runs (for the filter dropdown).
+ */
+export async function getOptimizationSymbols(): Promise<string[]> {
+  const response = await apiClient.get<{ symbols: string[] }>('/optimizations/symbols')
+  return response.data.symbols
 }
 
 /**
