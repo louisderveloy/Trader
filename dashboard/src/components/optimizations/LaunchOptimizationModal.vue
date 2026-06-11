@@ -58,13 +58,37 @@
               v-model="form.objective"
               class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
             >
-              <option value="sharpe_ratio">Sharpe Ratio</option>
-              <option value="sortino_ratio">Sortino Ratio</option>
-              <option value="profit_factor">Profit Factor</option>
-              <option value="win_rate">Win Rate</option>
-              <option value="total_return">Total Return</option>
+              <option
+                value="sharpe_ratio"
+                title="Rendement ajusté au risque (volatilité totale). Métrique par défaut."
+              >
+                Sharpe Ratio
+              </option>
+              <option
+                value="sortino_ratio"
+                title="Comme le Sharpe, mais ne pénalise que la volatilité baissière."
+              >
+                Sortino Ratio
+              </option>
+              <option
+                value="profit_factor"
+                title="Gains bruts ÷ pertes brutes. Supérieur à 1 = stratégie profitable."
+              >
+                Profit Factor
+              </option>
+              <option value="win_rate" title="Pourcentage de trades gagnants.">
+                Win Rate
+              </option>
+              <option
+                value="total_return"
+                title="Rendement total cumulé sur la période analysée."
+              >
+                Total Return
+              </option>
             </select>
-            <p class="mt-1 text-xs text-gray-500">Métrique à maximiser pour évaluer les paramètres</p>
+            <p class="mt-1 text-xs text-gray-500">
+              Métrique à maximiser. Survolez chaque option pour sa description.
+            </p>
           </div>
 
           <!-- Trials & splits -->
@@ -94,7 +118,7 @@
           <!-- Multithread -->
           <label class="flex items-center gap-2 text-sm text-gray-700">
             <input v-model="form.multithread" type="checkbox" class="rounded border-gray-300" />
-            Multithreading (utiliser tous les cœurs CPU)
+            Multithreading
           </label>
 
           <!-- Advanced (collapsible) -->
@@ -127,18 +151,23 @@
               <ConfigField
                 id="train-ratio"
                 label="Ratio d'entraînement (optionnel)"
-                tooltip="Proportion de chaque split utilisée pour l'entraînement (entre 0 et 1, ex: 0.75)."
+                tooltip="Proportion de chaque split utilisée pour l'entraînement (entre 0 et 1, ex: 0.75). Le reste sert au test (validation hors-échantillon)."
                 :model-value="form.train_ratio"
                 type="number"
                 :min="0.05"
                 :max="0.95"
                 :step="0.05"
-                @update:model-value="form.train_ratio = $event === '' ? null : Number($event)"
+                @update:model-value="form.train_ratio = $event === '' ? '' : Number($event)"
               />
               <div>
-                <label for="wf-mode" class="block text-sm font-medium text-gray-700 mb-1">
-                  Mode walk-forward (optionnel)
-                </label>
+                <div class="flex items-center gap-2 mb-1">
+                  <label for="wf-mode" class="block text-sm font-medium text-gray-700">
+                    Mode walk-forward (optionnel)
+                  </label>
+                  <InfoTooltip
+                    text="Sliding : fenêtre train/test de taille fixe qui glisse dans le temps. Expanding : la fenêtre d'entraînement grandit à chaque split. Par défaut : choix du moteur."
+                  />
+                </div>
                 <select
                   id="wf-mode"
                   v-model="form.walk_forward_mode"
@@ -150,9 +179,14 @@
                 </select>
               </div>
               <div>
-                <label for="sampler" class="block text-sm font-medium text-gray-700 mb-1">
-                  Sampler Optuna (optionnel)
-                </label>
+                <div class="flex items-center gap-2 mb-1">
+                  <label for="sampler" class="block text-sm font-medium text-gray-700">
+                    Sampler Optuna (optionnel)
+                  </label>
+                  <InfoTooltip
+                    text="Algorithme qui choisit les paramètres à tester : TPE (bayésien, recommandé), Random (aléatoire), Grid (exhaustif), CMA-ES (variables continues). Par défaut : TPE."
+                  />
+                </div>
                 <select
                   id="sampler"
                   v-model="form.sampler"
@@ -166,9 +200,14 @@
                 </select>
               </div>
               <div>
-                <label for="pruner" class="block text-sm font-medium text-gray-700 mb-1">
-                  Pruner Optuna (optionnel)
-                </label>
+                <div class="flex items-center gap-2 mb-1">
+                  <label for="pruner" class="block text-sm font-medium text-gray-700">
+                    Pruner Optuna (optionnel)
+                  </label>
+                  <InfoTooltip
+                    text="Arrête tôt les essais peu prometteurs pour gagner du temps : Median, Hyperband, ou Aucun (teste chaque essai jusqu'au bout). Par défaut : Median."
+                  />
+                </div>
                 <select
                   id="pruner"
                   v-model="form.pruner"
@@ -209,6 +248,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import ConfigField from '@/components/common/ConfigField.vue'
+import InfoTooltip from '@/components/common/InfoTooltip.vue'
 import { getSymbols } from '@/api/runs'
 import type { LaunchOptimizationRequest, OptimizationObjective } from '@/api/optimizations'
 
@@ -252,7 +292,8 @@ const form = reactive({
   // Advanced
   start_date: '',
   end_date: '',
-  train_ratio: null as number | null,
+  // '' = unset (ConfigField's modelValue is String | Number, never null).
+  train_ratio: '' as number | '',
   walk_forward_mode: null as 'sliding' | 'expanding' | null,
   sampler: null as 'tpe' | 'random' | 'grid' | 'cmaes' | null,
   pruner: null as 'median' | 'hyperband' | 'none' | null,
@@ -281,8 +322,8 @@ function handleSubmit() {
 
   if (form.start_date) payload.start_date = form.start_date
   if (form.end_date) payload.end_date = form.end_date
-  if (form.train_ratio !== null && !Number.isNaN(form.train_ratio)) {
-    payload.train_ratio = form.train_ratio
+  if (form.train_ratio !== '' && !Number.isNaN(Number(form.train_ratio))) {
+    payload.train_ratio = Number(form.train_ratio)
   }
   if (form.walk_forward_mode) payload.walk_forward_mode = form.walk_forward_mode
   if (form.sampler) payload.sampler = form.sampler

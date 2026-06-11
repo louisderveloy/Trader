@@ -52,7 +52,7 @@ _OPTIMIZATION_SELECT = """
         s.best_params     AS best_params,
         s.weights_set_id  AS weights_set_id
     FROM runs r
-    LEFT JOIN optuna_studies s ON s.id = r.optuna_study_id
+    LEFT JOIN optuna_studies s ON s.run_id = r.id
     WHERE r.run_type = 'optimization'
 """
 
