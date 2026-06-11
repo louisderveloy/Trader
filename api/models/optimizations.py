@@ -37,6 +37,9 @@ class OptimizationResponse(BaseModel):
     best_value: Optional[float] = Field(None, description="Best objective value found")
     best_params: Optional[dict[str, Any]] = Field(None, description="Best parameters found")
     weights_set_id: Optional[str] = Field(None, description="Weights set produced by the study")
+    weights_set_active: bool = Field(
+        False, description="Whether the produced weights set is currently the active one"
+    )
 
 
 class OptimizationListResponse(BaseModel):

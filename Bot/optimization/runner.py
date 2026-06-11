@@ -282,11 +282,13 @@ class OptimizationRunner:
             # Save study result to database
             study_db_id = await save_study_result(self.db_pool, study_result)
 
-            # Link run to optuna study if we have a run_id
+            # Link run to optuna study (and the weights set it produced) if we have a run_id
             if self.run_id and study_db_id:
                 try:
                     manager = RunManager(self.db_pool)
-                    await manager.link_optuna_study(self.run_id, study_db_id)
+                    await manager.link_optuna_study(
+                        self.run_id, study_db_id, weights_set_id=weights_set_id
+                    )
                 except Exception as e:
                     logger.warning(f"Failed to link run to optuna study: {e}")
 

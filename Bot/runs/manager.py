@@ -261,13 +261,21 @@ class RunManager:
         logger.debug(f"Updated result for run {run_id}")
         return updated_run
 
-    async def link_optuna_study(self, run_id: int, study_id: UUID) -> Run:
+    async def link_optuna_study(
+        self,
+        run_id: int,
+        study_id: UUID,
+        weights_set_id: Optional[UUID] = None,
+    ) -> Run:
         """
-        Link run to an Optuna study.
+        Link run to an Optuna study (and, optionally, the weights set it produced).
 
         Args:
             run_id: Run ID
             study_id: Optuna study ID (UUID of the optuna_studies row)
+            weights_set_id: UUID of the weights set produced by the study. When given,
+                it is recorded on the run so the dashboard/API can find it directly
+                from the ``runs`` row (not only via the ``optuna_studies`` join).
 
         Returns:
             Updated run
@@ -279,7 +287,8 @@ class RunManager:
             row = await conn.fetchrow(
                 """
                 UPDATE runs
-                SET optuna_study_id = $2
+                SET optuna_study_id = $2,
+                    weights_set_id = COALESCE($3, weights_set_id)
                 WHERE id = $1
                 RETURNING
                     id, run_type, status, environment,
@@ -290,10 +299,14 @@ class RunManager:
                 """,
                 run_id,
                 study_id,
+                weights_set_id,
             )
 
         updated_run = Run(**dict(row))
-        logger.info(f"Linked run {run_id} to Optuna study {study_id}")
+        logger.info(
+            f"Linked run {run_id} to Optuna study {study_id}"
+            + (f" and weights set {weights_set_id}" if weights_set_id else "")
+        )
         return updated_run
 
     async def query_runs(self, run_filter: RunFilter) -> list[Run]:

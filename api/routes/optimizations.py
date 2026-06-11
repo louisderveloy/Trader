@@ -50,9 +50,11 @@ _OPTIMIZATION_SELECT = """
         s.n_trials        AS study_n_trials,
         s.best_value      AS best_value,
         s.best_params     AS best_params,
-        s.weights_set_id  AS weights_set_id
+        COALESCE(r.weights_set_id, s.weights_set_id) AS weights_set_id,
+        w.is_active       AS weights_set_active
     FROM runs r
     LEFT JOIN optuna_studies s ON s.run_id = r.id
+    LEFT JOIN weights_sets w   ON w.id = COALESCE(r.weights_set_id, s.weights_set_id)
     WHERE r.run_type = 'optimization'
 """
 
@@ -99,6 +101,7 @@ def _row_to_optimization(row: asyncpg.Record) -> OptimizationResponse:
         best_value=row["best_value"],
         best_params=_as_dict(row["best_params"]) or None,
         weights_set_id=str(row["weights_set_id"]) if row["weights_set_id"] is not None else None,
+        weights_set_active=bool(row["weights_set_active"]),
     )
 
 
@@ -143,6 +146,69 @@ async def get_optimization(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Optimization run {run_id} not found",
         )
+    return _row_to_optimization(row)
+
+
+@router.post("/{run_id}/activate-weights", response_model=OptimizationResponse)
+@limiter.limit(lambda: settings.rate_limit_api_write)
+async def activate_optimization_weights(
+    run_id: int,
+    request: Request,
+    principal: Principal = Depends(require_admin),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> OptimizationResponse:
+    """
+    Activate the weights set produced by this optimization run.
+
+    Admin only, CSRF-protected. Mirrors the CLI ``optimize activate`` command:
+    deactivates every other set and activates this run's set (the bot reads the
+    active set from the DB on demand, so no NOTIFY is needed). Returns the refreshed
+    optimization so the dashboard can update the card in place.
+    """
+    await validate_csrf_token(request)
+
+    async with db_pool.acquire() as conn:
+        run_exists = await conn.fetchval(
+            "SELECT 1 FROM runs WHERE id = $1 AND run_type = 'optimization'", run_id
+        )
+        if not run_exists:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Optimization run {run_id} not found",
+            )
+
+        weights_set_id = await conn.fetchval(
+            """
+            SELECT COALESCE(
+                r.weights_set_id,
+                (
+                    SELECT s.weights_set_id FROM optuna_studies s
+                    WHERE s.run_id = r.id AND s.weights_set_id IS NOT NULL
+                    ORDER BY s.created_at DESC LIMIT 1
+                )
+            )
+            FROM runs r WHERE r.id = $1
+            """,
+            run_id,
+        )
+        if weights_set_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This optimization has not produced a weights set yet",
+            )
+
+        async with conn.transaction():
+            await conn.execute("UPDATE weights_sets SET is_active = false WHERE is_active = true")
+            await conn.execute(
+                "UPDATE weights_sets SET is_active = true WHERE id = $1", weights_set_id
+            )
+
+        row = await conn.fetchrow(_OPTIMIZATION_SELECT + " AND r.id = $1", run_id)
+
+    logger.info(
+        f"Activated weights set {weights_set_id} from optimization run {run_id} "
+        f"by={principal.username}"
+    )
     return _row_to_optimization(row)
 
 

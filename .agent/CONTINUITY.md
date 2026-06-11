@@ -651,6 +651,18 @@ Features implemented:
 
 ## [DISCOVERIES]
 
+### 2026-06-12T00:00Z [TOOL] Weight-set activation — follow-ups resolved
+Resolved the three follow-ups from the 21:30 entry plus disabled polling:
+- **`runs.weights_set_id` never written** by the runner (was NULL for all completed optimizations). Extended `RunManager.link_optuna_study(run_id, study_id, weights_set_id=None)` to `SET weights_set_id = COALESCE($3, weights_set_id)`; runner now passes it. Backfilled existing rows via migration **014_backfill_runs_weights_set_id** (data-only, idempotent; alembic head now 014). Verified: all completed opt runs populated.
+- **API** now reads `COALESCE(r.weights_set_id, s.weights_set_id)` (list/get/activate) — prefers the runs row, falls back to the study.
+- **Button not showing** root cause was NOT data — it was a **stale Vite dev-server transform cache** (disk file had the changes; `localhost:5173/src/.../OptimizationCard.vue` served the old script with no `activate-weights`). `usePolling:true` didn't pick it up. Fixed with `docker compose restart dashboard`; served module now contains the button. Lesson: after editing .vue under Docker-on-Windows, if HMR seems stale, restart the dashboard container.
+- **`/weights` route + `WeightsResponse` rewritten** to the real schema: UUID id, columns `id,name,weights,source,optimization_score,is_active,created_at`; dropped `description/optuna_study_id/metrics/activated_at/updated_at` and `WeightsUpdateRequest`. list/get/create/activate verified 200 (was 500 before).
+- **Polling disabled** in `OptimizationsView.vue` (no `startPolling`/`onUnmounted`); list fetched once on mount, user refreshes manually.
+
+### 2026-06-11T21:30Z [TOOL] Weight-set activation from dashboard + stale /weights route
+Added "Activer le jeu de poids" / "Activé" button to the optimize-run card. New endpoint `POST /optimizations/{run_id}/activate-weights` (admin, CSRF) mirrors CLI `optimize activate` (deactivate-all + activate-one; bot reads active set from DB on demand, no NOTIFY). Optimization list/get now expose `weights_set_active` via LEFT JOIN weights_sets. Verified e2e: 200 exclusive activate, 409 (no set), 404 (no run).
+**`/weights` stale route:** RESOLVED in the 2026-06-12 entry above (was: int PK vs UUID, non-existent columns).
+
 ### 2026-06-11T19:50Z [TOOL] Walk-forward TEST score always 0.0 — weight-key namespace mismatch
 **Symptom:** Every optuna_studies run had `test_score = 0.0` on every split (and study `best_value = 0.0`), while `train_score` was non-zero. Not a multithreading issue.
 **Root cause:** `WeightsSearchSpace.suggest_weights()` builds the backtester weights with UNPREFIXED keys (`{"ema":..,"macd":..,"user_indicator":0.05}`, normalized) — training used these → real scores. But Optuna registers params as `weight_<ind>`, so `study.best_params` is PREFIXED/un-normalized/missing the fixed weight. `runner._run_optimization` passed that prefixed dict into `evaluate_weights(is_test=True)`; the engine reads `weights.get('ema', default)` → every key missed → test silently ran on DEFAULT weights, fully decoupled from training. On the recent 4-split windows defaults made 0 trades → `BacktestMetrics()` default `sharpe_ratio=0.0` → exactly 0.0.

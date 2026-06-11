@@ -7,6 +7,7 @@ import {
   getOptimizations,
   getOptimization,
   launchOptimization,
+  activateOptimizationWeights,
 } from '@/api/optimizations'
 import { stopRun, killRun, getRunLogs } from '@/api/runs'
 import type { RunLogsResponse } from '@/api/types'
@@ -20,6 +21,8 @@ export const useOptimizationsStore = defineStore('optimizations', () => {
   const isLoading = ref(false)
   const isLaunching = ref(false)
   const error = ref<string | null>(null)
+  // run_id whose weights set is currently being activated (for button state)
+  const activatingWeightsRunId = ref<number | null>(null)
 
   // Pagination
   const limit = ref(20)
@@ -107,6 +110,25 @@ export const useOptimizationsStore = defineStore('optimizations', () => {
     }
   }
 
+  async function activateWeights(runId: number): Promise<boolean> {
+    const toast = useToastStore()
+    activatingWeightsRunId.value = runId
+    try {
+      await activateOptimizationWeights(runId)
+      toast.success(`Jeu de poids de l'optimisation #${runId} activé`)
+      // Refresh so every card reflects the new exclusive active set.
+      await fetchOptimizations()
+      return true
+    } catch (err: any) {
+      toast.error(
+        err.response?.data?.detail || "Erreur lors de l'activation du jeu de poids"
+      )
+      return false
+    } finally {
+      activatingWeightsRunId.value = null
+    }
+  }
+
   async function fetchLogs(runId: number): Promise<RunLogsResponse | null> {
     try {
       return await getRunLogs(runId)
@@ -159,6 +181,7 @@ export const useOptimizationsStore = defineStore('optimizations', () => {
     isLoading,
     isLaunching,
     error,
+    activatingWeightsRunId,
     limit,
     offset,
 
@@ -174,6 +197,7 @@ export const useOptimizationsStore = defineStore('optimizations', () => {
     launch,
     stopOptimization,
     killOptimization,
+    activateWeights,
     fetchLogs,
     nextPage,
     previousPage,

@@ -31,6 +31,7 @@ export interface Optimization {
   best_value: number | null
   best_params: Record<string, unknown> | null
   weights_set_id: string | null
+  weights_set_active: boolean
 }
 
 export interface OptimizationListResponse {
@@ -99,5 +100,14 @@ export async function launchOptimization(
   request: LaunchOptimizationRequest
 ): Promise<LaunchOptimizationResponse> {
   const response = await apiClient.post<LaunchOptimizationResponse>('/optimizations', request)
+  return response.data
+}
+
+/**
+ * Activate the weights set produced by this optimization run (admin only).
+ * Returns the refreshed optimization (weights_set_active will be true).
+ */
+export async function activateOptimizationWeights(runId: number): Promise<Optimization> {
+  const response = await apiClient.post<Optimization>(`/optimizations/${runId}/activate-weights`)
   return response.data
 }

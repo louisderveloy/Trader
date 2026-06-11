@@ -44,6 +44,7 @@
             @logs="openLogs"
             @stop="handleStop"
             @kill="handleKill"
+            @activate-weights="handleActivateWeights"
           />
         </div>
 
@@ -84,7 +85,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useOptimizationsStore } from '@/stores/optimizations'
 import { useAuthStore } from '@/stores/auth'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -114,12 +115,8 @@ const showLaunchModal = ref(false)
 const logsRunId = ref<number | null>(null)
 
 onMounted(async () => {
+  // No polling: the list is fetched once on mount; the user refreshes manually.
   await optimizationsStore.fetchOptimizations()
-  optimizationsStore.startPolling()
-})
-
-onUnmounted(() => {
-  optimizationsStore.stopPolling()
 })
 
 function clearError(): void {
@@ -146,6 +143,10 @@ async function handleStop(runId: number): Promise<void> {
 
 async function handleKill(runId: number): Promise<void> {
   await optimizationsStore.killOptimization(runId)
+}
+
+async function handleActivateWeights(runId: number): Promise<void> {
+  await optimizationsStore.activateWeights(runId)
 }
 
 async function handleLaunchOptimization(payload: LaunchOptimizationRequest): Promise<void> {
