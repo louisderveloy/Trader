@@ -61,10 +61,22 @@ class Settings(BaseSettings):
     )
 
     # ==========================================
+    # AUTHENTICATION MODE
+    # ==========================================
+    # local         -> built-in JWT-cookie login (mono-user). Only mode usable in dev.
+    # authelia_oidc -> Authelia (auth.trader.derveloy.eu) as an OIDC provider issuing
+    #                  JWTs with a `groups` claim. PROD-ONLY; wiring lands with the rollout.
+    auth_mode: str = Field(default="local", description="Auth mode: local or authelia_oidc")
+
+    # ==========================================
     # ADMIN USER (mono-user v1)
     # ==========================================
     admin_username: str = Field(default="admin", description="Admin username")
-    admin_password: str = Field(default="admin", description="Admin password")
+    admin_password: str = Field(default="admin", description="Admin password (dev fallback if no hash set)")
+    admin_password_hash: str = Field(
+        default="",
+        description="Bcrypt hash of the admin password; takes precedence over admin_password when set",
+    )
     admin_email: str = Field(default="admin@localhost", description="Admin email")
 
     # ==========================================
@@ -132,8 +144,24 @@ class Settings(BaseSettings):
 
     # Binance
     binance_default_symbol: str = Field(
-        default="BTCUSDT", description="Default trading symbol"
+        default="BTCUSDC", description="Default trading symbol (USDC only; USDT not authorised in EU)"
     )
+    # Symbols offered in the dashboard's run-start combo box. Comma-separated;
+    # the first entry is treated as the default. USDC quote only.
+    available_symbols: str = Field(
+        default="BTCUSDC", description="Comma-separated list of selectable trading symbols"
+    )
+
+    @computed_field
+    @property
+    def available_symbols_list(self) -> list[str]:
+        """Parse available symbols into an upper-cased, de-duplicated list."""
+        seen: list[str] = []
+        for raw in self.available_symbols.split(","):
+            sym = raw.strip().upper()
+            if sym and sym not in seen:
+                seen.append(sym)
+        return seen or [self.binance_default_symbol.upper()]
     binance_default_timeframe: str = Field(
         default="15m", description="Default timeframe"
     )
@@ -195,6 +223,20 @@ class Settings(BaseSettings):
     )
     optuna_pruner: str = Field(
         default="MedianPruner", description="Optuna pruner: MedianPruner, HyperbandPruner"
+    )
+
+    # ==========================================
+    # RUN CONTROL (start/stop/kill + logs)
+    # ==========================================
+    bot_logs_dir: str = Field(
+        default="/var/log/trader-bot",
+        description="Directory holding per-run log files (mounted read-only from the bot volume)",
+    )
+    run_logs_max_lines: int = Field(
+        default=100, description="Max log lines returned by the run logs endpoint"
+    )
+    max_concurrent_backtests: int = Field(
+        default=2, description="Max simultaneously active backtests (API + supervisor cap)"
     )
 
     # ==========================================

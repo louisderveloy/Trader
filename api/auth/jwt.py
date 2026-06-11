@@ -4,6 +4,7 @@ JWT token utilities.
 Handles JWT token encoding, decoding, and verification.
 """
 
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -110,7 +111,10 @@ def verify_admin_credentials(username: str, password: str) -> bool:
     if username != settings.admin_username:
         return False
 
-    # For simplicity in v1, compare plain text password
-    # In production, you should hash the admin password in .env
-    # and use verify_password() instead
-    return password == settings.admin_password
+    # Prefer the bcrypt hash when configured (recommended; see ADMIN_PASSWORD_HASH
+    # in .env.example for how to generate it). Falls back to a constant-time plain
+    # comparison only when no hash is set (dev convenience).
+    if settings.admin_password_hash:
+        return verify_password(password, settings.admin_password_hash)
+
+    return secrets.compare_digest(password, settings.admin_password)

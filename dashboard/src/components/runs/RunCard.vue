@@ -57,13 +57,41 @@
       </div>
     </div>
 
-    <!-- Optional Grafana link -->
-    <div v-if="grafanaUrl" class="mt-4 pt-4 border-t border-gray-200">
+    <!-- Actions -->
+    <div class="mt-4 pt-4 border-t border-gray-200 flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        @click="$emit('logs', run.id)"
+        class="px-3 py-1.5 text-sm border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+      >
+        Logs
+      </button>
+
+      <button
+        v-if="canStop"
+        type="button"
+        @click="$emit('stop', run.id)"
+        class="px-3 py-1.5 text-sm border border-amber-300 rounded-md text-amber-800 bg-amber-50 hover:bg-amber-100"
+      >
+        Arrêter
+      </button>
+
+      <button
+        v-if="canKill"
+        type="button"
+        @click="$emit('kill', run.id)"
+        class="px-3 py-1.5 text-sm border border-red-300 rounded-md text-red-800 bg-red-50 hover:bg-red-100"
+      >
+        Kill
+      </button>
+
+      <!-- Optional Grafana link -->
       <a
+        v-if="grafanaUrl"
         :href="`${grafanaUrl}/d/run-detail?run_id=${run.id}`"
         target="_blank"
         rel="noopener noreferrer"
-        class="inline-flex items-center text-sm text-primary-600 hover:text-primary-700"
+        class="ml-auto inline-flex items-center text-sm text-primary-600 hover:text-primary-700"
       >
         <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
@@ -86,6 +114,7 @@ import RunStatusBadge from './RunStatusBadge.vue'
 import { formatDateShort } from '@/utils/format'
 import { RUN_TYPE_CONFIG } from '@/utils/constants'
 import type { RunType } from '@/utils/constants'
+import { useAuthStore } from '@/stores/auth'
 
 interface Props {
   run: Run
@@ -93,7 +122,20 @@ interface Props {
 
 const props = defineProps<Props>()
 
+defineEmits<{
+  logs: [runId: number]
+  stop: [runId: number]
+  kill: [runId: number]
+}>()
+
+const auth = useAuthStore()
 const grafanaUrl = computed(() => import.meta.env.VITE_GRAFANA_BASE_URL)
+
+const isActive = computed(() => ['running', 'pending'].includes(props.run.status))
+// Stop is graceful and valid for any run type; kill is backtest-only (SIGKILL
+// would orphan live/paper positions). Both are admin-only.
+const canStop = computed(() => auth.isAdmin && isActive.value)
+const canKill = computed(() => auth.isAdmin && isActive.value && props.run.run_type === 'backtest')
 
 // Display only first 4 result keys
 const displayedResults = computed(() => {

@@ -4,27 +4,10 @@
       <label :for="id" class="block text-sm font-medium text-gray-700">
         {{ label }}
       </label>
-      <!-- Tooltip with French explanation (mandatory per CLAUDE.md) -->
-      <div class="relative group inline-block">
-        <button
-            type="button"
-            class="w-5 h-5 rounded-full bg-blue-200 text-blue-700 flex items-center justify-center text-xs font-bold hover:bg-blue-300 transition-colors"
-            @mouseenter="showTooltip = true"
-            @mouseleave="showTooltip = false"
-            @focus="showTooltip = true"
-            @blur="showTooltip = false"
-        >
-          ?
-        </button>
-        <!-- Tooltip popover -->
-        <div
-            v-if="showTooltip"
-            class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded shadow-lg whitespace-nowrap z-11"
-        >
-          {{ tooltip }}
-          <div class="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
-        </div>
-      </div>
+      <!-- Tooltip with French explanation (mandatory per CLAUDE.md).
+           Rendered via InfoTooltip (teleported to body, clamped on-screen) so it
+           is never clipped by a modal's overflow. -->
+      <InfoTooltip :text="tooltip" />
     </div>
 
     <!-- Input field -->
@@ -48,14 +31,14 @@
 </template>
 
 <script setup lang="ts">
-import {ref} from 'vue'
+import InfoTooltip from '@/components/common/InfoTooltip.vue'
 
 interface Props {
   id: string
   label: string
   tooltip: string // French tooltip (mandatory)
   modelValue: string | number
-  type?: 'text' | 'number' | 'email' | 'password'
+  type?: 'text' | 'number' | 'email' | 'password' | 'date'
   disabled?: boolean
   helpText?: string
   min?: number
@@ -74,8 +57,6 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{
   'update:modelValue': [value: string | number]
 }>()
-
-const showTooltip = ref(false)
 
 function getInputValue(event: Event): string | number {
   const target = event.target as HTMLInputElement

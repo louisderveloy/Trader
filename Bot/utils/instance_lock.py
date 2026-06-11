@@ -2,15 +2,18 @@
 """
 Instance Lock Manager - PostgreSQL Advisory Lock Implementation
 
-Ensures only ONE instance of each trading mode can run at a time:
+Ensures only ONE instance of each mode can run at a time:
 - Only one paper trading instance globally
 - Only one live trading instance globally (testnet and mainnet share the same lock)
+- Only one optimization instance globally (independent lock; may run alongside trading)
 
 Uses PostgreSQL advisory locks for reliable, crash-safe instance locking.
 Locks are automatically released when the database connection closes.
 """
 
+import json
 import logging
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
 import asyncpg
@@ -30,6 +33,7 @@ class InstanceLockManager:
     Lock keys are deterministic integers derived from mode names:
     - 'paper': 1827364950
     - 'live': 1923847563
+    - 'optimization': 1456372819
 
     IMPORTANT: This class requires a persistent connection to be held for the
     duration of the lock. Use acquire_lock_connection() to get a connection
@@ -41,6 +45,7 @@ class InstanceLockManager:
     LOCK_KEYS = {
         'paper': 1827364950,  # hash('paper_trading') & 0x7FFFFFFF
         'live': 1923847563,  # hash('live_trading') & 0x7FFFFFFF
+        'optimization': 1456372819,  # hash('optimization') & 0x7FFFFFFF
     }
 
     @staticmethod
@@ -49,7 +54,7 @@ class InstanceLockManager:
         Get the integer lock key for a mode.
 
         Args:
-            mode: Trading mode ('paper' or 'live')
+            mode: Mode ('paper', 'live' or 'optimization')
 
         Returns:
             Integer lock key
@@ -58,7 +63,9 @@ class InstanceLockManager:
             ValueError: If mode is invalid
         """
         if mode not in InstanceLockManager.LOCK_KEYS:
-            raise ValueError(f"Invalid mode: {mode}. Must be 'paper' or 'live'")
+            raise ValueError(
+                f"Invalid mode: {mode}. Must be 'paper', 'live' or 'optimization'"
+            )
         return InstanceLockManager.LOCK_KEYS[mode]
 
     @staticmethod
@@ -141,6 +148,89 @@ class InstanceLockManager:
             await db_pool.release(conn)
 
     @staticmethod
+    async def is_lock_held(db_pool: asyncpg.Pool, mode: str) -> bool:
+        """
+        Check if the advisory lock for mode is currently held by any session.
+
+        Queries pg_locks directly without acquiring the lock — safe for read-only checks.
+        Returns True if another session holds the lock (i.e. a real instance is running).
+
+        Args:
+            db_pool: Database connection pool
+            mode: Trading mode ('paper' or 'live')
+
+        Returns:
+            True if the lock is currently held, False otherwise
+        """
+        lock_key = InstanceLockManager.get_lock_key(mode)
+        async with db_pool.acquire() as conn:
+            result = await conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_locks
+                    WHERE locktype = 'advisory'
+                    AND classid = 0
+                    AND objid = $1::bigint
+                    AND granted = true
+                )
+                """,
+                lock_key,
+            )
+        held = bool(result)
+        logger.debug(f"Advisory lock for mode '{mode}' (key={lock_key}) is {'held' if held else 'free'}")
+        return held
+
+    @staticmethod
+    async def cleanup_stale_runs(db_pool: asyncpg.Pool, mode: str) -> int:
+        """
+        Mark stale 'running'/'pending' runs of the given mode as 'cancelled'.
+
+        Call this AFTER acquiring the advisory lock so we know for certain no other
+        instance is running. Any run still showing status='running'/'pending' at that
+        point is a zombie left behind by a previous crash or container kill.
+
+        Args:
+            db_pool: Database connection pool
+            mode: Trading mode ('paper' or 'live')
+
+        Returns:
+            Number of stale runs cleaned up
+        """
+        now = datetime.now(timezone.utc)
+        interrupted_result = json.dumps({
+            "interrupted_by": "container_restart",
+            "cleanup_at": now.isoformat(),
+            "reason": (
+                "Run was in running/pending state but advisory lock was not held — "
+                "marked cancelled on bot startup after container restart/crash."
+            ),
+        })
+
+        async with db_pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE runs
+                SET
+                    status = 'cancelled',
+                    completed_at = $1,
+                    result = COALESCE(result, $2::jsonb)
+                WHERE run_type = $3
+                  AND status IN ('running', 'pending')
+                """,
+                now,
+                interrupted_result,
+                mode,
+            )
+
+        count = int(result.split()[-1]) if result else 0
+        if count > 0:
+            logger.warning(
+                f"Cleaned up {count} stale run(s) for mode '{mode}': "
+                f"were running/pending but no advisory lock was held"
+            )
+        return count
+
+    @staticmethod
     async def check_existing_runs(db_pool: asyncpg.Pool, mode: str) -> Optional[Dict[str, Any]]:
         """
         Check for existing running instances in the database.
@@ -159,11 +249,13 @@ class InstanceLockManager:
             ValueError: If mode is invalid
             asyncpg.PostgresError: If database query fails
         """
-        if mode not in ['paper', 'live']:
-            raise ValueError(f"Invalid mode: {mode}. Must be 'paper' or 'live'")
+        if mode not in ['paper', 'live', 'optimization']:
+            raise ValueError(
+                f"Invalid mode: {mode}. Must be 'paper', 'live' or 'optimization'"
+            )
 
         # Query for runs with matching run_type and status='running'
-        # run_type is 'paper' for paper mode, 'live' for live mode
+        # run_type matches the mode name ('paper'/'live'/'optimization')
         query = """
             SELECT
                 id,

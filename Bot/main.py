@@ -60,9 +60,13 @@ logger = logging.getLogger(__name__)
 
 
 def setup_logging(verbose: bool = False):
-    """Configure logging level."""
+    """Configure logging level and install secret redaction on all handlers."""
     level = logging.DEBUG if verbose else logging.INFO
     logging.getLogger().setLevel(level)
+
+    # Scrub secrets from every log line (logs are exposed via the API).
+    from utils.log_redaction import install_secret_redaction
+    install_secret_redaction()
 
     if verbose:
         # Set DEBUG for our modules
@@ -139,8 +143,18 @@ def cmd_optimize(args):
             opt_args.extend(['--n-trials', str(args.n_trials)])
         if args.n_splits:
             opt_args.extend(['--n-splits', str(args.n_splits)])
+        if getattr(args, 'train_ratio', None) is not None:
+            opt_args.extend(['--train-ratio', str(args.train_ratio)])
+        if getattr(args, 'walk_forward_mode', None):
+            opt_args.extend(['--walk-forward-mode', args.walk_forward_mode])
+        if getattr(args, 'sampler', None):
+            opt_args.extend(['--sampler', args.sampler])
+        if getattr(args, 'pruner', None):
+            opt_args.extend(['--pruner', args.pruner])
         if args.multithread:
             opt_args.append('--multithread')
+        if getattr(args, 'run_id', None) is not None:
+            opt_args.extend(['--run-id', str(args.run_id)])
     elif args.subcmd == 'list':
         if args.limit:
             opt_args.extend(['--limit', str(args.limit)])
@@ -171,18 +185,22 @@ def cmd_paper(args):
     """Run paper trading command."""
     from scripts.trading import run_trading_loop
 
-    # Pre-flight instance check
+    # Pre-flight instance check: use the advisory lock as source of truth.
+    # The DB status (run.status='running') can be stale after a container crash/kill,
+    # but the advisory lock is always released when the connection drops.
     async def check_instance():
         dsn = os.getenv("DATABASE_URL", "").replace("postgresql+asyncpg://", "postgresql://")
-        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=1)
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
         try:
-            existing = await InstanceLockManager.check_existing_runs(pool, 'paper')
-            if existing:
+            lock_held = await InstanceLockManager.is_lock_held(pool, 'paper')
+            if lock_held:
+                existing = await InstanceLockManager.check_existing_runs(pool, 'paper')
                 print(f"\n❌ Cannot start paper trading: Another instance is already running")
-                print(f"   Active run_id: {existing['id']}")
-                print(f"   Started at: {existing['started_at']}")
-                print(f"   Symbol: {existing.get('symbol', 'unknown')}")
-                print(f"   Environment: {existing.get('environment', 'unknown')}")
+                if existing:
+                    print(f"   Active run_id: {existing['id']}")
+                    print(f"   Started at: {existing['started_at']}")
+                    print(f"   Symbol: {existing.get('symbol', 'unknown')}")
+                    print(f"   Environment: {existing.get('environment', 'unknown')}")
                 print("\n   To stop the existing instance:")
                 print("   - Press Ctrl+C in the running instance")
                 print("   - Or restart the bot container: docker compose restart bot")
@@ -198,7 +216,8 @@ def cmd_paper(args):
         timeframe=args.timeframe,
         mode='paper',
         testnet=True,  # Paper always uses testnet for price data
-        verbose=args.verbose
+        verbose=args.verbose,
+        run_id=getattr(args, 'run_id', None),
     ))
 
 
@@ -210,18 +229,22 @@ def cmd_live(args):
     """Run live trading command."""
     from scripts.trading import run_trading_loop
 
-    # Pre-flight instance check
+    # Pre-flight instance check: use the advisory lock as source of truth.
+    # The DB status (run.status='running') can be stale after a container crash/kill,
+    # but the advisory lock is always released when the connection drops.
     async def check_instance():
         dsn = os.getenv("DATABASE_URL", "").replace("postgresql+asyncpg://", "postgresql://")
-        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=1)
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
         try:
-            existing = await InstanceLockManager.check_existing_runs(pool, 'live')
-            if existing:
+            lock_held = await InstanceLockManager.is_lock_held(pool, 'live')
+            if lock_held:
+                existing = await InstanceLockManager.check_existing_runs(pool, 'live')
                 print(f"\n❌ Cannot start live trading: Another instance is already running")
-                print(f"   Active run_id: {existing['id']}")
-                print(f"   Started at: {existing['started_at']}")
-                print(f"   Symbol: {existing.get('symbol', 'unknown')}")
-                print(f"   Environment: {existing.get('environment', 'unknown')}")
+                if existing:
+                    print(f"   Active run_id: {existing['id']}")
+                    print(f"   Started at: {existing['started_at']}")
+                    print(f"   Symbol: {existing.get('symbol', 'unknown')}")
+                    print(f"   Environment: {existing.get('environment', 'unknown')}")
                 print("\n   To stop the existing instance:")
                 print("   - Press Ctrl+C in the running instance")
                 print("   - Or restart the bot container: docker compose restart bot")
@@ -249,7 +272,8 @@ def cmd_live(args):
         timeframe=args.timeframe,
         mode='live',
         testnet=args.testnet,
-        verbose=args.verbose
+        verbose=args.verbose,
+        run_id=getattr(args, 'run_id', None),
     ))
 
 
@@ -347,48 +371,63 @@ def cmd_config(args):
 
 
 def cmd_docker_entry(args):
-    """Display system status and keep container alive."""
+    """Check health, then run the RunSupervisor to keep the container alive.
+
+    The supervisor owns child run processes (backtest/paper/live) and reacts to
+    ``run_commands`` from the dashboard via PostgreSQL NOTIFY. It replaces the old
+    busy-wait loop (which pinned a CPU core).
+    """
+    import signal as _signal
+
+    from runs.supervisor import RunSupervisor
+
     async def _docker_entry():
         print("\n" + "=" * 80)
-        print("TRADING BOT - DOCKER ENTRY POINT")
+        print("TRADING BOT - DOCKER ENTRY POINT (supervisor)")
         print("=" * 80)
         print(f"Timestamp: {datetime.now(timezone.utc).isoformat()}")
         print(f"Environment: {os.getenv('ENVIRONMENT', 'unknown')}")
         print("=" * 80)
 
         status = await check_services()
-
         all_healthy = all(s["healthy"] for s in status.values())
-
         for service_name, service_status in status.items():
             icon = "✓" if service_status["healthy"] else "✗"
             health = "HEALTHY" if service_status["healthy"] else "UNHEALTHY"
-
             print(f"\n{service_name.upper()}: [{icon}] {health}")
             print(f"  Message: {service_status['message']}")
-
         print("\n" + "=" * 80)
-
         if all_healthy:
-            print("STATUS: All services are healthy ✓")
-            logger.info("All services are healthy. Container is ready.")
+            logger.info("All services are healthy. Starting supervisor.")
         else:
-            print("STATUS: Some services are unhealthy ✗")
-            logger.warning("Some services are unhealthy. Container is running but not fully ready.")
+            logger.warning("Some services are unhealthy. Starting supervisor anyway.")
 
-        print("=" * 80)
-        print("\nContainer is running. Use 'docker compose exec bot python -m main <command>' to execute commands.")
-        print("Available commands: fetch, backtest, optimize, paper, live, status")
-        print("\nPress Ctrl+C to stop the container.")
-        print("=" * 80 + "\n")
+        dsn = os.getenv("DATABASE_URL", "").replace("postgresql+asyncpg://", "postgresql://")
+        if not dsn:
+            logger.error("DATABASE_URL not set; cannot start supervisor")
+            sys.exit(1)
 
-        # Keep container alive
+        log_dir = os.getenv("BOT_LOGS_DIR", "/var/log/trader-bot")
+        max_bt = int(os.getenv("MAX_CONCURRENT_BACKTESTS", "2"))
+
+        pool = await asyncpg.create_pool(dsn=dsn, min_size=1, max_size=5)
+        supervisor = RunSupervisor(
+            db_pool=pool, dsn=dsn, log_dir=log_dir, max_concurrent_backtests=max_bt,
+        )
+
+        loop = asyncio.get_running_loop()
         try:
-            while True:
-                pass
-        except KeyboardInterrupt:
-            logger.info("Received shutdown signal. Exiting gracefully.")
-            print("\nShutting down gracefully...")
+            loop.add_signal_handler(_signal.SIGINT, supervisor.request_stop)
+            loop.add_signal_handler(_signal.SIGTERM, supervisor.request_stop)
+        except NotImplementedError:
+            # Windows fallback (dev only)
+            _signal.signal(_signal.SIGINT, lambda *_: supervisor.request_stop())
+            _signal.signal(_signal.SIGTERM, lambda *_: supervisor.request_stop())
+
+        try:
+            await supervisor.run()
+        finally:
+            await pool.close()
 
     asyncio.run(_docker_entry())
 
@@ -453,8 +492,8 @@ Examples:
     # -------------------------------------------------------------------------
     backtest_parser = subparsers.add_parser('backtest',
         help='Run backtesting on historical data')
-    backtest_parser.add_argument('--symbol', default='BTCUSDT',
-        help='Trading symbol (default: BTCUSDT)')
+    backtest_parser.add_argument('--symbol', default='BTCUSDC',
+        help='Trading symbol (default: BTCUSDC)')
     backtest_parser.add_argument('--timeframe', default='15m',
         help='Candle timeframe (default: 15m)')
     backtest_parser.add_argument('--start-date', required=True,
@@ -462,13 +501,15 @@ Examples:
     backtest_parser.add_argument('--end-date', required=True,
         help='End date (ISO format: YYYY-MM-DD)')
     backtest_parser.add_argument('--initial-capital', type=float, default=10000,
-        help='Initial capital in USDT (default: 10000)')
+        help='Initial capital in USDC (default: 10000)')
     backtest_parser.add_argument('--weights-set-id',
         help='UUID of weights set to use (default: active set)')
     backtest_parser.add_argument('--engine', choices=['vectorbt', 'event_driven'],
         default='vectorbt', help='Backtesting engine (default: vectorbt)')
     backtest_parser.add_argument('--save', action='store_true',
         help='Save results to database')
+    backtest_parser.add_argument('--run-id', type=int, default=None,
+        help='Adopt a pre-created PENDING run (used by the dashboard supervisor)')
 
     # -------------------------------------------------------------------------
     # OPTIMIZE subcommand
@@ -480,7 +521,7 @@ Examples:
     # optimize run
     opt_run = opt_subparsers.add_parser('run', help='Run new optimization study')
     opt_run.add_argument('--study-name', required=True, help='Study name')
-    opt_run.add_argument('--symbol', default='BTCUSDT', help='Trading symbol')
+    opt_run.add_argument('--symbol', default='BTCUSDC', help='Trading symbol (default: BTCUSDC)')
     opt_run.add_argument('--timeframe', default='15m', help='Candle timeframe')
     opt_run.add_argument('--start-date', help='Start date (ISO format)')
     opt_run.add_argument('--end-date', help='End date (ISO format)')
@@ -489,8 +530,17 @@ Examples:
         help='Optimization objective')
     opt_run.add_argument('--n-trials', type=int, help='Number of trials per split')
     opt_run.add_argument('--n-splits', type=int, help='Number of walk-forward splits')
+    opt_run.add_argument('--train-ratio', type=float, help='Training data ratio (0-1)')
+    opt_run.add_argument('--walk-forward-mode', choices=['sliding', 'expanding'],
+        help='Walk-forward mode')
+    opt_run.add_argument('--sampler', choices=['tpe', 'random', 'grid', 'cmaes'],
+        help='Optuna sampler')
+    opt_run.add_argument('--pruner', choices=['median', 'hyperband', 'none'],
+        help='Optuna pruner')
     opt_run.add_argument('--multithread', action='store_true',
         help='Enable multithreaded optimization (use all CPU cores)')
+    opt_run.add_argument('--run-id', type=int, default=None,
+        help='Adopt a pre-created PENDING run (used by the dashboard supervisor)')
 
     # optimize list
     opt_list = opt_subparsers.add_parser('list', help='List optimization studies')
@@ -515,24 +565,28 @@ Examples:
     # -------------------------------------------------------------------------
     paper_parser = subparsers.add_parser('paper',
         help='Run paper trading (simulated, no real orders)')
-    paper_parser.add_argument('--symbol', default='BTCUSDT',
-        help='Trading symbol (default: BTCUSDT)')
+    paper_parser.add_argument('--symbol', default='BTCUSDC',
+        help='Trading symbol (default: BTCUSDC)')
     paper_parser.add_argument('--timeframe', default='15m',
         help='Candle timeframe (default: 15m)')
+    paper_parser.add_argument('--run-id', type=int, default=None,
+        help='Adopt a pre-created PENDING run (used by the dashboard supervisor)')
 
     # -------------------------------------------------------------------------
     # LIVE subcommand
     # -------------------------------------------------------------------------
     live_parser = subparsers.add_parser('live',
         help='Run live trading (testnet or mainnet)')
-    live_parser.add_argument('--symbol', default='BTCUSDT',
-        help='Trading symbol (default: BTCUSDT)')
+    live_parser.add_argument('--symbol', default='BTCUSDC',
+        help='Trading symbol (default: BTCUSDC)')
     live_parser.add_argument('--timeframe', default='15m',
         help='Candle timeframe (default: 15m)')
     live_parser.add_argument('--testnet', action='store_true',
         help='Use Binance testnet (recommended for testing)')
     live_parser.add_argument('--confirm', action='store_true',
         help='Skip mainnet confirmation prompt (dangerous!)')
+    live_parser.add_argument('--run-id', type=int, default=None,
+        help='Adopt a pre-created PENDING run (used by the dashboard supervisor)')
 
     # -------------------------------------------------------------------------
     # CONFIG subcommand

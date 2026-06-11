@@ -3,7 +3,17 @@
  */
 
 import apiClient from './client'
-import type { Run, RunFilters, RunListResponse, RunStatusUpdate } from './types'
+import type {
+  Run,
+  RunCommandResponse,
+  RunFilters,
+  RunListResponse,
+  RunLogsResponse,
+  RunStatusUpdate,
+  StartRunRequest,
+  StartRunResponse,
+  SymbolsResponse,
+} from './types'
 
 /**
  * List runs with filtering and pagination
@@ -46,5 +56,45 @@ export async function updateRunStatus(
   update: RunStatusUpdate
 ): Promise<Run> {
   const response = await apiClient.patch<Run>(`/runs/${runId}/status`, update)
+  return response.data
+}
+
+/**
+ * Start a run (backtest, paper or live)
+ */
+export async function startRun(payload: StartRunRequest): Promise<StartRunResponse> {
+  const response = await apiClient.post<StartRunResponse>('/runs/start', payload)
+  return response.data
+}
+
+/**
+ * Request a graceful stop (SIGTERM) of a run
+ */
+export async function stopRun(runId: number): Promise<RunCommandResponse> {
+  const response = await apiClient.post<RunCommandResponse>(`/runs/${runId}/stop`)
+  return response.data
+}
+
+/**
+ * Force-kill a run (backtest only)
+ */
+export async function killRun(runId: number): Promise<RunCommandResponse> {
+  const response = await apiClient.post<RunCommandResponse>(`/runs/${runId}/kill`)
+  return response.data
+}
+
+/**
+ * Get the last log lines for a run (snapshot)
+ */
+export async function getRunLogs(runId: number): Promise<RunLogsResponse> {
+  const response = await apiClient.get<RunLogsResponse>(`/runs/${runId}/logs`)
+  return response.data
+}
+
+/**
+ * List the trading symbols selectable when starting a run
+ */
+export async function getSymbols(): Promise<SymbolsResponse> {
+  const response = await apiClient.get<SymbolsResponse>('/runs/symbols')
   return response.data
 }

@@ -13,9 +13,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 from ..config import settings
 from ..limiter import limiter
-from .dependencies import get_current_user
+from .dependencies import get_current_user, get_principal
 from .jwt import create_access_token, verify_admin_credentials
-from .models import LoginResponse, User, UserLogin
+from .models import LoginResponse, Principal, User, UserLogin
 
 logger = logging.getLogger(__name__)
 
@@ -117,10 +117,13 @@ async def logout(
 @router.get("/csrf-token")
 async def get_csrf_token(
     request: Request,
-    response: Response
+    response: Response,
+    principal: Principal = Depends(get_principal),
 ) -> dict:
     """
     Get CSRF token for state-changing operations.
+
+    Requires authentication so an anonymous caller cannot mint CSRF tokens.
 
     Note: With httpOnly cookies and SameSite=strict, CSRF protection is largely
     redundant, but we provide this endpoint for defense in depth.
@@ -156,23 +159,17 @@ async def get_csrf_token(
     }
 
 
-@router.get("/me", response_model=User)
+@router.get("/me", response_model=Principal)
 @limiter.limit(lambda: settings.rate_limit_api_read)
 async def get_current_user_info(
     request: Request,
-    user: User = Depends(get_current_user)
-) -> User:
+    principal: Principal = Depends(get_principal)
+) -> Principal:
     """
-    Get current user information.
+    Get current identity and authorization role.
 
-    Requires valid JWT token.
+    Requires valid authentication. The ``role`` (admin/viewer) lets the dashboard
+    show or hide mutating actions.
     Rate limited to 60 requests per minute.
-
-    Args:
-        request: FastAPI request object (for rate limiting)
-        user: Current authenticated user (from dependency)
-
-    Returns:
-        Current user information
     """
-    return user
+    return principal

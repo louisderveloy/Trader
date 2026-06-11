@@ -18,6 +18,8 @@ export const useAuthStore = defineStore('auth', () => {
 
   // Computed
   const isAuthenticated = computed(() => !!user.value)
+  // Default to admin when the backend doesn't supply a role (local auth mode).
+  const isAdmin = computed(() => (user.value?.role ?? 'admin') === 'admin')
 
   // Actions
   /**
@@ -101,6 +103,7 @@ export const useAuthStore = defineStore('auth', () => {
     error,
     // Computed
     isAuthenticated,
+    isAdmin,
     // Actions
     login,
     logout,

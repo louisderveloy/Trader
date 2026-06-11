@@ -128,8 +128,11 @@ async def cmd_run(args):
     db_pool = await get_db_pool()
 
     try:
-        # Run optimization
-        result = await run_optimization(config, db_pool)
+        # Run optimization (adopt a pre-created run when --run-id is supplied by
+        # the dashboard supervisor; otherwise a new run record is created).
+        result = await run_optimization(
+            config, db_pool, run_id=getattr(args, "run_id", None)
+        )
 
         # Print results
         print("\n" + "=" * 80)
@@ -319,6 +322,8 @@ def main():
                             help='Optuna pruner')
     run_parser.add_argument('--multithread', action='store_true',
                             help='Enable multithreaded optimization (use all CPU cores)')
+    run_parser.add_argument('--run-id', type=int, default=None,
+                            help='Adopt a pre-created PENDING run (used by the dashboard supervisor)')
 
     # List command
     list_parser = subparsers.add_parser('list', help='List optimization studies')

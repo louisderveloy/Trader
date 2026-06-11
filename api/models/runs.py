@@ -32,7 +32,7 @@ class RunResponse(BaseModel):
     completed_at: Optional[datetime] = Field(None, description="Completion timestamp")
 
     weights_set_id: Optional[UUID] = Field(None, description="Active weights set ID")
-    optuna_study_id: Optional[int] = Field(None, description="Optuna study ID")
+    optuna_study_id: Optional[UUID] = Field(None, description="Optuna study ID")
 
     class Config:
         """Pydantic config."""
@@ -53,7 +53,7 @@ class RunFilter(BaseModel):
     created_before: Optional[datetime] = Field(None, description="Created before timestamp")
 
     weights_set_id: Optional[UUID] = Field(None, description="Filter by weights set ID")
-    optuna_study_id: Optional[int] = Field(None, description="Filter by Optuna study ID")
+    optuna_study_id: Optional[UUID] = Field(None, description="Filter by Optuna study ID")
 
     limit: int = Field(default=100, ge=1, le=1000, description="Maximum results")
     offset: int = Field(default=0, ge=0, description="Offset for pagination")
