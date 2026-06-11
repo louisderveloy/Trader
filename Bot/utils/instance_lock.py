@@ -11,7 +11,9 @@ Uses PostgreSQL advisory locks for reliable, crash-safe instance locking.
 Locks are automatically released when the database connection closes.
 """
 
+import json
 import logging
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
 import asyncpg
@@ -144,6 +146,89 @@ class InstanceLockManager:
         finally:
             # Always return the connection to the pool
             await db_pool.release(conn)
+
+    @staticmethod
+    async def is_lock_held(db_pool: asyncpg.Pool, mode: str) -> bool:
+        """
+        Check if the advisory lock for mode is currently held by any session.
+
+        Queries pg_locks directly without acquiring the lock — safe for read-only checks.
+        Returns True if another session holds the lock (i.e. a real instance is running).
+
+        Args:
+            db_pool: Database connection pool
+            mode: Trading mode ('paper' or 'live')
+
+        Returns:
+            True if the lock is currently held, False otherwise
+        """
+        lock_key = InstanceLockManager.get_lock_key(mode)
+        async with db_pool.acquire() as conn:
+            result = await conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_locks
+                    WHERE locktype = 'advisory'
+                    AND classid = 0
+                    AND objid = $1::bigint
+                    AND granted = true
+                )
+                """,
+                lock_key,
+            )
+        held = bool(result)
+        logger.debug(f"Advisory lock for mode '{mode}' (key={lock_key}) is {'held' if held else 'free'}")
+        return held
+
+    @staticmethod
+    async def cleanup_stale_runs(db_pool: asyncpg.Pool, mode: str) -> int:
+        """
+        Mark stale 'running'/'pending' runs of the given mode as 'cancelled'.
+
+        Call this AFTER acquiring the advisory lock so we know for certain no other
+        instance is running. Any run still showing status='running'/'pending' at that
+        point is a zombie left behind by a previous crash or container kill.
+
+        Args:
+            db_pool: Database connection pool
+            mode: Trading mode ('paper' or 'live')
+
+        Returns:
+            Number of stale runs cleaned up
+        """
+        now = datetime.now(timezone.utc)
+        interrupted_result = json.dumps({
+            "interrupted_by": "container_restart",
+            "cleanup_at": now.isoformat(),
+            "reason": (
+                "Run was in running/pending state but advisory lock was not held — "
+                "marked cancelled on bot startup after container restart/crash."
+            ),
+        })
+
+        async with db_pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE runs
+                SET
+                    status = 'cancelled',
+                    completed_at = $1,
+                    result = COALESCE(result, $2::jsonb)
+                WHERE run_type = $3
+                  AND status IN ('running', 'pending')
+                """,
+                now,
+                interrupted_result,
+                mode,
+            )
+
+        count = int(result.split()[-1]) if result else 0
+        if count > 0:
+            logger.warning(
+                f"Cleaned up {count} stale run(s) for mode '{mode}': "
+                f"were running/pending but no advisory lock was held"
+            )
+        return count
 
     @staticmethod
     async def check_existing_runs(db_pool: asyncpg.Pool, mode: str) -> Optional[Dict[str, Any]]:

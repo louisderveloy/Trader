@@ -57,6 +57,7 @@ services:
       args:
         INSTALL_DEV: "true"  # Install dev dependencies in dev environment
     restart: unless-stopped
+    stop_grace_period: 60s
     env_file:
       - .env
     environment:

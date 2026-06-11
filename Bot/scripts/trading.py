@@ -119,6 +119,7 @@ class TradingBot:
         self.weights: Dict[str, float] = {}
         self.weights_set_id: Optional[UUID] = None  # Active weights set ID for score logging
         self.is_running = False
+        self._stop_called = False  # Guards against double-stop
         self.lock_connection: Optional[asyncpg.Connection] = None  # Connection holding instance lock
         self.config_listener_conn: Optional[asyncpg.Connection] = None  # Dedicated connection for LISTEN
         self.config_listener_task: Optional[asyncio.Task] = None  # Background task for config updates
@@ -168,6 +169,11 @@ class TradingBot:
                     error_msg += f"\n  Environment: {existing_run.get('environment', 'unknown')}"
                 logger.error(error_msg)
                 raise RuntimeError(error_msg)
+
+            # Advisory lock acquired — we are the sole instance.
+            # Clean up any runs left in running/pending state by a previous crash or
+            # container kill (SIGKILL leaves no time for graceful DB cleanup).
+            await InstanceLockManager.cleanup_stale_runs(self.db_pool, self.mode)
 
             await self._load_config()
             await self._init_exchange()
@@ -219,8 +225,9 @@ class TradingBot:
     async def stop(self):
         """Gracefully stop the bot and cleanup resources."""
         # Prevent multiple calls to stop()
-        if not self.is_running:
+        if self._stop_called:
             return
+        self._stop_called = True
 
         logger.info("Stopping trading bot...")
         self.is_running = False

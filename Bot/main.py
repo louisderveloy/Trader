@@ -185,18 +185,22 @@ def cmd_paper(args):
     """Run paper trading command."""
     from scripts.trading import run_trading_loop
 
-    # Pre-flight instance check
+    # Pre-flight instance check: use the advisory lock as source of truth.
+    # The DB status (run.status='running') can be stale after a container crash/kill,
+    # but the advisory lock is always released when the connection drops.
     async def check_instance():
         dsn = os.getenv("DATABASE_URL", "").replace("postgresql+asyncpg://", "postgresql://")
-        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=1)
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
         try:
-            existing = await InstanceLockManager.check_existing_runs(pool, 'paper')
-            if existing:
+            lock_held = await InstanceLockManager.is_lock_held(pool, 'paper')
+            if lock_held:
+                existing = await InstanceLockManager.check_existing_runs(pool, 'paper')
                 print(f"\n❌ Cannot start paper trading: Another instance is already running")
-                print(f"   Active run_id: {existing['id']}")
-                print(f"   Started at: {existing['started_at']}")
-                print(f"   Symbol: {existing.get('symbol', 'unknown')}")
-                print(f"   Environment: {existing.get('environment', 'unknown')}")
+                if existing:
+                    print(f"   Active run_id: {existing['id']}")
+                    print(f"   Started at: {existing['started_at']}")
+                    print(f"   Symbol: {existing.get('symbol', 'unknown')}")
+                    print(f"   Environment: {existing.get('environment', 'unknown')}")
                 print("\n   To stop the existing instance:")
                 print("   - Press Ctrl+C in the running instance")
                 print("   - Or restart the bot container: docker compose restart bot")
@@ -225,18 +229,22 @@ def cmd_live(args):
     """Run live trading command."""
     from scripts.trading import run_trading_loop
 
-    # Pre-flight instance check
+    # Pre-flight instance check: use the advisory lock as source of truth.
+    # The DB status (run.status='running') can be stale after a container crash/kill,
+    # but the advisory lock is always released when the connection drops.
     async def check_instance():
         dsn = os.getenv("DATABASE_URL", "").replace("postgresql+asyncpg://", "postgresql://")
-        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=1)
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
         try:
-            existing = await InstanceLockManager.check_existing_runs(pool, 'live')
-            if existing:
+            lock_held = await InstanceLockManager.is_lock_held(pool, 'live')
+            if lock_held:
+                existing = await InstanceLockManager.check_existing_runs(pool, 'live')
                 print(f"\n❌ Cannot start live trading: Another instance is already running")
-                print(f"   Active run_id: {existing['id']}")
-                print(f"   Started at: {existing['started_at']}")
-                print(f"   Symbol: {existing.get('symbol', 'unknown')}")
-                print(f"   Environment: {existing.get('environment', 'unknown')}")
+                if existing:
+                    print(f"   Active run_id: {existing['id']}")
+                    print(f"   Started at: {existing['started_at']}")
+                    print(f"   Symbol: {existing.get('symbol', 'unknown')}")
+                    print(f"   Environment: {existing.get('environment', 'unknown')}")
                 print("\n   To stop the existing instance:")
                 print("   - Press Ctrl+C in the running instance")
                 print("   - Or restart the bot container: docker compose restart bot")
