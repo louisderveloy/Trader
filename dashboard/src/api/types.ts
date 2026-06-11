@@ -34,8 +34,8 @@ export interface Run {
   created_at: string
   started_at: string | null
   completed_at: string | null
-  weights_set_id: number | null
-  optuna_study_id: number | null
+  weights_set_id: string | null
+  optuna_study_id: string | null
 }
 
 export interface RunFilters {

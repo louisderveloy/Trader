@@ -10,6 +10,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Optional
+from uuid import UUID
 
 
 class RunType(str, Enum):
@@ -102,7 +103,7 @@ class RunConfig:
     strategy_config: dict[str, Any]
 
     # Active weights (if applicable)
-    weights_set_id: Optional[int] = None
+    weights_set_id: Optional[UUID] = None
     weights: Optional[dict[str, float]] = None
 
     # Optimization config (if run_type == OPTIMIZATION)
@@ -266,8 +267,8 @@ class Run:
     completed_at: Optional[datetime]
 
     # Optional foreign keys
-    weights_set_id: Optional[int] = None
-    optuna_study_id: Optional[int] = None
+    weights_set_id: Optional[UUID] = None
+    optuna_study_id: Optional[UUID] = None
 
     def __post_init__(self):
         """Validate and convert string enums if needed."""
@@ -314,8 +315,8 @@ class RunFilter:
     created_after: Optional[datetime] = None
     created_before: Optional[datetime] = None
 
-    weights_set_id: Optional[int] = None
-    optuna_study_id: Optional[int] = None
+    weights_set_id: Optional[UUID] = None
+    optuna_study_id: Optional[UUID] = None
 
     limit: int = 100
     offset: int = 0

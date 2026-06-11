@@ -10,6 +10,7 @@ import asyncpg
 import logging
 from datetime import datetime, timezone
 from typing import Optional
+from uuid import UUID
 
 from .types import (
     Run,
@@ -260,13 +261,13 @@ class RunManager:
         logger.debug(f"Updated result for run {run_id}")
         return updated_run
 
-    async def link_optuna_study(self, run_id: int, study_id: int) -> Run:
+    async def link_optuna_study(self, run_id: int, study_id: UUID) -> Run:
         """
         Link run to an Optuna study.
 
         Args:
             run_id: Run ID
-            study_id: Optuna study ID
+            study_id: Optuna study ID (UUID of the optuna_studies row)
 
         Returns:
             Updated run

@@ -112,6 +112,11 @@ Implementing Optuna-based optimization with walk-forward analysis for indicator 
 - **Dashboard:** `api/optimizations.ts` + store reworked (run_id/status, full launch options, stop/kill/logs delegating to runs API, polling); `LaunchOptimizationModal` expanded to full parity with an "Avancé" collapsible (dropped vestigial `n_jobs`); `OptimizationsView` got per-row Stop/Kill/Logs (role+status gated, reuses `LogsModal`).
 - **Status:** Implemented across bot/API/dashboard/tests. `pytest`: **411 passed / 10 skipped**; `vue-tsc` clean; bot+api modules import cleanly. No DB migration. (eslint unrunnable in-container — pre-existing parser misconfig affecting every `.vue`/config file, not these changes.) User fetched BTCUSDC candles 2018-01-01→2026-06-01, so a study can now complete end-to-end.
 
+### 2026-06-11T00:00Z [CODE] Fixed runs.optuna_study_id type (integer → uuid)
+- **Bug:** `runs.optuna_study_id` was `integer` but `optuna_studies.id` is `uuid`, so `RunManager.link_optuna_study()` (writes the study UUID) always failed silently (try/except-logged). All 183 rows were NULL. The `GET /optimizations` listing sidesteps it by joining `optuna_studies.run_id = runs.id`, but the link column itself was dead.
+- **Fix:** migration **013** (revises 012) drops+recreates the column as `uuid` nullable (mirrors the weights_set_id fix in 7f964; safe since all NULL). Aligned types: `link_optuna_study(study_id: UUID)`, `Run`/`RunFilter.optuna_study_id: Optional[UUID]` (bot), `RunResponse`/`RunFilter.optuna_study_id: Optional[UUID]` (API — required, else GET /runs would 422/500 once a UUID is stored), `Run.optuna_study_id: string | null` (dashboard).
+- **Verified:** 013 applied, column now `uuid`; `GET /runs` + `GET /optimizations` 200; pytest 411 passed/10 skipped; vue-tsc clean.
+
 ### 2026-06-09T[CURRENT] [CODE] Implemented safeguards to prevent closing runs with open positions
 - **Issue:** When a run (paper/live/testnet) was stopped, there was NO verification that all positions were closed. This could lead to:
   - Orphaned open trades in database with status='open' while run is marked COMPLETED

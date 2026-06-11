@@ -132,7 +132,7 @@ async def run_backtest(
     strategy_config: StrategyEngineConfig,
     engine: str = "vectorbt",
     save_results: bool = False,
-    weights_set_id: Optional[int] = None,
+    weights_set_id: Optional[UUID] = None,
     run_id: Optional[int] = None,
 ):
     """
