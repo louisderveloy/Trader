@@ -1,7 +1,7 @@
 <template>
   <!-- Modal Backdrop -->
-  <div class="fixed inset-0 z-50 bg-black bg-opacity-50 flex items-center justify-center p-4">
-    <div class="bg-white rounded-lg shadow-lg max-w-lg w-full max-h-[90vh] overflow-y-auto">
+  <div class="fixed inset-0 z-50 bg-black bg-opacity-50 flex sm:items-center sm:justify-center sm:p-4">
+    <div class="bg-white w-full h-full overflow-y-auto overscroll-contain sm:h-auto sm:max-w-lg sm:max-h-[90vh] sm:rounded-lg sm:shadow-lg">
       <div class="p-6">
         <h2 class="text-xl font-bold text-gray-900 mb-4">Lancer une optimisation</h2>
 
@@ -250,6 +250,9 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import ConfigField from '@/components/common/ConfigField.vue'
 import InfoTooltip from '@/components/common/InfoTooltip.vue'
 import { getSymbols } from '@/api/runs'
+import { useBodyScrollLock } from '@/composables/useBodyScrollLock'
+
+useBodyScrollLock()
 import type { LaunchOptimizationRequest, OptimizationObjective } from '@/api/optimizations'
 
 interface Props {

@@ -1,6 +1,6 @@
 <template>
-  <div class="fixed inset-0 z-50 bg-black bg-opacity-50 flex items-center justify-center p-4">
-    <div class="bg-white rounded-lg shadow-lg max-w-3xl w-full max-h-[90vh] flex flex-col">
+  <div class="fixed inset-0 z-50 bg-black bg-opacity-50 flex sm:items-center sm:justify-center sm:p-4">
+    <div class="bg-white w-full h-full flex flex-col overflow-hidden sm:h-auto sm:max-h-[90vh] sm:max-w-3xl sm:rounded-lg sm:shadow-lg">
       <!-- Header -->
       <div class="flex items-center justify-between p-4 border-b border-gray-200">
         <h2 class="text-lg font-bold text-gray-900">Logs — Run #{{ runId }}</h2>
@@ -24,7 +24,7 @@
       </div>
 
       <!-- Body -->
-      <div class="p-4 overflow-auto flex-1">
+      <div class="p-4 overflow-auto overscroll-contain flex-1">
         <p v-if="truncated" class="text-xs text-amber-600 mb-2">
           Affichage des dernières lignes uniquement (les plus anciennes sont tronquées).
         </p>
@@ -43,6 +43,9 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useRunsStore } from '@/stores/runs'
+import { useBodyScrollLock } from '@/composables/useBodyScrollLock'
+
+useBodyScrollLock()
 
 interface Props {
   runId: number
