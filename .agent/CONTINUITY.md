@@ -651,6 +651,34 @@ Features implemented:
 
 ## [DISCOVERIES]
 
+### 2026-06-12 [UI+API] Optimisations — filter & sort bar (server-side SQL)
+Added a filter/sort bar to `OptimizationsView.vue`, applied **server-side** (user rejected a client-side version). Filters: symbol, objective, status (pending/running/completed/failed/cancelled), "jeu de poids activé uniquement" toggle. Sort: completed_at | best_value, asc/desc. Server pagination retained (limit 20).
+- **API** (`api/routes/optimizations.py`): new query params validated via Enums (`OptStatusFilter`, `OptObjectiveFilter`, `OptSortField`, `SortDirection`) + symbol `pattern=^[A-Za-z0-9._-]+$`. `_build_filter_clause()` binds all values as `$n` params; ORDER BY column comes from a whitelist map (`_SORT_COLUMNS`), direction from the enum → **no user input interpolated into SQL**. Objective filter reads JSONB `COALESCE(config_snapshot->'params'->>'objective', ...->'optimization_config'->>'objective')`. Count uses `COUNT(DISTINCT r.id)` (joins can fan out a run across studies). ORDER BY adds `NULLS LAST, r.id DESC` for stable paging.
+- New facet endpoint `GET /optimizations/symbols` (distinct symbols from opt runs) — **declared before `/{run_id}`** so the literal path wins over the int converter.
+- **Migration 015** (`015_indexes_optimization_filter_sort`): partial indexes `ix_runs_opt_status_symbol (status,symbol)` and `ix_runs_opt_completed_at (completed_at DESC)`, both `WHERE run_type='optimization'`. alembic head now 015.
+- **Frontend**: `api/optimizations.ts` `getOptimizations(query)` + `getOptimizationSymbols()`; store holds filter/sort refs + `applyFilters()`/`fetchSymbols()`; view binds via `storeToRefs`, watches filters→`applyFilters` (resets offset 0). Reverted the client-side limit-1000 hack.
+- **Verified**: alembic 014→015 ok, both indexes present; `vue-tsc` exit 0; authed curls — filter/sort/active_only/symbols all 200 & correct; **input validation: invalid sort_by/status/objective/sort_dir and a `BTC';DROP` symbol all → 422**, valid → 200, unauth → 401. Dashboard restarted; served modules contain `applyFilters`/`fetchSymbols`/`storeToRefs`.
+
+### 2026-06-12T00:00Z [TOOL] Weight-set activation — follow-ups resolved
+Resolved the three follow-ups from the 21:30 entry plus disabled polling:
+- **`runs.weights_set_id` never written** by the runner (was NULL for all completed optimizations). Extended `RunManager.link_optuna_study(run_id, study_id, weights_set_id=None)` to `SET weights_set_id = COALESCE($3, weights_set_id)`; runner now passes it. Backfilled existing rows via migration **014_backfill_runs_weights_set_id** (data-only, idempotent; alembic head now 014). Verified: all completed opt runs populated.
+- **API** now reads `COALESCE(r.weights_set_id, s.weights_set_id)` (list/get/activate) — prefers the runs row, falls back to the study.
+- **Button not showing** root cause was NOT data — it was a **stale Vite dev-server transform cache** (disk file had the changes; `localhost:5173/src/.../OptimizationCard.vue` served the old script with no `activate-weights`). `usePolling:true` didn't pick it up. Fixed with `docker compose restart dashboard`; served module now contains the button. Lesson: after editing .vue under Docker-on-Windows, if HMR seems stale, restart the dashboard container.
+- **`/weights` route + `WeightsResponse` rewritten** to the real schema: UUID id, columns `id,name,weights,source,optimization_score,is_active,created_at`; dropped `description/optuna_study_id/metrics/activated_at/updated_at` and `WeightsUpdateRequest`. list/get/create/activate verified 200 (was 500 before).
+- **Polling disabled** in `OptimizationsView.vue` (no `startPolling`/`onUnmounted`); list fetched once on mount, user refreshes manually.
+
+### 2026-06-11T21:30Z [TOOL] Weight-set activation from dashboard + stale /weights route
+Added "Activer le jeu de poids" / "Activé" button to the optimize-run card. New endpoint `POST /optimizations/{run_id}/activate-weights` (admin, CSRF) mirrors CLI `optimize activate` (deactivate-all + activate-one; bot reads active set from DB on demand, no NOTIFY). Optimization list/get now expose `weights_set_active` via LEFT JOIN weights_sets. Verified e2e: 200 exclusive activate, 409 (no set), 404 (no run).
+**`/weights` stale route:** RESOLVED in the 2026-06-12 entry above (was: int PK vs UUID, non-existent columns).
+
+### 2026-06-11T19:50Z [TOOL] Walk-forward TEST score always 0.0 — weight-key namespace mismatch
+**Symptom:** Every optuna_studies run had `test_score = 0.0` on every split (and study `best_value = 0.0`), while `train_score` was non-zero. Not a multithreading issue.
+**Root cause:** `WeightsSearchSpace.suggest_weights()` builds the backtester weights with UNPREFIXED keys (`{"ema":..,"macd":..,"user_indicator":0.05}`, normalized) — training used these → real scores. But Optuna registers params as `weight_<ind>`, so `study.best_params` is PREFIXED/un-normalized/missing the fixed weight. `runner._run_optimization` passed that prefixed dict into `evaluate_weights(is_test=True)`; the engine reads `weights.get('ema', default)` → every key missed → test silently ran on DEFAULT weights, fully decoupled from training. On the recent 4-split windows defaults made 0 trades → `BacktestMetrics()` default `sharpe_ratio=0.0` → exactly 0.0.
+**Same bug corrupted weights_sets** (saved `study.best_params` prefixed; strategy engine expects unprefixed `bot/strategy/types.py:52`).
+**Fix:** `suggest_weights` now records exact weights via `trial.set_user_attr("weights", ...)`; shared `_assemble()` + new `weights_from_params()` fallback; runner uses `study.best_trial.user_attrs["weights"]` for test eval AND save. Defensive warning added in `vectorbt_engine.py` when a non-empty weights dict has no recognised indicator keys.
+**Evidence:** post-fix run `fix-verify-trials` (80 trials, 3 splits) split 1 `test=1.5806` (was always 0.0); stored `best_params` now unprefixed and sum ~1.0.
+**Incidental quirk (out of scope):** a 0-trade backtest scores Sharpe 0.0, which beats a losing config's negative Sharpe — so with too few trials the optimizer can pick "do nothing." Explains why a 12-trial run was all-zero even after the fix.
+
 ### 2026-06-03T19:35Z [TOOL] Bot/ directory case sensitivity
 Windows filesystem allowed both Bot/ and bot/ during rename operation. Used mv Bot bot_new && mv bot_new bot to avoid case conflicts.
 

@@ -400,3 +400,70 @@ class TestWeightsSearchSpace:
 
         with pytest.raises(ValueError, match="max_weight must be greater than min_weight"):
             WeightsSearchSpace(min_weight=0.6, max_weight=0.5)
+
+
+class _FakeTrial:
+    """Minimal Optuna-trial stand-in that records params and user attrs."""
+
+    def __init__(self, values: dict):
+        # values: prefixed param name -> value to return for that param
+        self._values = values
+        self.params: dict = {}
+        self.user_attrs: dict = {}
+
+    def suggest_float(self, name, low, high):
+        value = self._values[name]
+        self.params[name] = value
+        return value
+
+    def set_user_attr(self, key, value):
+        self.user_attrs[key] = value
+
+
+class TestWeightsSearchSpaceWeights:
+    """Tests for weight resolution (regression: walk-forward test scores all 0.0)."""
+
+    def test_suggest_weights_records_unprefixed_normalized_weights(self):
+        """suggest_weights must record the exact backtester weights on the trial."""
+        search_space = WeightsSearchSpace(
+            indicators=["ema", "macd", "user_indicator"],
+            fixed_weights={"user_indicator": 0.05},
+        )
+        trial = _FakeTrial({"weight_ema": 0.6, "weight_macd": 0.4})
+
+        weights = search_space.suggest_weights(trial)
+
+        # Optuna params are prefixed; only optimizable indicators are suggested.
+        assert set(trial.params) == {"weight_ema", "weight_macd"}
+        # Backtester weights are unprefixed and include the fixed indicator.
+        assert set(weights) == {"ema", "macd", "user_indicator"}
+        # Normalized to sum ~1.0.
+        assert pytest.approx(sum(weights.values()), abs=1e-9) == 1.0
+        # The exact same dict is recorded for the runner to reuse.
+        assert trial.user_attrs["weights"] == weights
+
+    def test_weights_from_params_matches_suggest_weights(self):
+        """Reconstruction from prefixed best_params must equal the live weights."""
+        search_space = WeightsSearchSpace(
+            indicators=["ema", "macd", "user_indicator"],
+            fixed_weights={"user_indicator": 0.05},
+        )
+        trial = _FakeTrial({"weight_ema": 0.6, "weight_macd": 0.4})
+        live = search_space.suggest_weights(trial)
+
+        reconstructed = search_space.weights_from_params(trial.params)
+
+        assert reconstructed == live
+
+    def test_weights_from_params_strips_prefix_and_excludes_defaults(self):
+        """Keys are unprefixed; backtester gets recognised indicator keys, not weight_*."""
+        search_space = WeightsSearchSpace(
+            indicators=["ema", "macd", "rsi", "user_indicator"],
+            fixed_weights={"user_indicator": 0.05},
+        )
+        best_params = {"weight_ema": 0.5, "weight_macd": 0.3, "weight_rsi": 0.2}
+
+        weights = search_space.weights_from_params(best_params)
+
+        assert not any(k.startswith("weight_") for k in weights)
+        assert {"ema", "macd", "rsi", "user_indicator"} == set(weights)

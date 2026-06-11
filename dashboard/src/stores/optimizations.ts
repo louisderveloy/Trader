@@ -3,10 +3,16 @@ import { computed, ref } from 'vue'
 import { useIntervalFn } from '@vueuse/core'
 import {
   Optimization,
+  OptimizationStatus,
+  OptimizationSortField,
+  SortDirection,
+  OptimizationQuery,
   LaunchOptimizationRequest,
   getOptimizations,
   getOptimization,
+  getOptimizationSymbols,
   launchOptimization,
+  activateOptimizationWeights,
 } from '@/api/optimizations'
 import { stopRun, killRun, getRunLogs } from '@/api/runs'
 import type { RunLogsResponse } from '@/api/types'
@@ -20,10 +26,23 @@ export const useOptimizationsStore = defineStore('optimizations', () => {
   const isLoading = ref(false)
   const isLaunching = ref(false)
   const error = ref<string | null>(null)
+  // run_id whose weights set is currently being activated (for button state)
+  const activatingWeightsRunId = ref<number | null>(null)
 
-  // Pagination
+  // Pagination (server-side)
   const limit = ref(20)
   const offset = ref(0)
+
+  // Filter / sort state (applied server-side via the list query)
+  const filterSymbol = ref('')
+  const filterObjective = ref('')
+  const filterStatus = ref<OptimizationStatus | ''>('')
+  const filterActiveOnly = ref(false)
+  const sortBy = ref<OptimizationSortField>('completed_at')
+  const sortDir = ref<SortDirection>('desc')
+
+  // Distinct symbols for the filter dropdown
+  const symbols = ref<string[]>([])
 
   // Polling instance
   let pollingInstance: ReturnType<typeof useIntervalFn> | null = null
@@ -41,7 +60,19 @@ export const useOptimizationsStore = defineStore('optimizations', () => {
     isLoading.value = true
     error.value = null
     try {
-      const response = await getOptimizations(limit.value, offset.value)
+      const query: OptimizationQuery = {
+        limit: limit.value,
+        offset: offset.value,
+        sort_by: sortBy.value,
+        sort_dir: sortDir.value,
+      }
+      // Only send active (non-empty) filters; the backend validates each value.
+      if (filterSymbol.value) query.symbol = filterSymbol.value
+      if (filterObjective.value) query.objective = filterObjective.value
+      if (filterStatus.value) query.status = filterStatus.value
+      if (filterActiveOnly.value) query.active_only = true
+
+      const response = await getOptimizations(query)
       optimizations.value = response.items
       total.value = response.total
     } catch (err) {
@@ -49,6 +80,21 @@ export const useOptimizationsStore = defineStore('optimizations', () => {
       throw err
     } finally {
       isLoading.value = false
+    }
+  }
+
+  /** Re-run the query from the first page (used whenever a filter or sort changes). */
+  async function applyFilters(): Promise<void> {
+    offset.value = 0
+    await fetchOptimizations()
+  }
+
+  /** Load the distinct symbols used by optimization runs (filter dropdown). */
+  async function fetchSymbols(): Promise<void> {
+    try {
+      symbols.value = await getOptimizationSymbols()
+    } catch (err) {
+      console.error('Failed to fetch optimization symbols:', err)
     }
   }
 
@@ -107,6 +153,25 @@ export const useOptimizationsStore = defineStore('optimizations', () => {
     }
   }
 
+  async function activateWeights(runId: number): Promise<boolean> {
+    const toast = useToastStore()
+    activatingWeightsRunId.value = runId
+    try {
+      await activateOptimizationWeights(runId)
+      toast.success(`Jeu de poids de l'optimisation #${runId} activé`)
+      // Refresh so every card reflects the new exclusive active set.
+      await fetchOptimizations()
+      return true
+    } catch (err: any) {
+      toast.error(
+        err.response?.data?.detail || "Erreur lors de l'activation du jeu de poids"
+      )
+      return false
+    } finally {
+      activatingWeightsRunId.value = null
+    }
+  }
+
   async function fetchLogs(runId: number): Promise<RunLogsResponse | null> {
     try {
       return await getRunLogs(runId)
@@ -159,8 +224,17 @@ export const useOptimizationsStore = defineStore('optimizations', () => {
     isLoading,
     isLaunching,
     error,
+    activatingWeightsRunId,
     limit,
     offset,
+    // Filter / sort state
+    filterSymbol,
+    filterObjective,
+    filterStatus,
+    filterActiveOnly,
+    sortBy,
+    sortDir,
+    symbols,
 
     // Computed
     hasMore,
@@ -170,10 +244,13 @@ export const useOptimizationsStore = defineStore('optimizations', () => {
 
     // Actions
     fetchOptimizations,
+    applyFilters,
+    fetchSymbols,
     fetchOptimization,
     launch,
     stopOptimization,
     killOptimization,
+    activateWeights,
     fetchLogs,
     nextPage,
     previousPage,

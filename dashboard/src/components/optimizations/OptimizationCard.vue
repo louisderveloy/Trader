@@ -54,6 +54,30 @@
         Logs
       </button>
 
+      <!-- Weights-set activation. The active set is used by the bot for live/paper
+           decisions; activation is exclusive (deactivates all others). Only shown
+           once the study has produced a weights set. -->
+      <span
+        v-if="hasWeightsSet && optimization.weights_set_active"
+        class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm border border-green-300 rounded-md text-green-800 bg-green-50"
+        title="Ce jeu de poids est actuellement actif"
+      >
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+        </svg>
+        Activé
+      </span>
+      <button
+        v-else-if="hasWeightsSet && auth.isAdmin"
+        type="button"
+        :disabled="isActivating"
+        @click="$emit('activate-weights', optimization.run_id)"
+        class="px-3 py-1.5 text-sm border border-blue-300 rounded-md text-blue-800 bg-blue-50 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
+        title="Activer ce jeu de poids pour le bot (désactive le jeu actif)"
+      >
+        {{ isActivating ? 'Activation…' : 'Activer le jeu de poids' }}
+      </button>
+
       <!-- Stop/Kill are admin-only and only while active. Killing an optimization
            is safe (no exchange positions), so both are offered. -->
       <button
@@ -81,6 +105,7 @@ import { computed } from 'vue'
 import type { Optimization } from '@/api/optimizations'
 import RunStatusBadge from '@/components/runs/RunStatusBadge.vue'
 import { useAuthStore } from '@/stores/auth'
+import { useOptimizationsStore } from '@/stores/optimizations'
 import { formatDate } from '@/utils/format'
 
 interface Props {
@@ -93,14 +118,21 @@ defineEmits<{
   logs: [runId: number]
   stop: [runId: number]
   kill: [runId: number]
+  'activate-weights': [runId: number]
 }>()
 
 const auth = useAuthStore()
+const optimizationsStore = useOptimizationsStore()
 
 const isActive = computed(
   () => props.optimization.status === 'running' || props.optimization.status === 'pending'
 )
 const canControl = computed(() => auth.isAdmin && isActive.value)
+
+const hasWeightsSet = computed(() => props.optimization.weights_set_id !== null)
+const isActivating = computed(
+  () => optimizationsStore.activatingWeightsRunId === props.optimization.run_id
+)
 
 function formatParamValue(value: unknown): string {
   if (typeof value === 'number') {
