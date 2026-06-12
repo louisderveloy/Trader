@@ -11,7 +11,7 @@ multi-projets.
 ## Sécurité
 
 Un audit de sécurité complet de la stack (API, bot, dashboard, DB, Docker/Traefik, dépendances) est
-documenté dans **`.claude/security-review.md`**. Ce fichier contient le bilan par sévérité, une **todo
+documenté dans **`.agent/security-review.md`**. Ce fichier contient le bilan par sévérité, une **todo
 list** de suivi des correctifs (à cocher au fur et à mesure) et le détail de chaque finding avec
 localisation et remédiation. À consulter et mettre à jour avant tout travail touchant l'authentification,
 la configuration de déploiement ou la gestion des secrets.
