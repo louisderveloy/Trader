@@ -3,11 +3,11 @@ Configuration management endpoints.
 
 REST API for reading and updating bot configuration and indicator parameters.
 """
-import asyncpg
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
+import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from ..auth import User, get_current_user
@@ -37,9 +37,9 @@ router = APIRouter()
 @router.get("", response_model=ConfigResponse)
 @limiter.limit(lambda: settings.rate_limit_api_read)
 async def get_config(
-    request: Request,
-    user: User = Depends(get_current_user),
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
+        request: Request,
+        user: User = Depends(get_current_user),
+        db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> ConfigResponse:
     """
     Get complete bot configuration.
@@ -141,10 +141,10 @@ async def get_config(
 @router.patch("/strategy", response_model=StrategyConfigResponse)
 @limiter.limit(lambda: settings.rate_limit_api_write)
 async def update_strategy_config(
-    request: Request,
-    update_data: StrategyConfigUpdate,
-    user: User = Depends(get_current_user),
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
+        request: Request,
+        update_data: StrategyConfigUpdate,
+        user: User = Depends(get_current_user),
+        db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> StrategyConfigResponse:
     """
     Update strategy configuration.
@@ -200,10 +200,10 @@ async def update_strategy_config(
 @router.patch("/risk", response_model=RiskConfigResponse)
 @limiter.limit(lambda: settings.rate_limit_api_write)
 async def update_risk_config(
-    request: Request,
-    update_data: RiskConfigUpdate,
-    user: User = Depends(get_current_user),
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
+        request: Request,
+        update_data: RiskConfigUpdate,
+        user: User = Depends(get_current_user),
+        db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> RiskConfigResponse:
     """
     Update risk management configuration.
@@ -267,10 +267,10 @@ async def update_risk_config(
 @router.get("/user-indicator", response_model=UserIndicatorResponse)
 @limiter.limit(lambda: settings.rate_limit_api_read)
 async def get_user_indicator(
-    request: Request,
-    symbol: Annotated[str, Query(description="Trading symbol")] = "BTCUSDT",
-    user: User = Depends(get_current_user),
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
+        request: Request,
+        symbol: Annotated[str, Query(description="Trading symbol")] = "BTCUSDT",
+        user: User = Depends(get_current_user),
+        db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> UserIndicatorResponse:
     """
     Get user indicator for a symbol.
@@ -319,11 +319,11 @@ async def get_user_indicator(
 @router.patch("/user-indicator", response_model=UserIndicatorResponse)
 @limiter.limit(lambda: settings.rate_limit_api_write)
 async def update_user_indicator(
-    request: Request,
-    symbol: Annotated[str, Query(description="Trading symbol")] = "BTCUSDT",
-    update_data: UserIndicatorUpdateRequest = None,
-    user: User = Depends(get_current_user),
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
+        request: Request,
+        symbol: Annotated[str, Query(description="Trading symbol")] = "BTCUSDT",
+        update_data: UserIndicatorUpdateRequest = None,
+        user: User = Depends(get_current_user),
+        db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> UserIndicatorResponse:
     """
     Update user indicator for a symbol.
