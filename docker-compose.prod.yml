@@ -18,6 +18,7 @@ volumes:
   postgres_data:
   traefik_certs:
   bot_logs:
+  authelia_data:  # Authelia SQLite storage + notifications
 
 services:
   # ==========================================
@@ -77,6 +78,42 @@ services:
       - trader-network
     labels:
       - "traefik.enable=true"
+
+  # ==========================================
+  # Authelia (OIDC provider) — auth.trader.derveloy.eu
+  # ==========================================
+  # The API is an OIDC relying party of this provider (AUTH_MODE=authelia_oidc).
+  # Secrets are injected via env vars (Authelia's AUTHELIA_* mapping); the OIDC
+  # issuer signing key and the users database are mounted from absolute VPS paths
+  # OUTSIDE the repo. See docs/Authentification.md §8 and authelia/configuration.yml.
+  authelia:
+    image: authelia/authelia:4.39
+    container_name: trader-authelia
+    restart: unless-stopped
+    environment:
+      # Core secrets (generate each with: openssl rand -hex 32 — see .env)
+      AUTHELIA_SESSION_SECRET: ${AUTHELIA_SESSION_SECRET}
+      AUTHELIA_STORAGE_ENCRYPTION_KEY: ${AUTHELIA_STORAGE_ENCRYPTION_KEY}
+      AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET: ${AUTHELIA_JWT_SECRET}
+      AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET: ${AUTHELIA_OIDC_HMAC_SECRET}
+      # RSA private key Authelia signs id_tokens with (RS256). The matching public
+      # key is published at the JWKS endpoint the API validates against.
+      AUTHELIA_IDENTITY_PROVIDERS_OIDC_JWKS_0_KEY_FILE: /secrets/oidc.issuer.key
+    volumes:
+      # Config + users DB live OUTSIDE the repo on the VPS (never committed).
+      - /etc/authelia/configuration.yml:/config/configuration.yml:ro
+      - /etc/authelia/users_database.yml:/config/users_database.yml:ro
+      - /etc/authelia/oidc.issuer.key:/secrets/oidc.issuer.key:ro
+      - authelia_data:/data
+    networks:
+      - trader-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.authelia.rule=Host(`${DOMAIN_AUTH}`)"
+      - "traefik.http.routers.authelia.entrypoints=websecure"
+      - "traefik.http.routers.authelia.tls=true"
+      - "traefik.http.routers.authelia.tls.certresolver=letsencrypt"
+      - "traefik.http.services.authelia.loadbalancer.server.port=9091"
 
   # ==========================================
   # Trading Bot (Python)

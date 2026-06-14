@@ -13,9 +13,11 @@ import pathlib
 from datetime import datetime, time, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 
 from ..auth import Principal, get_principal, require_admin, require_viewer
+from ..auth import oidc
+from ..auth.cookies import clear_stepup_cookie
 from ..config import settings
 from ..csrf_helper import validate_csrf_token
 from ..database import get_db_pool
@@ -377,10 +379,33 @@ async def _queue_command(conn: asyncpg.Connection, run_id: int, kind: str,
         )
 
 
+def _require_stepup_for_live(request: Request, response: Response, principal: Principal) -> None:
+    """Enforce a fresh OIDC step-up re-authentication before starting a live run.
+
+    Only applies under Authelia OIDC (in dev/local there is no Authelia, so the
+    confirm_phrase gate stands alone). On success the single-use grant cookie is
+    cleared so it cannot authorize a second live start.
+
+    Raises 403 with detail ``step_up_required`` so the dashboard can redirect the
+    operator through ``/auth/oidc/stepup`` and retry.
+    """
+    if settings.auth_mode != "authelia_oidc":
+        return
+    grant = request.cookies.get(oidc.STEPUP_COOKIE)
+    if not oidc.verify_stepup_grant(grant, sub=principal.username):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="step_up_required",
+        )
+    # Single-use: invalidate the grant now that it is being consumed.
+    clear_stepup_cookie(response)
+
+
 @router.post("/start", response_model=StartRunResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit(lambda: settings.rate_limit_expensive)
 async def start_run(
     request: Request,
+    response: Response,
     payload: StartRunRequest,
     principal: Principal = Depends(require_admin),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
@@ -391,6 +416,10 @@ async def start_run(
     Admin only. Requires a CSRF token. Mainnet live additionally requires the
     ``confirm_phrase`` safety field (validated in :class:`StartRunRequest`).
 
+    LIVE runs additionally require a fresh OIDC step-up grant (re-authentication)
+    when Authelia is the provider: see :func:`_require_stepup_for_live`. This is
+    on top of the ``confirm_phrase`` mainnet gate.
+
     Creates a PENDING run row and queues a ``start`` command for the supervisor
     in a single transaction, so the run is visible before the NOTIFY fires.
     Parallelism mirrors the CLI: paper and live are single-instance (enforced by
@@ -400,6 +429,8 @@ async def start_run(
     await validate_csrf_token(request)
 
     rt = payload.run_type
+    if rt == RunTypeStart.LIVE:
+        _require_stepup_for_live(request, response, principal)
     params = payload.to_command_params()
     environment = payload.environment()
 

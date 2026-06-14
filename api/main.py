@@ -129,6 +129,7 @@ app.add_middleware(
 
 # Include routers
 from .auth.routes import router as auth_router
+from .auth.oidc_routes import router as oidc_router
 from .routes.health import router as health_router
 from .routes.runs import router as runs_router
 from .routes.trades import router as trades_router
@@ -141,6 +142,7 @@ from .routes.logs import router as logs_router
 
 app.include_router(health_router, tags=["health"])
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
+app.include_router(oidc_router, prefix="/auth/oidc", tags=["auth"])
 app.include_router(runs_router, prefix="/runs", tags=["runs"])
 app.include_router(trades_router, prefix="/trades", tags=["trades"])
 app.include_router(signals_router, prefix="/signals", tags=["signals"])

@@ -14,6 +14,11 @@ alembic>=1.14.0
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
 python-multipart>=0.0.17
+# OIDC relying party (Authelia) — Authorization Code + PKCE, JWKS/id_token validation.
+# Pinned <2.0: we use authlib.jose for id_token validation; it is deprecated in favour
+# of `joserfc` (same author) and guaranteed compatible until Authlib 2.0. Migrate the
+# JOSE calls in api/auth/oidc.py to joserfc before unpinning.
+authlib>=1.3.2,<2.0.0
 
 # Security
 slowapi>=0.1.9

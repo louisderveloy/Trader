@@ -1,0 +1,34 @@
+# =============================================================================
+# Authelia users database — EXAMPLE (copy to /etc/authelia/users_database.yml)
+# =============================================================================
+# The REAL file is never committed (see .gitignore) and is mounted from
+# /etc/authelia/users_database.yml on the VPS.
+#
+# Group → role mapping (enforced by the API, see OIDC_ADMIN_GROUP / OIDC_VIEWER_GROUP):
+#   admins  -> full actions (start runs, save config, activate weights, live step-up)
+#   viewers -> read-only dashboard + data
+#   (a user in neither group is authenticated but denied access → /no-access)
+#
+# Generate a password hash with:
+#   docker run --rm authelia/authelia:4.39 \
+#     authelia crypto hash generate argon2 --password '<password>'
+# =============================================================================
+
+users:
+  louis:
+    disabled: false
+    displayname: 'Louis'
+    # Replace with the argon2 hash from the command above.
+    password: '$argon2id$v=19$m=65536,t=3,p=4$REPLACE_WITH_ARGON2_HASH'
+    email: 'louis.derveloy@gmail.com'
+    groups:
+      - 'admins'
+
+  # Example read-only user:
+  # analyst:
+  #   disabled: false
+  #   displayname: 'Analyst'
+  #   password: '$argon2id$v=19$m=65536,t=3,p=4$...'
+  #   email: 'analyst@example.com'
+  #   groups:
+  #     - 'viewers'

@@ -25,6 +25,37 @@ librairie JWT abandonnée.
 
 ## TODO — Suivi des corrections
 
+### 🔐 Authelia OIDC — revue de conception (2026-06-14)
+
+> Findings issus de la revue `security-reviewer` du design Authelia OIDC (BFF + Authorization
+> Code/PKCE). Statut au fil de l'implémentation (branche `feature/authelia-implementation`).
+> Détail complet : `.agent/authelia-implementation.md` + `docs/Authentification.md`.
+
+- [x] **AO-1** Step-up live : ré-résolution du rôle depuis l'id_token frais + binding du `sub` à la
+  session + grant usage-unique — `api/auth/oidc_routes.py` (`oidc_stepup_callback`), `api/routes/runs.py`
+  (`_require_stepup_for_live`). _Note : grant Fernet httpOnly stateless ; usage-unique via clear-cookie
+  + lock instance live. Migration DB pour usage-unique strict multi-worker = follow-up._
+- [x] **AO-2** Boot refusé si `prod` & `auth_mode != authelia_oidc` ; CORS wildcard refusé en prod —
+  `api/config.py:validate_production_secrets`.
+- [x] **AO-3** `/auth/login` → 404 hors mode local — `api/auth/routes.py:_require_local_mode`.
+- [x] **AO-4** Validation id_token RS256-only, claims complètes, JWKS fail-closed, module séparé de
+  `jwt.py` — `api/auth/oidc.py:validate_id_token`.
+- [x] **AO-5** Cookie de transaction chiffré (Fernet), usage unique, ≤5 min, secret dédié —
+  `api/auth/oidc.py` + `api/auth/cookies.py:set_txn_cookie`.
+- [x] **AO-6** `return_to` : allowlist chemin relatif (stockage + usage) — `api/auth/oidc_routes.py:_safe_return_to`.
+- [x] **AO-7** Domaines cookies resserrés (session host-only, CSRF `.trader.derveloy.eu`) +
+  `SameSite=Strict` — `api/auth/cookies.py`. **Remplace l'avis de #6** (domaine plus étroit que
+  `.derveloy.eu`).
+- [x] **AO-8/15** Secrets OIDC validés en prod ; `users_database.yml` gitignoré + monté hors-repo —
+  `api/config.py`, `.gitignore`, `authelia/` (template uniquement).
+- [x] **AO-12** Comparaison CSRF à temps constant — `api/csrf_helper.py`.
+- [ ] **AO-11** TTL session prod → 240 min : documenté (`.env.example`) mais **non forcé** par
+  validation. _Couvre partiellement #12._
+- [ ] **AO-RISK** Vérifier que `prompt=login`/`max_age=0` rafraîchit bien `auth_time` sur la version
+  Authelia déployée (authelia#2596) ; sinon fallback `two_factor`.
+- [ ] **AO-FOLLOWUP** Migrer `api/auth/oidc.py` de `authlib.jose` (déprécié) vers `joserfc` avant
+  Authlib 2.0 (pin actuel `<2.0`).
+
 ### 🔴 Critiques (semaine 1)
 
 - [ ] **#1** Remplacer `python-jose` par `PyJWT>=2.8.0` ; coder en dur `algorithms=["HS256"]` et `options={"require":["exp","sub"]}` — `api/requirements.txt:14`, `api/auth/jwt.py:73-95`

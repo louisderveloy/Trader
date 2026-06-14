@@ -15,6 +15,13 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: false },
   },
   {
+    // Authenticated-but-unauthorised landing (no Authelia group mapped).
+    path: '/no-access',
+    name: 'no-access',
+    component: () => import('@/views/NoAccessView.vue'),
+    meta: { requiresAuth: false },
+  },
+  {
     path: '/',
     name: 'home',
     component: () => import('@/views/HomeView.vue'),

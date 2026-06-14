@@ -8,6 +8,7 @@ import { useIntervalFn } from '@vueuse/core'
 import * as runsApi from '@/api/runs'
 import type { Run, RunFilters, RunLogsResponse, StartRunRequest } from '@/api/types'
 import { useToastStore } from '@/stores/toast'
+import { useAuthStore } from '@/stores/auth'
 
 export const useRunsStore = defineStore('runs', () => {
   // State
@@ -105,6 +106,13 @@ export const useRunsStore = defineStore('runs', () => {
       return res.run_id
     } catch (err: any) {
       const detail = err.response?.data?.detail || 'Erreur lors du démarrage du run'
+      // Live runs require a fresh OIDC step-up: redirect to re-authenticate, then
+      // the operator retries (the grant cookie is set on return).
+      if (err.response?.status === 403 && detail === 'step_up_required') {
+        toast.success('Ré-authentification requise pour lancer un run live…')
+        useAuthStore().redirectToStepUp('/runs')
+        return null
+      }
       toast.error(typeof detail === 'string' ? detail : 'Paramètres invalides')
       return null
     }
