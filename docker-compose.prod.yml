@@ -18,7 +18,7 @@ volumes:
   postgres_data:
   traefik_certs:
   bot_logs:
-  authelia_data:  # Authelia SQLite storage + notifications
+  authelia_data:  # Authelia filesystem notifier (storage is now PostgreSQL)
 
 services:
   # ==========================================
@@ -99,6 +99,13 @@ services:
       # RSA private key Authelia signs id_tokens with (RS256). The matching public
       # key is published at the JWKS endpoint the API validates against.
       AUTHELIA_IDENTITY_PROVIDERS_OIDC_JWKS_0_KEY_FILE: /secrets/oidc.issuer.key
+      # Storage = shared project PostgreSQL (service `postgres`), dedicated DB
+      # `authelia` (see authelia/configuration.yml). Reuses the project DB creds.
+      AUTHELIA_STORAGE_POSTGRES_USERNAME: ${POSTGRES_USER}
+      AUTHELIA_STORAGE_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       # Config + users DB live OUTSIDE the repo on the VPS (never committed).
       - /etc/authelia/configuration.yml:/config/configuration.yml:ro
