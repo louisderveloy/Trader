@@ -5,22 +5,40 @@
 # is mounted read-only into the container (see docker-compose.prod.yml).
 #
 # Secrets are NOT in this file — they are injected as environment variables using
-# Authelia's AUTHELIA_* mapping:
-#   AUTHELIA_SESSION_SECRET
-#   AUTHELIA_STORAGE_ENCRYPTION_KEY
+# Authelia's AUTHELIA_* mapping (set the values in .env on the VPS):
+#   AUTHELIA_SESSION_SECRET                                  random ≥64 chars
+#   AUTHELIA_STORAGE_ENCRYPTION_KEY                          random ≥64 chars
 #   AUTHELIA_STORAGE_POSTGRES_USERNAME   (= ${POSTGRES_USER})
 #   AUTHELIA_STORAGE_POSTGRES_PASSWORD   (= ${POSTGRES_PASSWORD})
-#   AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET
-#   AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET
+#   AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET   random ≥64 chars
+#   AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET             random ≥64 chars
 #   AUTHELIA_IDENTITY_PROVIDERS_OIDC_JWKS_0_KEY_FILE -> /secrets/oidc.issuer.key
 #
-# The OIDC client_secret below is a HASH of AUTHELIA_OIDC_CLIENT_SECRET (the value
-# the API uses). Generate it with:
-#   docker run --rm authelia/authelia:4.39 \
-#     authelia crypto hash generate pbkdf2 --variant sha512 --password '<secret>'
-# Generate the RSA issuer key (used to sign id_tokens, RS256) with:
-#   docker run --rm authelia/authelia:4.39 \
-#     authelia crypto pair rsa generate --directory /tmp && cat /tmp/private.pem
+# -----------------------------------------------------------------------------
+# How to generate every secret / hash / key used by this deployment
+# -----------------------------------------------------------------------------
+# 1) Random secrets (SESSION_SECRET, STORAGE_ENCRYPTION_KEY, JWT_SECRET,
+#    OIDC_HMAC_SECRET). Any high-entropy string ≥64 chars works:
+#      docker run --rm authelia/authelia:4.39 authelia crypto rand --length 64 --charset alphanumeric
+#    (or:  openssl rand -hex 32 )
+#
+# 2) OIDC client_secret HASH (the `client_secret:` field further down). This is a
+#    PBKDF2-SHA512 digest of the PLAINTEXT secret the API uses — NOT an HMAC, so
+#    `openssl ... --hmac` will not produce a valid value:
+#      docker run --rm authelia/authelia:4.39 \
+#        authelia crypto hash generate pbkdf2 --variant sha512 --password 'YOUR_PLAINTEXT_CLIENT_SECRET'
+#    Put the PLAINTEXT in .env (AUTHELIA_OIDC_CLIENT_SECRET, used by the API) and
+#    the printed "Digest:" value (starts with $pbkdf2-sha512$) in `client_secret:`.
+#
+# 3) RSA issuer key (signs id_tokens, RS256). Generate the private key and mount it
+#    at /secrets/oidc.issuer.key (see AUTHELIA_..._JWKS_0_KEY_FILE):
+#      docker run --rm -v "$PWD:/keys" authelia/authelia:4.39 \
+#        authelia crypto pair rsa generate --directory /keys
+#    This writes private.pem (+ public.pem); rename private.pem -> oidc.issuer.key.
+#
+# 4) users_database.yml password hashes (argon2): see authelia/users_database.example.yml.
+#      docker run --rm authelia/authelia:4.39 \
+#        authelia crypto hash generate argon2 --password 'USER_PLAINTEXT_PASSWORD'
 # =============================================================================
 
 theme: 'light'
@@ -64,9 +82,12 @@ session:
 # (`authelia`) on that server — it does NOT share the trading schema/tables.
 #
 # The `authelia` database must exist before first start (POSTGRES_DB only creates
-# the project DB). Create it once on the VPS, e.g.:
+# the project DB). Create it once on the VPS. Run psql INSIDE the container via
+# `bash -c` and escape the dollar as \$ so POSTGRES_USER is expanded by the CONTAINER's
+# shell (where it is defined), not by your host shell (where it is not). The trailing
+# `postgres` is the maintenance database to connect to while creating `authelia`:
 #   docker compose -f docker-compose.prod.yml exec postgres \
-#     psql -U "$POSTGRES_USER" -c 'CREATE DATABASE authelia;'
+#     bash -c "psql -U \$POSTGRES_USER postgres -c 'CREATE DATABASE authelia;'"
 #
 # Non-secret connection settings live here; credentials + encryption key are
 # injected as environment variables (see docker-compose.prod.yml):
@@ -102,7 +123,18 @@ identity_providers:
     clients:
       - client_id: 'trader-api'
         client_name: 'Trader API'
-        # HASH of AUTHELIA_OIDC_CLIENT_SECRET (see header). Replace before deploy.
+        # client_secret = a PBKDF2-SHA512 HASH (PHC string format) of the plaintext
+        # AUTHELIA_OIDC_CLIENT_SECRET that the API sends on the token endpoint.
+        # NOTE: this is NOT an HMAC — `openssl ... --hmac` will NOT work. Authelia
+        # stores client secrets hashed with PBKDF2 and compares at runtime.
+        #
+        # Generate the hash (paste the same plaintext you put in AUTHELIA_OIDC_CLIENT_SECRET):
+        #   docker run --rm authelia/authelia:4.39 \
+        #     authelia crypto hash generate pbkdf2 --variant sha512 \
+        #     --password 'YOUR_PLAINTEXT_CLIENT_SECRET'
+        # Copy the value printed after "Digest:" (starts with $pbkdf2-sha512$) below.
+        # Example output:
+        #   Digest: $pbkdf2-sha512$310000$2tkWRFHRlvZT1kSaOiqtkw$gQl3zAcAVHh0...
         client_secret: '$pbkdf2-sha512$REPLACE_WITH_HASH_OF_AUTHELIA_OIDC_CLIENT_SECRET'
         public: false
         authorization_policy: 'one_factor'
