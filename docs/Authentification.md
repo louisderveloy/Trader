@@ -214,7 +214,15 @@ chemin VPS absolu (`/etc/authelia/users_database.yml:ro`).
   - le **fournisseur OIDC** ;
   - le **client `trader-api`** (confidentiel, PKCE S256, redirect URIs vers les callbacks de l'API,
     scopes `openid profile email groups`) ;
-  - une **`claims_policy`** plaçant `groups` dans l'`id_token` (requis depuis Authelia v4.39).
+  - une **`claims_policy`** plaçant `groups` dans l'`id_token` (requis depuis Authelia v4.39) ;
+  - le **`jwks`** : la clé privée RSA (RS256) qui signe les `id_token`. **Aucune** variable
+    d'environnement n'existe pour cette clé (`AUTHELIA_..._JWKS_0_KEY_FILE` est ignorée avec un
+    avertissement) ; elle est lue depuis le fichier monté `/secrets/oidc.issuer.key` via le **filtre
+    de configuration `template`**, activé par la variable `X_AUTHELIA_CONFIG_FILTERS=template`
+    (déclarée sur le conteneur dans `docker-compose.prod.yml`).
+- **Stockage** : base **PostgreSQL partagée** (service `postgres`), base dédiée `authelia` à créer une
+  fois avant le premier démarrage (commande dans l'en-tête de `authelia/configuration.yml`). Authelia
+  réutilise `POSTGRES_USER` / `POSTGRES_PASSWORD`.
 - `users_database.yml` (backend fichier) : utilisateurs + groupes `admins` / `viewers`.
 
 ---

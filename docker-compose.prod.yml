@@ -18,7 +18,7 @@ volumes:
   postgres_data:
   traefik_certs:
   bot_logs:
-  authelia_data:  # Authelia filesystem notifier (storage is now PostgreSQL)
+  authelia_data: # Authelia filesystem notifier (storage is now PostgreSQL)
 
 services:
   # ==========================================
@@ -43,7 +43,7 @@ services:
     networks:
       - trader-network
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -56,7 +56,7 @@ services:
     container_name: trader-traefik
     restart: unless-stopped
     command:
-      - "--api.dashboard=false"  # Disable dashboard in production
+      - "--api.dashboard=false" # Disable dashboard in production
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--entrypoints.web.address=:80"
@@ -96,9 +96,10 @@ services:
       AUTHELIA_STORAGE_ENCRYPTION_KEY: ${AUTHELIA_STORAGE_ENCRYPTION_KEY}
       AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET: ${AUTHELIA_JWT_SECRET}
       AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET: ${AUTHELIA_OIDC_HMAC_SECRET}
-      # RSA private key Authelia signs id_tokens with (RS256). The matching public
-      # key is published at the JWKS endpoint the API validates against.
-      AUTHELIA_IDENTITY_PROVIDERS_OIDC_JWKS_0_KEY_FILE: /secrets/oidc.issuer.key
+      # The OIDC id_token signing key (RS256) has NO env-var mapping. It is loaded from
+      # the mounted /secrets/oidc.issuer.key by the `template` config filter, which this
+      # variable enables. See authelia/configuration.yml -> identity_providers.oidc.jwks.
+      X_AUTHELIA_CONFIG_FILTERS: template
       # Storage = shared project PostgreSQL (service `postgres`), dedicated DB
       # `authelia` (see authelia/configuration.yml). Reuses the project DB creds.
       AUTHELIA_STORAGE_POSTGRES_USERNAME: ${POSTGRES_USER}
@@ -126,6 +127,7 @@ services:
   # Trading Bot (Python)
   # ==========================================
   bot:
+    cpu_count: 4
     container_name: trader-bot
     image: ghcr.io/${GITHUB_USERNAME}/trader-bot:latest
     pull_policy: always
@@ -138,14 +140,14 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     volumes:
       - bot_logs:/var/log/trader-bot
-      - ./db:/db  # Mount database migrations folder
+      - ./db:/db # Mount database migrations folder
     depends_on:
       postgres:
         condition: service_healthy
     networks:
       - trader-network
     healthcheck:
-      test: [ "CMD", "python", "-m", "main", "status" ]
+      test: ["CMD", "python", "-m", "main", "status"]
       interval: 60s
       timeout: 10s
       retries: 3
@@ -166,8 +168,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       API_HOST: 0.0.0.0
       API_PORT: 8000
-      API_RELOAD: false  # Disable auto-reload in production
-      API_WORKERS: 4  # Multiple workers for production
+      API_RELOAD: false # Disable auto-reload in production
+      API_WORKERS: 4 # Multiple workers for production
     volumes:
       # Read-only access to per-run bot logs for GET /runs/{id}/logs.
       - bot_logs:/var/log/trader-bot:ro

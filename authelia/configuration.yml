@@ -12,7 +12,11 @@
 #   AUTHELIA_STORAGE_POSTGRES_PASSWORD   (= ${POSTGRES_PASSWORD})
 #   AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET   random ≥64 chars
 #   AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET             random ≥64 chars
-#   AUTHELIA_IDENTITY_PROVIDERS_OIDC_JWKS_0_KEY_FILE -> /secrets/oidc.issuer.key
+#
+# The OIDC id_token signing key is NOT an environment variable (it has no _FILE
+# mapping — AUTHELIA_..._JWKS_0_KEY_FILE is ignored). It is loaded from the mounted
+# file /secrets/oidc.issuer.key by the `template` config filter, which is enabled with
+# `X_AUTHELIA_CONFIG_FILTERS: template` (see docker-compose.prod.yml). See `jwks:` below.
 #
 # -----------------------------------------------------------------------------
 # How to generate every secret / hash / key used by this deployment
@@ -30,8 +34,8 @@
 #    Put the PLAINTEXT in .env (AUTHELIA_OIDC_CLIENT_SECRET, used by the API) and
 #    the printed "Digest:" value (starts with $pbkdf2-sha512$) in `client_secret:`.
 #
-# 3) RSA issuer key (signs id_tokens, RS256). Generate the private key and mount it
-#    at /secrets/oidc.issuer.key (see AUTHELIA_..._JWKS_0_KEY_FILE):
+# 3) RSA issuer key (signs id_tokens, RS256). Generate the private key, mount it at
+#    /secrets/oidc.issuer.key, and load it via the `template` filter (see `jwks:` below):
 #      docker run --rm -v "$PWD:/keys" authelia/authelia:4.39 \
 #        authelia crypto pair rsa generate --directory /keys
 #    This writes private.pem (+ public.pem); rename private.pem -> oidc.issuer.key.
@@ -110,8 +114,21 @@ notifier:
 # ------------------------------------------------------------------ OIDC provider
 identity_providers:
   oidc:
-    # hmac_secret      -> AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET
-    # jwks[0].key      -> AUTHELIA_IDENTITY_PROVIDERS_OIDC_JWKS_0_KEY_FILE
+    # hmac_secret is injected via env (AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET).
+    #
+    # jwks: the RSA private key that signs id_tokens (RS256). There is NO env-var
+    # mapping for this key — AUTHELIA_..._JWKS_0_KEY_FILE is NOT recognised (Authelia
+    # logs "configuration environment variable not expected" and ignores it). Instead
+    # the key is read from the mounted file /secrets/oidc.issuer.key using the
+    # `template` config filter, which MUST be enabled via the environment variable
+    # `X_AUTHELIA_CONFIG_FILTERS: template` (set on the container in docker-compose.prod.yml).
+    # `secret` reads the file; `mindent 10 "|"` re-indents the PEM as a block scalar to
+    # match the 8-space `key:` (10 = 8 + 2); `msquote` is a no-op safeguard for multiline.
+    # At least one RS256 RSA key (≥2048 bits) is required.
+    jwks:
+      - algorithm: 'RS256'
+        use: 'sig'
+        key: {{ secret "/secrets/oidc.issuer.key" | mindent 10 "|" | msquote }}
 
     # Claims policy: expose the `groups` claim in the id_token (required since
     # Authelia v4.39 — groups are no longer in the id_token by default).
