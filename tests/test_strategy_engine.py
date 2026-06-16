@@ -145,8 +145,8 @@ def sample_indicator_results():
         mock_result.values = {"signal": signal, "value": 42000}  # Simplified
         results[indicator] = mock_result
 
-    # Add ATR value for position sizing
-    results["atr"].values = {"value": Decimal("500"), "signal": 0.0}
+    # Add ATR value for position sizing (real atr.compute() exposes it under "atr")
+    results["atr"].values = {"atr": Decimal("500"), "signal": 0.0}
 
     return results
 

@@ -389,7 +389,9 @@ class StrategyEngine:
                 atr_value = None
                 if "atr" in indicator_results:
                     atr_result = indicator_results["atr"]
-                    atr_value = atr_result.values.get("value")
+                    atr_raw = atr_result.values.get("atr")
+                    if atr_raw is not None:
+                        atr_value = Decimal(str(atr_raw))
 
                 # Calculate position size
                 position_size_usdt = calculate_position_size(
@@ -493,7 +495,7 @@ class StrategyEngine:
         atr_value = None
         if "atr" in indicator_results:
             atr_result = indicator_results["atr"]
-            atr_value = atr_result.values.get("value")
+            atr_value = atr_result.values.get("atr")
             if atr_value is not None:
                 atr_value = Decimal(str(atr_value))
 

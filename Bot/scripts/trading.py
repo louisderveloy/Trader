@@ -46,6 +46,8 @@ from dotenv import load_dotenv
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import pandas as pd
+
 from exchanges import BinanceExchange
 from exchanges.exceptions import ExchangeError
 from runs.orders import (
@@ -56,7 +58,10 @@ from runs.orders import (
     update_order_rejected,
 )
 from runs.errors import log_exception, ErrorCategory, ErrorSeverity
+from indicators import compute_all_indicators
 from strategy.config import StrategyEngineConfig
+from strategy.engine import StrategyEngine
+from strategy.types import DecisionType, PositionState
 from notifications.discord import DiscordNotifier
 from utils.instance_lock import InstanceLockManager
 
@@ -130,11 +135,15 @@ class TradingBot:
         self.config: Optional[StrategyEngineConfig] = None
         self.config_id: Optional[UUID] = None  # Database config ID for score logging
 
-        # Tracking
+        # Strategy engine — owns scoring, anti-repaint confirmation, threshold
+        # checks, risk quotas, sizing and SL/TP level computation. The trading
+        # loop only executes its decisions and monitors SL/TP price levels.
+        self.engine: Optional[StrategyEngine] = None
+
+        # Tracking (informational only; the engine's RiskManager is authoritative
+        # for the daily-quota / cooldown gating, sourced from the trades table)
         self.trades_today = 0
         self.last_trade_time: Optional[datetime] = None
-        self.confirmation_count = 0
-        self.pending_signal: Optional[str] = None
         self.pending_order: Optional[Dict[str, Any]] = None  # Track pending entry order
 
     async def start(self):
@@ -188,6 +197,9 @@ class TradingBot:
             await self._create_run_record()
             # We now own this run row (adopted a pending run, or created a new one).
             self._run_adopted = True
+
+            # Initialize the strategy engine (needs config + run_id + db_pool)
+            self._init_engine()
 
             # Start config update listener (non-blocking background task)
             await self._start_config_listener()
@@ -410,62 +422,6 @@ class TradingBot:
                 self.weights_set_id = None
                 logger.warning("No active weights set, using defaults")
 
-    async def _log_score(
-            self,
-            weighted_score: float,
-            signals: Dict[str, float],
-            current_time: datetime,
-            order_id: Optional[UUID] = None
-    ):
-        """
-        Log score calculation to score_logs table for statistical analysis.
-
-        Args:
-            weighted_score: Calculated weighted score
-            signals: Dictionary of indicator signals
-            current_time: Timestamp of calculation
-            order_id: Optional order ID if score resulted in an order
-        """
-        # Skip logging if we don't have all required IDs
-        if self.run_id is None or self.config_id is None or self.weights_set_id is None:
-            logger.debug(
-                f"Skipping score logging - missing IDs: "
-                f"run_id={self.run_id}, config_id={self.config_id}, weights_set_id={self.weights_set_id}"
-            )
-            return
-
-        # Build indicators snapshot
-        indicators_snapshot = {
-            "timestamp": current_time.isoformat(),
-            "signals": signals,
-            "weights": self.weights
-        }
-
-        async with self.db_pool.acquire() as conn:
-            try:
-                query = """
-                    INSERT INTO score_logs (
-                        run_id, config_id, weights_set_id, order_id,
-                        time, symbol, weighted_score, indicators_snapshot
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                    RETURNING id
-                """
-                score_log_id = await conn.fetchval(
-                    query,
-                    self.run_id,
-                    self.config_id,
-                    self.weights_set_id,
-                    order_id,
-                    current_time,
-                    self.symbol,
-                    Decimal(str(weighted_score)),
-                    json.dumps(indicators_snapshot)
-                )
-                logger.debug(f"Score logged to database (id: {score_log_id})")
-            except Exception as e:
-                logger.error(f"Failed to log score to database: {e}")
-
     async def _create_run_record(self):
         """Create run record in database."""
         environment = "testnet" if self.testnet else "live"
@@ -621,7 +577,15 @@ class TradingBot:
                 sleep_remaining -= sleep_chunk
 
     async def _trading_iteration(self):
-        """Single iteration of the trading loop."""
+        """Single iteration of the trading loop.
+
+        Decision-making (scoring, anti-repaint confirmation, thresholds, risk
+        quotas, sizing, SL/TP level computation) is delegated to the
+        StrategyEngine. This loop only:
+          1. Fetches/stores candles and computes indicator signals,
+          2. Monitors the open position's SL/TP price levels (software stop),
+          3. Executes the engine's entry/exit decisions.
+        """
         # Fetch latest candles
         candles = await self.exchange.get_candles(
             symbol=self.symbol,
@@ -636,15 +600,40 @@ class TradingBot:
         # Store latest candles in database
         await self._store_candles(candles)
 
-        # Calculate indicators and weighted score
-        signals = self._calculate_signals(candles)
-        weighted_score = self._calculate_weighted_score(signals)
-
         current_price = Decimal(str(candles[-1]["close"]))
         current_time = candles[-1]["time"]  # Already a datetime object from exchange
 
-        # Log score to database for statistical analysis
-        await self._log_score(weighted_score, signals, current_time)
+        # Check for pending order fills FIRST (skip everything else while pending)
+        if self.pending_order:
+            await self._check_pending_order(current_price)
+            return
+
+        # Compute all indicator signals via the shared aggregation helper
+        candles_df = self._candles_to_df(candles)
+        indicator_results = compute_all_indicators(candles_df)
+        signals = {name: r.signal.value for name, r in indicator_results.items()}
+
+        # Keep the engine's position view in sync with execution-layer state
+        self._sync_engine_position()
+
+        # Ask the engine for a decision (also logs score + decision snapshot).
+        # A decision-computation failure (e.g. SL/TP cannot be derived because an
+        # indicator is momentarily unavailable) is treated as a graceful skip for
+        # this iteration rather than aborting the loop.
+        total_capital = await self._get_available_capital()
+        try:
+            decision = await self.engine.make_decision(
+                candles=candles,
+                indicator_results=indicator_results,
+                current_price=current_price,
+                current_time=current_time,
+                total_capital=total_capital,
+                symbol=self.symbol,
+            )
+        except Exception as e:
+            logger.warning(f"Decision computation failed this iteration; skipping. ({e})")
+            return
+        weighted_score = decision.weighted_score
 
         # Get current balance for logging
         if self.mode == "live":
@@ -664,147 +653,66 @@ class TradingBot:
             f"{balance_str}"
         )
 
-        # Check for pending order fills FIRST
-        if self.pending_order:
-            await self._check_pending_order(current_price)
-            return  # Skip other logic while order is pending
+        # In position: SL/TP price levels take precedence over signal exits
+        if self.position is not None:
+            stop_reason = self._price_stop_reason(current_price)
+            if stop_reason:
+                await self._execute_exit(current_price, stop_reason, weighted_score, signals)
+                return
+            if decision.decision_type == DecisionType.EXIT:
+                await self._execute_exit(current_price, "signal", weighted_score, signals)
+            return
 
-        # Trading logic
-        if self.position is None:
-            # Not in position - check for entry
-            await self._check_entry(weighted_score, current_price, candles, signals)
-        else:
-            # In position - check for exit
-            await self._check_exit(weighted_score, current_price, candles, signals)
+        # Flat: act on an entry decision
+        if decision.decision_type == DecisionType.ENTRY_LONG:
+            await self._execute_entry(decision, current_price, signals)
 
-    def _calculate_signals(self, candles: list) -> Dict[str, float]:
+    def _candles_to_df(self, candles: list) -> pd.DataFrame:
+        """Convert the exchange candle dicts to the indicator DataFrame schema.
+
+        Indicators expect columns [timestamp, open, high, low, close, volume];
+        the exchange returns dicts keyed by 'time'/'open'/.../'volume'.
         """
-        Calculate indicator signals from candles.
+        return pd.DataFrame({
+            "timestamp": [c["time"] for c in candles],
+            "open": [float(c["open"]) for c in candles],
+            "high": [float(c["high"]) for c in candles],
+            "low": [float(c["low"]) for c in candles],
+            "close": [float(c["close"]) for c in candles],
+            "volume": [float(c["volume"]) for c in candles],
+        })
 
-        This is a simplified inline calculation for the trading loop.
-        Returns signals normalized to [-1, 1].
+    def _sync_engine_position(self):
+        """Mirror the execution-layer position into the engine's position state."""
+        if self.position is not None:
+            self.engine.update_position_state(PositionState(
+                is_open=True,
+                symbol=self.symbol,
+                entry_price=self.position.get("entry_price"),
+                quantity=self.position.get("quantity"),
+                entry_time=self.position.get("entry_time"),
+                stop_loss_price=self.position.get("stop_loss"),
+                take_profit_price=self.position.get("take_profit"),
+            ))
+        else:
+            self.engine.update_position_state(PositionState(is_open=False))
+
+    def _price_stop_reason(self, price: Decimal) -> Optional[str]:
+        """Return 'stop_loss'/'take_profit' if the price breached a stored level.
+
+        This is the software-monitored stop (checked once per iteration). In
+        live/testnet a native exchange stop order is the primary protection;
+        this acts as a backup. Returns None if no level is breached.
         """
-        import pandas as pd
-        import numpy as np
-
-        # Convert to DataFrame
-        df = pd.DataFrame(candles)
-        close = df['close'].astype(float)
-        high = df['high'].astype(float)
-        low = df['low'].astype(float)
-        volume = df['volume'].astype(float)
-
-        signals = {}
-
-        # EMA crossover
-        ema_fast = close.ewm(span=50, adjust=False).mean()
-        ema_slow = close.ewm(span=200, adjust=False).mean()
-        ema_diff = (ema_fast - ema_slow) / ema_slow * 100
-        signals["ema"] = float(np.clip(ema_diff.iloc[-1] / 5, -1, 1))
-
-        # MACD
-        ema_12 = close.ewm(span=12, adjust=False).mean()
-        ema_26 = close.ewm(span=26, adjust=False).mean()
-        macd_line = ema_12 - ema_26
-        signal_line = macd_line.ewm(span=9, adjust=False).mean()
-        histogram = macd_line - signal_line
-        hist_std = histogram.rolling(window=20).std()
-        if hist_std.iloc[-1] > 0:
-            signals["macd"] = float(np.clip(histogram.iloc[-1] / (hist_std.iloc[-1] * 2), -1, 1))
-        else:
-            signals["macd"] = 0.0
-
-        # RSI
-        delta = close.diff()
-        gain = delta.where(delta > 0, 0).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss.replace(0, np.inf)
-        rsi = 100 - (100 / (1 + rs))
-        rsi_value = rsi.iloc[-1]
-        if rsi_value > 70:
-            signals["rsi"] = -((rsi_value - 70) / 30)
-        elif rsi_value < 30:
-            signals["rsi"] = (30 - rsi_value) / 30
-        else:
-            signals["rsi"] = 0.0
-
-        # Stochastic RSI
-        rsi_min = rsi.rolling(window=14).min()
-        rsi_max = rsi.rolling(window=14).max()
-        stoch_rsi = (rsi - rsi_min) / (rsi_max - rsi_min + 1e-10)
-        stoch_k = stoch_rsi.rolling(window=3).mean() * 100
-        stoch_value = stoch_k.iloc[-1]
-        if stoch_value > 80:
-            signals["stoch_rsi"] = -((stoch_value - 80) / 20)
-        elif stoch_value < 20:
-            signals["stoch_rsi"] = (20 - stoch_value) / 20
-        else:
-            signals["stoch_rsi"] = 0.0
-
-        # Bollinger Bands
-        sma_20 = close.rolling(window=20).mean()
-        std_20 = close.rolling(window=20).std()
-        upper = sma_20 + 2 * std_20
-        lower = sma_20 - 2 * std_20
-        bb_position = (close - lower) / (upper - lower + 1e-10)
-        signals["bollinger"] = float(np.clip((0.5 - bb_position.iloc[-1]) * 2, -1, 1))
-
-        # ATR (volatility - neutral signal, used for position sizing)
-        tr = pd.concat([
-            high - low,
-            (high - close.shift()).abs(),
-            (low - close.shift()).abs()
-        ], axis=1).max(axis=1)
-        atr = tr.rolling(window=14).mean()
-        atr_pct = atr / close * 100
-        atr_percentile = atr_pct.rank(pct=True).iloc[-1]
-        signals["atr"] = float((atr_percentile - 0.5) * 2)
-
-        # OBV
-        obv = (np.sign(close.diff()) * volume).cumsum()
-        obv_fast = obv.ewm(span=10, adjust=False).mean()
-        obv_slow = obv.ewm(span=30, adjust=False).mean()
-        obv_diff = obv_fast - obv_slow
-        obv_std = obv_diff.rolling(window=20).std()
-        if obv_std.iloc[-1] > 0:
-            signals["obv"] = float(np.clip(obv_diff.iloc[-1] / (obv_std.iloc[-1] * 2), -1, 1))
-        else:
-            signals["obv"] = 0.0
-
-        # Fear & Greed (placeholder - would need external API)
-        signals["fear_greed"] = 0.0
-
-        # User indicator (placeholder - would need database lookup)
-        signals["user_indicator"] = 0.0
-
-        return signals
-
-    def _calculate_weighted_score(self, signals: Dict[str, float]) -> float:
-        """Calculate weighted score from signals."""
-        score = 0.0
-        contributions = {}
-        for indicator, signal in signals.items():
-            weight = self.weights.get(indicator, 0.0)
-            contribution = signal * weight
-            contributions[indicator] = contribution
-            score += contribution
-
-        # Log detailed breakdown
-        logger.info("=" * 60)
-        logger.info("SCORE CALCULATION BREAKDOWN:")
-        for indicator in sorted(contributions.keys()):
-            signal_val = signals[indicator]
-            weight_val = self.weights.get(indicator, 0.0)
-            contrib_val = contributions[indicator]
-            logger.info(
-                f"  {indicator:15s}: signal={signal_val:+.3f}, weight={weight_val:.3f}, contrib={contrib_val:+.4f}")
-        logger.info(f"Raw score (before clamp): {score:+.4f}")
-
-        clamped_score = max(-1.0, min(1.0, score))
-        logger.info(f"Final score (after clamp): {clamped_score:+.4f}")
-        logger.info("=" * 60)
-
-        return clamped_score
+        if not self.position:
+            return None
+        stop_loss = self.position.get("stop_loss")
+        take_profit = self.position.get("take_profit")
+        if stop_loss is not None and price <= stop_loss:
+            return "stop_loss"
+        if take_profit is not None and price >= take_profit:
+            return "take_profit"
+        return None
 
     async def _check_pending_order(self, current_price: Decimal):
         """
@@ -1034,82 +942,20 @@ class TradingBot:
             # Clear pending order
             self.pending_order = None
 
-    async def _check_entry(
-            self,
-            score: float,
-            price: Decimal,
-            candles: list,
-            signals: Dict[str, float]
-    ):
-        """Check for entry conditions and execute if met."""
-        # Check daily trade limit
-        if self.trades_today >= self.config.risk.max_trades_per_day:
-            return
+    def _init_engine(self):
+        """Instantiate the StrategyEngine once config, run_id and db_pool are ready.
 
-        # Check cooldown
-        if self.last_trade_time:
-            cooldown_seconds = self.config.cooldown.after_trade_seconds
-            cooldown_end = self.last_trade_time + timedelta(seconds=cooldown_seconds)
-            if datetime.now(timezone.utc) < cooldown_end:
-                return
-
-        # Check entry threshold
-        if score >= self.config.strategy.entry_threshold:
-            # Anti-repainting confirmation
-            if self.pending_signal == "entry":
-                self.confirmation_count += 1
-            else:
-                self.pending_signal = "entry"
-                self.confirmation_count = 1
-
-            if self.confirmation_count >= self.config.strategy.confirmation_candles:
-                # Execute entry
-                await self._execute_entry(price, score, signals)
-                self.pending_signal = None
-                self.confirmation_count = 0
-        else:
-            self.pending_signal = None
-            self.confirmation_count = 0
-
-    async def _check_exit(
-            self,
-            score: float,
-            price: Decimal,
-            candles: list,
-            signals: Dict[str, float]
-    ):
-        """Check for exit conditions and execute if met."""
-        if not self.position:
-            return
-
-        exit_reason = None
-
-        # Check stop-loss
-        if self.position.get("stop_loss") and price <= self.position["stop_loss"]:
-            exit_reason = "stop_loss"
-
-        # Check take-profit
-        elif self.position.get("take_profit") and price >= self.position["take_profit"]:
-            exit_reason = "take_profit"
-
-        # Check signal-based exit
-        elif score <= self.config.strategy.exit_threshold:
-            if self.pending_signal == "exit":
-                self.confirmation_count += 1
-            else:
-                self.pending_signal = "exit"
-                self.confirmation_count = 1
-
-            if self.confirmation_count >= self.config.strategy.confirmation_candles:
-                exit_reason = "signal"
-
-        if exit_reason:
-            await self._execute_exit(price, exit_reason, score, signals)
-            self.pending_signal = None
-            self.confirmation_count = 0
-        elif self.pending_signal != "exit":
-            self.pending_signal = None
-            self.confirmation_count = 0
+        The engine owns weighted scoring, anti-repaint confirmation, entry/exit
+        threshold checks, risk quotas (daily trades / cooldown / exposure, sourced
+        from the trades table), position sizing and SL/TP level computation.
+        """
+        self.engine = StrategyEngine(
+            config=self.config,
+            run_id=self.run_id,
+            db_pool=self.db_pool,
+            config_id=self.config_id,
+        )
+        logger.info("Strategy engine wired into trading loop")
 
     async def _get_available_capital(self) -> Decimal:
         """
@@ -1146,25 +992,37 @@ class TradingBot:
 
     async def _execute_entry(
             self,
+            decision,
             price: Decimal,
-            score: float,
             signals: Dict[str, float]
     ):
-        """Execute entry order."""
+        """Execute entry order using the engine's sizing and SL/TP levels.
+
+        Sizing and stop-loss/take-profit come from the StrategyEngine decision
+        (ATR-based or fixed per the active config) — no longer hardcoded.
+        """
+        score = float(decision.weighted_score)
+
         # Get available capital (actual balance in live mode, simulated in paper mode)
         available_capital = await self._get_available_capital()
-
         if available_capital <= 0:
             logger.warning(f"No available capital (balance: {available_capital} USDT). Skipping entry.")
             return
 
-        # Calculate position size: use 95% of available capital
-        position_size = available_capital * Decimal("0.95")
-        quantity = position_size / price
+        # Position size comes from the engine; clamp so we never order more than
+        # the available capital allows (95% buffer for fees/slippage).
+        quantity = decision.position_size_qty
+        if quantity is None or quantity <= 0:
+            logger.warning("Engine returned no position size; skipping entry.")
+            return
+        order_value = quantity * price
+        max_value = available_capital * Decimal("0.95")
+        if order_value > max_value:
+            quantity = max_value / price
+            order_value = quantity * price
 
         # Validate minimum order size
         min_notional = Decimal("10")  # Binance minimum ~10 USDT per order
-        order_value = quantity * price
         if order_value < min_notional:
             logger.warning(
                 f"Order value {order_value:.2f} USDT below minimum {min_notional} USDT. "
@@ -1172,16 +1030,18 @@ class TradingBot:
             )
             return
 
-        # Calculate stop-loss and take-profit (simplified: fixed percentages)
-        stop_loss = price * Decimal("0.98")  # 2% stop-loss
-        take_profit = price * Decimal("1.04")  # 4% take-profit
+        # Stop-loss / take-profit computed by the engine (ATR or fixed per config)
+        stop_loss = decision.stop_loss_price
+        take_profit = decision.take_profit_price
+        if stop_loss is None or take_profit is None:
+            logger.warning("Engine decision missing SL/TP levels; skipping entry.")
+            return
 
         logger.info("=" * 60)
         logger.info(f"ENTRY SIGNAL - Score: {score:.3f}")
         logger.info(f"Available capital: {available_capital:.2f} USDT")
-        logger.info(f"Position size: {position_size:.2f} USDT (95% of capital)")
-        logger.info(f"Price: {price:.2f} | Quantity: {quantity:.6f}")
-        logger.info(f"Order value: {order_value:.2f} USDT")
+        logger.info(f"Position size: {order_value:.2f} USDT | Quantity: {quantity:.6f}")
+        logger.info(f"Price: {price:.2f}")
         logger.info(f"Stop-loss: {stop_loss:.2f} | Take-profit: {take_profit:.2f}")
         logger.info("=" * 60)
 
