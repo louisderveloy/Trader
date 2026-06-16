@@ -38,45 +38,11 @@
             </select>
           </div>
 
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-2">
-              Période
-            </label>
-            <select
-              v-model="selectedPeriod"
-              class="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-            >
-              <option value="day">Dernier 24h</option>
-              <option value="month">Dernier mois</option>
-              <option value="quarter">Dernier trimestre</option>
-              <option value="year">Dernière année</option>
-              <option value="custom">Personnalisé</option>
-            </select>
-          </div>
-
-          <!-- Custom date range -->
-          <div v-if="selectedPeriod === 'custom'" class="flex gap-4 flex-1">
-            <div class="flex-1">
-              <label class="block text-sm font-medium text-gray-700 mb-2">
-                Du
-              </label>
-              <input
-                v-model="customStartDate"
-                type="date"
-                class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-              />
-            </div>
-            <div class="flex-1">
-              <label class="block text-sm font-medium text-gray-700 mb-2">
-                Au
-              </label>
-              <input
-                v-model="customEndDate"
-                type="date"
-                class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-              />
-            </div>
-          </div>
+          <PeriodSelector
+            v-model:period="selectedPeriod"
+            v-model:custom-start="customStartDate"
+            v-model:custom-end="customEndDate"
+          />
         </div>
       </div>
 
@@ -151,9 +117,9 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import PeriodStats from '@/components/home/PeriodStats.vue'
+import PeriodSelector from '@/components/common/PeriodSelector.vue'
+import { getPeriodRange, type PeriodType } from '@/composables/usePeriodRange'
 import { getTrades, type Trade } from '@/api/trades'
-
-type PeriodType = 'day' | 'month' | 'quarter' | 'year' | 'custom'
 
 interface StatsData {
   pnl: number
@@ -174,41 +140,20 @@ const error = ref<string | null>(null)
 // Optional Grafana base URL from environment
 const grafanaUrl = computed(() => import.meta.env.VITE_GRAFANA_BASE_URL)
 
-// Get date range based on period
-const getDateRange = () => {
-  const now = new Date()
-  const startDate = new Date()
-
-  if (selectedPeriod.value === 'day') {
-    startDate.setDate(startDate.getDate() - 1)
-  } else if (selectedPeriod.value === 'month') {
-    startDate.setDate(startDate.getDate() - 30)
-  } else if (selectedPeriod.value === 'quarter') {
-    startDate.setDate(startDate.getDate() - 90)
-  } else if (selectedPeriod.value === 'year') {
-    startDate.setDate(startDate.getDate() - 365)
-  } else if (selectedPeriod.value === 'custom') {
-    if (!customStartDate.value || !customEndDate.value) {
-      return { startDate: new Date(0), endDate: now }
-    }
-    return {
-      startDate: new Date(customStartDate.value),
-      endDate: new Date(customEndDate.value)
-    }
-  }
-
-  return { startDate, endDate: now }
-}
-
 // Filter trades by date range and environment
 const filteredTrades = computed(() => {
-  const { startDate, endDate } = getDateRange()
+  const { startDate, endDate } = getPeriodRange(
+    selectedPeriod.value,
+    customStartDate.value,
+    customEndDate.value
+  )
 
   return trades.value.filter((trade) => {
     const closedAt = new Date(trade.closed_at)
-    const isInDateRange = closedAt >= startDate && closedAt <= endDate
+    const isAfterStart = !startDate || closedAt >= startDate
+    const isBeforeEnd = !endDate || closedAt <= endDate
     const isInEnvironment = !selectedEnvironment.value || trade.environment === selectedEnvironment.value
-    return isInDateRange && isInEnvironment
+    return isAfterStart && isBeforeEnd && isInEnvironment
   })
 })
 

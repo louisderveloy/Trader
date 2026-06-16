@@ -5,6 +5,7 @@ REST API for querying and analyzing completed trades.
 """
 
 import logging
+from datetime import datetime
 from typing import Annotated
 
 import asyncpg
@@ -29,6 +30,10 @@ async def list_trades(
             TradeEnvironment | None, Query(description="Filter by environment (testnet/live/paper/backtest)")] = None,
         min_pnl: Annotated[float | None, Query(description="Minimum P&L")] = None,
         max_pnl: Annotated[float | None, Query(description="Maximum P&L")] = None,
+        start_date: Annotated[
+            datetime | None, Query(description="Only trades opened on/after this date (ISO 8601)")] = None,
+        end_date: Annotated[
+            datetime | None, Query(description="Only trades opened on/before this date (ISO 8601)")] = None,
         limit: Annotated[int, Query(ge=1, le=1000, description="Maximum results")] = 100,
         offset: Annotated[int, Query(ge=0, description="Offset for pagination")] = 0,
         user: Principal = Depends(require_viewer),
@@ -71,6 +76,14 @@ async def list_trades(
         if max_pnl is not None:
             conditions.append(f"t.pnl <= ${len(param_values) + 1}")
             param_values.append(max_pnl)
+
+        if start_date is not None:
+            conditions.append(f"t.opened_at >= ${len(param_values) + 1}")
+            param_values.append(start_date)
+
+        if end_date is not None:
+            conditions.append(f"t.opened_at <= ${len(param_values) + 1}")
+            param_values.append(end_date)
 
         where_clause = "WHERE " + " AND ".join(
             conditions) if conditions else ""  # TODO: Check for dashboard data. For SQLInjection breach
