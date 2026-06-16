@@ -52,6 +52,14 @@
             Effacer tous les filtres
           </button>
         </div>
+        <div class="mb-4 pb-4 border-b border-gray-100">
+          <PeriodSelector
+            v-model:period="selectedPeriod"
+            v-model:custom-start="customStartDate"
+            v-model:custom-end="customEndDate"
+            :options="PERIOD_OPTIONS_WITH_ALL"
+          />
+        </div>
         <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
           <div>
             <div class="flex items-center gap-1 mb-1">
@@ -265,14 +273,26 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useTradesStore } from '@/stores/trades'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import ErrorAlert from '@/components/common/ErrorAlert.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
+import PeriodSelector from '@/components/common/PeriodSelector.vue'
+import {
+  getPeriodRange,
+  PERIOD_OPTIONS_WITH_ALL,
+  type PeriodType
+} from '@/composables/usePeriodRange'
 
 const tradesStore = useTradesStore()
+
+// Time-period filter (server-side, on trade open time). Defaults to "all" so the
+// history view shows everything on load (see issue #12).
+const selectedPeriod = ref<PeriodType>('all')
+const customStartDate = ref('')
+const customEndDate = ref('')
 
 const isLoading = computed(() => tradesStore.isLoading)
 const trades = computed(() => tradesStore.trades)
@@ -291,8 +311,23 @@ const hasActiveFilters = computed(() => {
     filters.value.symbol ||
     filters.value.side ||
     filters.value.min_pnl !== undefined ||
-    filters.value.max_pnl !== undefined
+    filters.value.max_pnl !== undefined ||
+    selectedPeriod.value !== 'all'
   )
+})
+
+// Convert the selected period into server-side date filters and refetch.
+watch([selectedPeriod, customStartDate, customEndDate], () => {
+  const { startDate, endDate } = getPeriodRange(
+    selectedPeriod.value,
+    customStartDate.value,
+    customEndDate.value
+  )
+  tradesStore.setFilters({
+    start_date: startDate ? startDate.toISOString() : undefined,
+    end_date: endDate ? endDate.toISOString() : undefined
+  })
+  tradesStore.fetchTrades()
 })
 
 onMounted(async () => {
@@ -376,12 +411,17 @@ function filterBySymbol(symbol: string): void {
 }
 
 function clearAllFilters(): void {
+  selectedPeriod.value = 'all'
+  customStartDate.value = ''
+  customEndDate.value = ''
   tradesStore.setFilters({
     environment: undefined,
     symbol: undefined,
     side: undefined,
     min_pnl: undefined,
-    max_pnl: undefined
+    max_pnl: undefined,
+    start_date: undefined,
+    end_date: undefined
   })
   tradesStore.fetchTrades()
 }
