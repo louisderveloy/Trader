@@ -130,12 +130,19 @@ identity_providers:
         use: 'sig'
         key: {{ secret "/secrets/oidc.issuer.key" | mindent 10 "|" | msquote }}
 
-    # Claims policy: expose the `groups` claim in the id_token (required since
-    # Authelia v4.39 — groups are no longer in the id_token by default).
+    # Claims policy: restore claims to the id_token. Since Authelia v4.39 the
+    # id_token carries only the spec-required claims (sub, …) by default; scope-
+    # requested claims otherwise live only at the UserInfo endpoint. The BFF API
+    # validates the id_token (it does not call UserInfo), so we must hydrate the
+    # claims it needs here: `groups` (→ role) and `preferred_username`/`name`/`email`
+    # (→ display name in the dashboard header).
     claims_policies:
       with_groups:
         id_token:
           - 'groups'
+          - 'preferred_username'
+          - 'name'
+          - 'email'
 
     clients:
       - client_id: 'trader-api'

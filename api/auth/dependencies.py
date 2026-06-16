@@ -100,7 +100,12 @@ def _resolve_oidc_principal(access_token: Optional[str]) -> Principal:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload"
         )
-    return Principal(username=sub, email=payload.get("email"), role=Role(role_raw))
+    return Principal(
+        username=sub,
+        display_name=payload.get("display_name"),
+        email=payload.get("email"),
+        role=Role(role_raw),
+    )
 
 
 async def get_principal(
@@ -130,7 +135,12 @@ async def get_principal(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="DEV_USER_GROUP maps to no role (set 'admins' or 'viewers').",
             )
-        return Principal(username=user.username, email=user.email, role=role)
+        return Principal(
+            username=user.username,
+            display_name=user.username,
+            email=user.email,
+            role=role,
+        )
 
     if mode == "authelia_oidc":
         return _resolve_oidc_principal(access_token)

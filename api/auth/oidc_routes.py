@@ -126,6 +126,13 @@ async def oidc_callback(
     token_data = {"sub": str(claims["sub"]), "role": role.value}
     if claims.get("email"):
         token_data["email"] = str(claims["email"])
+    # Human-friendly display name for the dashboard header. `sub` is an opaque UUID,
+    # so prefer the Authelia username, then the display name, then email.
+    display_name = (
+        claims.get("preferred_username") or claims.get("name") or claims.get("email")
+    )
+    if display_name:
+        token_data["display_name"] = str(display_name)
     session_jwt = create_access_token(data=token_data)
 
     resp = _redirect(_safe_return_to(txn.get("return_to")))
