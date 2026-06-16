@@ -52,8 +52,9 @@ async def list_trades(
             param_values.append(run_id)
 
         if symbol:
-            conditions.append(f"t.symbol = ${len(param_values) + 1}")
-            param_values.append(symbol)
+            # Case-insensitive partial match: "btc" -> BTCUSDC, "usd" -> BTCUSDC/ETHUSDC
+            conditions.append(f"t.symbol ILIKE ${len(param_values) + 1}")
+            param_values.append(f"%{symbol}%")
 
         if side:
             conditions.append(f"t.side = ${len(param_values) + 1}")
