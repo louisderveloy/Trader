@@ -3,11 +3,11 @@ Configuration management endpoints.
 
 REST API for reading and updating bot configuration and indicator parameters.
 """
-import asyncpg
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
+import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from ..auth import Principal, require_admin, require_viewer
