@@ -80,31 +80,37 @@ const router = createRouter({
   routes,
 })
 
+// Hydrate auth state exactly once, before the first route is resolved. Without this
+// the guard would decide on stale state (user still null) on a fresh page load — e.g.
+// after the Authelia OIDC redirect — and wrongly bounce an authenticated user to /login.
+let authReady = false
+
 /**
  * Navigation guard: Check authentication before each route
  */
-router.beforeEach((to, from, next) => {
+router.beforeEach(async (to) => {
   const authStore = useAuthStore()
+
+  // First navigation after a full page load: fetch /auth/me before deciding.
+  if (!authReady) {
+    authReady = true
+    await authStore.initialize()
+  }
 
   // Check if route requires authentication
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
     // Redirect to login, save original destination
-    next({
-      name: 'login',
-      query: { redirect: to.fullPath },
-    })
-  } else if (to.name === 'login' && authStore.isAuthenticated) {
+    return { name: 'login', query: { redirect: to.fullPath } }
+  }
+
+  if (to.name === 'login' && authStore.isAuthenticated) {
     // Already authenticated, restore last route or go to home
     const lastRoute = localStorage.getItem('lastRoute')
-    if (lastRoute && lastRoute !== '/login') {
-      next(lastRoute)
-    } else {
-      next({ name: 'home' })
-    }
-  } else {
-    // Allow navigation
-    next()
+    return lastRoute && lastRoute !== '/login' ? lastRoute : { name: 'home' }
   }
+
+  // Allow navigation
+  return true
 })
 
 /**

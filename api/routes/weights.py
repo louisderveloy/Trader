@@ -14,7 +14,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from ..auth import User, get_current_user
+from ..auth import Principal, require_admin, require_viewer
 from ..csrf_helper import validate_csrf_token
 from ..database import get_db_pool
 from ..models.weights import (
@@ -46,7 +46,7 @@ def _row_to_weights(row: asyncpg.Record) -> WeightsResponse:
 async def list_weights(
     limit: Annotated[int, Query(ge=1, le=1000, description="Maximum results")] = 100,
     offset: Annotated[int, Query(ge=0, description="Offset for pagination")] = 0,
-    user: User = Depends(get_current_user),
+    user: Principal = Depends(require_viewer),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> WeightsListResponse:
     """List all weights sets with pagination. Requires authentication."""
@@ -64,7 +64,7 @@ async def list_weights(
 @router.get("/{weights_id}", response_model=WeightsResponse)
 async def get_weights(
     weights_id: UUID,
-    user: User = Depends(get_current_user),
+    user: Principal = Depends(require_viewer),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> WeightsResponse:
     """Get weights set details by ID. Requires authentication."""
@@ -83,7 +83,7 @@ async def get_weights(
 async def create_weights(
     http_request: Request,
     request: WeightsCreateRequest,
-    user: User = Depends(get_current_user),
+    user: Principal = Depends(require_admin),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> WeightsResponse:
     """
@@ -117,7 +117,7 @@ async def create_weights(
 async def activate_weights(
     http_request: Request,
     weights_id: UUID,
-    user: User = Depends(get_current_user),
+    user: Principal = Depends(require_admin),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> WeightsResponse:
     """

@@ -10,7 +10,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from ..auth import User, get_current_user
+from ..auth import Principal, require_viewer
 from ..database import get_db_pool
 from ..models.enums import SignalDecision
 from ..models.signals import SignalFilter, SignalListResponse, SignalResponse
@@ -29,7 +29,7 @@ async def list_signals(
     max_score: Annotated[float | None, Query(ge=-1.0, le=1.0, description="Maximum score [-1, 1]")] = None,
     limit: Annotated[int, Query(ge=1, le=1000, description="Maximum results")] = 100,
     offset: Annotated[int, Query(ge=0, description="Offset for pagination")] = 0,
-    user: User = Depends(get_current_user),
+    user: Principal = Depends(require_viewer),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> SignalListResponse:
     """
@@ -108,7 +108,7 @@ async def list_signals(
 @router.get("/{signal_id}", response_model=SignalResponse)
 async def get_signal(
     signal_id: str,
-    user: User = Depends(get_current_user),
+    user: Principal = Depends(require_viewer),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> SignalResponse:
     """

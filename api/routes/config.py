@@ -10,7 +10,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from ..auth import User, get_current_user
+from ..auth import Principal, require_admin, require_viewer
 from ..config import settings
 from ..csrf_helper import validate_csrf_token
 from ..database import get_db_pool
@@ -38,7 +38,7 @@ router = APIRouter()
 @limiter.limit(lambda: settings.rate_limit_api_read)
 async def get_config(
     request: Request,
-    user: User = Depends(get_current_user),
+    user: Principal = Depends(require_viewer),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> ConfigResponse:
     """
@@ -143,7 +143,7 @@ async def get_config(
 async def update_strategy_config(
     request: Request,
     update_data: StrategyConfigUpdate,
-    user: User = Depends(get_current_user),
+    user: Principal = Depends(require_admin),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> StrategyConfigResponse:
     """
@@ -202,7 +202,7 @@ async def update_strategy_config(
 async def update_risk_config(
     request: Request,
     update_data: RiskConfigUpdate,
-    user: User = Depends(get_current_user),
+    user: Principal = Depends(require_admin),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> RiskConfigResponse:
     """
@@ -269,7 +269,7 @@ async def update_risk_config(
 async def get_user_indicator(
     request: Request,
     symbol: Annotated[str, Query(description="Trading symbol")] = "BTCUSDT",
-    user: User = Depends(get_current_user),
+    user: Principal = Depends(require_viewer),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> UserIndicatorResponse:
     """
@@ -322,7 +322,7 @@ async def update_user_indicator(
     request: Request,
     symbol: Annotated[str, Query(description="Trading symbol")] = "BTCUSDT",
     update_data: UserIndicatorUpdateRequest = None,
-    user: User = Depends(get_current_user),
+    user: Principal = Depends(require_admin),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> UserIndicatorResponse:
     """
