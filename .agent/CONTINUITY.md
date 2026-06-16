@@ -193,3 +193,42 @@
 > migrate `authlib.jose`→`joserfc`. Tracker: `.agent/authelia-implementation.md`.
 
 **Objective:** beat buy-and-hold BTC over 1 year live; formal eval 12 months after Phase 15.
+
+---
+
+## [PROGRESS] Issue #17 — real stop-loss (branch `feature/stop-loss`, started 2026-06-17)
+
+**Problem found:** SL/TP calc layer (`strategy/stops.py`) was complete + tested but NO execution path
+used it. Live/paper/testnet hardcoded 2%/4% (`scripts/trading.py`) and never called the engine;
+`event_driven.py`'s `get_strategy_decision` is a SKIP stub; `vectorbt_engine.py` had no SL/TP; `trades`
+table lacked SL/TP/exit_reason columns. (This explains the -8% Louis saw in paper: hardcoded 2% checked
+only on the latest *close* every ~60s — discrete sampling overshoots/misses; 60s cadence ruled out of
+scope by user.) Latent bug: engine read ATR under `values["value"]` but indicator emits `values["atr"]`.
+
+**User decisions:** native Binance OCO/STOP **+** software fallback (manage stop-order state +
+cancellation on exit); refactor loop → StrategyEngine; single PR segmented by commits.
+
+**Done (committed):**
+- C1: `indicators.compute_all_indicators()` — shared helper, attaches `.signal` to IndicatorResult.
+  fear_greed/user_indicator are neutral placeholders (async/DB, can't run in sync loop).
+- C2: migration `016` adds `stop_loss_price`/`take_profit_price`/`exit_reason` to `trades`; trading.py
+  persists them. Single alembic head = 016 (chain 003→7f964c375235→005→…→016).
+- C3: `_trading_iteration` now delegates to `engine.make_decision`; removed duplicate
+  `_calculate_signals`/`_calculate_weighted_score`/`_log_score`/confirmation gating. Entries use
+  `decision.stop_loss_price/take_profit_price/position_size_qty`. Fixed ATR key bug. SL/TP price
+  monitoring kept as `_price_stop_reason` (precedence over signal exit). Verified by
+  `tests/test_trading_stop_loss.py` (real loop: ATR stop not 2%; price breach → "stop_loss" exit).
+
+**⚠ Behavioural shift to flag:** paper now sizes via engine `position_size_mode` (default CONFIDENCE,
+not 95%-all-in) and scores on the weight-normalized scale (`Σ|w|`), so entry/exit frequency + sizes
+differ from before. Same thresholds (0.6/-0.3).
+
+**Remaining:** C4 native OCO/STOP in `exchanges/base.py`+`binance.py` (verify python-binance API via
+Context7: `create_oco_order` vs `STOP_LOSS_LIMIT`), per-mode precedence (paper=software,
+testnet/live=native+backup), `stop_order_id` polling + cancel-on-exit. C5 `event_driven.py` real
+make_decision + config multipliers (not 2x/3x). C6 `vectorbt` `sl_stop`/`tp_stop` (Context7; keep
+identical SL/TP semantics as event_driven for <2% coherence rule). C7 update
+`tests/test_backtesting_coherence.py` + more integration tests.
+
+**Test env:** run in bot container. Bash path-mangles `/app`; prefix `MSYS_NO_PATHCONV=1` and use
+`docker compose run --rm --entrypoint python bot -m pytest /tests/...`. pytest addopts forces `--cov=bot`.
