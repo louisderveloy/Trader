@@ -181,7 +181,9 @@ class InstanceLockManager:
         return held
 
     @staticmethod
-    async def cleanup_stale_runs(db_pool: asyncpg.Pool, mode: str) -> int:
+    async def cleanup_stale_runs(
+        db_pool: asyncpg.Pool, mode: str, exclude_run_id: Optional[int] = None
+    ) -> int:
         """
         Mark stale 'running'/'pending' runs of the given mode as 'cancelled'.
 
@@ -192,6 +194,10 @@ class InstanceLockManager:
         Args:
             db_pool: Database connection pool
             mode: Trading mode ('paper' or 'live')
+            exclude_run_id: A run id to NEVER cancel. In the supervisor flow the bot
+                is launched to adopt a freshly pre-created PENDING run; that run must
+                be excluded here, otherwise we would cancel the very run we are about
+                to adopt (and _create_run_record would then fail to adopt it).
 
         Returns:
             Number of stale runs cleaned up
@@ -216,10 +222,12 @@ class InstanceLockManager:
                     result = COALESCE(result, $2::jsonb)
                 WHERE run_type = $3
                   AND status IN ('running', 'pending')
+                  AND ($4::int IS NULL OR id <> $4)
                 """,
                 now,
                 interrupted_result,
                 mode,
+                exclude_run_id,
             )
 
         count = int(result.split()[-1]) if result else 0

@@ -120,6 +120,8 @@ class TradingBot:
         self.weights_set_id: Optional[UUID] = None  # Active weights set ID for score logging
         self.is_running = False
         self._stop_called = False  # Guards against double-stop
+        self._run_adopted = False  # True once we own the run row (adopted or created)
+        self._fatal_error: Optional[Exception] = None  # set if start() aborts
         self.lock_connection: Optional[asyncpg.Connection] = None  # Connection holding instance lock
         self.config_listener_conn: Optional[asyncpg.Connection] = None  # Dedicated connection for LISTEN
         self.config_listener_task: Optional[asyncio.Task] = None  # Background task for config updates
@@ -173,13 +175,19 @@ class TradingBot:
             # Advisory lock acquired — we are the sole instance.
             # Clean up any runs left in running/pending state by a previous crash or
             # container kill (SIGKILL leaves no time for graceful DB cleanup).
-            await InstanceLockManager.cleanup_stale_runs(self.db_pool, self.mode)
+            # Exclude the run we were launched to adopt — it is legitimately
+            # 'pending' and must survive this zombie cleanup.
+            await InstanceLockManager.cleanup_stale_runs(
+                self.db_pool, self.mode, exclude_run_id=self.run_id
+            )
 
             await self._load_config()
             await self._init_exchange()
             await self._init_discord()
             await self._load_weights()
             await self._create_run_record()
+            # We now own this run row (adopted a pending run, or created a new one).
+            self._run_adopted = True
 
             # Start config update listener (non-blocking background task)
             await self._start_config_listener()
@@ -218,6 +226,7 @@ class TradingBot:
 
         except Exception as e:
             logger.error(f"Fatal error: {e}", exc_info=True)
+            self._fatal_error = e
             raise
         finally:
             await self.stop()
@@ -236,10 +245,19 @@ class TradingBot:
         if self.db_pool and self.run_id:
             await self._ensure_all_positions_closed()
 
-        # Update run status
-        if self.db_pool and self.run_id:
+        # Update run status — only for a run we actually adopted/created. If start()
+        # aborted before adoption (e.g. lock held, adopt failed) we must NOT touch the
+        # row: the supervisor will mark it failed, and clobbering it here is what
+        # previously recorded never-started runs as 'completed'.
+        if self.db_pool and self.run_id and self._run_adopted:
+            if shutdown_requested:
+                final_status = "cancelled"
+            elif self._fatal_error is not None:
+                final_status = "failed"
+            else:
+                final_status = "completed"
             try:
-                await self._update_run_status("cancelled" if shutdown_requested else "completed")
+                await self._update_run_status(final_status)
             except Exception as e:
                 logger.error(f"Failed to update run status: {e}")
 
