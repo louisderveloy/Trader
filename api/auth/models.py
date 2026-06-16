@@ -31,7 +31,10 @@ class Principal(BaseModel):
     in the future, Authelia OIDC), so route guards never depend on the source.
     """
 
-    username: str = Field(..., description="Identity username/subject")
+    username: str = Field(..., description="Identity username/subject (the OIDC sub)")
+    display_name: Optional[str] = Field(
+        None, description="Human-friendly name for display (preferred_username/name)"
+    )
     email: Optional[str] = Field(None, description="Email if available")
     role: Role = Field(..., description="Resolved authorization role")
 

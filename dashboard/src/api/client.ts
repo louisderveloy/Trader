@@ -52,15 +52,28 @@ apiClient.interceptors.request.use(
  */
 apiClient.interceptors.response.use(
     (response) => response,
-    (error: AxiosError) => {
-        // Handle 401 Unauthorized - redirect to login
-        // httpOnly cookie will be cleared by server on logout
+    async (error: AxiosError) => {
+        // Handle 401 Unauthorized.
+        // IMPORTANT: never use `window.location.href` here. A hard browser
+        // navigation restarts the SPA and races the Vue Router auth guard,
+        // producing a flashing redirect loop between / and /login. Instead we
+        // clear auth state and let the guard redirect via in-app navigation.
         if (error.response?.status === 401) {
-            console.warn('Unauthorized: Redirecting to login')
-
-            // Redirect to login page (only if not already on login page)
-            if (window.location.pathname !== '/login') {
-                window.location.href = '/login'
+            const url = error.config?.url || ''
+            // Auth probes (/auth/me, /auth/csrf-token) are *expected* to 401 when
+            // there is no session — the router guard already handles that. Don't
+            // trigger a redirect for them or we fight the guard.
+            const isAuthProbe = url.includes('/auth/me') || url.includes('/auth/csrf-token')
+            if (!isAuthProbe) {
+                console.warn('Unauthorized: clearing session and routing to login')
+                const [{ useAuthStore }, { default: router }] = await Promise.all([
+                    import('@/stores/auth'),
+                    import('@/router'),
+                ])
+                useAuthStore().user = null
+                if (router.currentRoute.value.name !== 'login') {
+                    router.replace({ name: 'login' })
+                }
             }
         }
 

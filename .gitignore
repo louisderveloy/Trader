@@ -217,6 +217,14 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Authelia secrets — never commit the real users DB or signing keys.
+# Only the committed templates (authelia/configuration.yml, *.example.yml) are tracked;
+# the live files are mounted from /etc/authelia on the VPS.
+authelia/users_database.yml
+authelia/*.key
+authelia/*.pem
+authelia/secrets/
+
 # Docker volumes (local development data)
 volumes/postgres/
 volumes/redis/

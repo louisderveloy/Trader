@@ -15,6 +15,7 @@ export interface TokenResponse {
 
 export interface User {
   username: string
+  display_name?: string | null
   email: string | null
   role?: 'admin' | 'viewer'
 }

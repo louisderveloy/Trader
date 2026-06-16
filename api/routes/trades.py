@@ -10,7 +10,7 @@ from typing import Annotated
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from ..auth import User, get_current_user
+from ..auth import Principal, require_viewer
 from ..database import get_db_pool
 from ..models.enums import TradeSide, TradeEnvironment
 from ..models.trades import TradeListResponse, TradeResponse
@@ -31,7 +31,7 @@ async def list_trades(
         max_pnl: Annotated[float | None, Query(description="Maximum P&L")] = None,
         limit: Annotated[int, Query(ge=1, le=1000, description="Maximum results")] = 100,
         offset: Annotated[int, Query(ge=0, description="Offset for pagination")] = 0,
-        user: User = Depends(get_current_user),
+        user: Principal = Depends(require_viewer),
         db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> TradeListResponse:
     """
@@ -121,7 +121,7 @@ async def list_trades(
 @router.get("/{trade_id}", response_model=TradeResponse)
 async def get_trade(
         trade_id: str,
-        user: User = Depends(get_current_user),
+        user: Principal = Depends(require_viewer),
         db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> TradeResponse:
     """

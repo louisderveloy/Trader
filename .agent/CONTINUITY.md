@@ -85,6 +85,32 @@
 - **Prod PG binding** changed to `0.0.0.0:5432` for external Grafana (firewall-gated). ⚠️ Security review
   Finding #2 (CRITICAL) flags this — revert to `127.0.0.1` + SSH tunnel.
 
+### Authentication — Authelia OIDC (2026-06-14, branch `feature/authelia-implementation`)
+- **Pattern = BFF / Authorization Code + PKCE.** API is a confidential OIDC RP of **Authelia**
+  (`auth.trader.derveloy.eu`); it holds OIDC tokens server-side and mints its own HS256 session cookie.
+  SPA never sees OIDC tokens. **RP lib = Authlib** (user choice; `oidcrp` deprecated→`idpy-oidc`). Only
+  `authlib.jose` is used (for RS256 id_token validation) — pinned `<2.0` (deprecated → migrate to
+  `joserfc`). The flow is hand-rolled with httpx + an **encrypted (Fernet) transaction cookie** because
+  Starlette session middleware only signs (would expose the PKCE verifier).
+- **Roles from Authelia `groups`:** `admins`→ADMIN, `viewers`→VIEWER, none→`/no-access` (no session).
+  Reuses existing `Principal`/`require_admin`/`require_viewer`/CSRF/mainnet gate unchanged — OIDC only
+  changes *how the Principal is resolved at login* (`get_principal`: local-dev decodes session +
+  `DEV_USER_GROUP`; oidc decodes our session JWT claims, never calls Authelia per request).
+- **Step-up for live runs:** `POST /runs/start` (live) requires a fresh OIDC re-auth grant
+  (`max_age=0&prompt=login`); the step-up callback **re-resolves admin from the fresh id_token groups**,
+  binds fresh `sub` to session, checks `auth_time`≤5min, issues a single-use Fernet grant cookie.
+  `_require_stepup_for_live` gates start; missing/stale → 403 `step_up_required` → SPA redirects.
+- **No Traefik forward-auth** (would block the OIDC callback) — supersedes `docs/A5_auth_migration.md`.
+- **Prod hard guards:** boot fails if `prod`+`AUTH_MODE=local`; `/auth/login`→404 in OIDC mode; OIDC
+  secrets + non-wildcard CORS validated in prod. Cookies: session host-only, CSRF `.trader.derveloy.eu`,
+  both `SameSite=Strict`; txn cookie Lax+encrypted. New: `api/auth/oidc.py`, `oidc_routes.py`,
+  `cookies.py`; `authelia/` template (real `users_database.yml` lives at `/etc/authelia`, gitignored).
+- **Status: code-complete A–I, validated by import + 32 API tests (`api/tests/`, new CI job).** NOT yet
+  deployed/E2E against a live Authelia. Open: verify `auth_time` refresh on `prompt=login` (authelia#2596);
+  bake `VITE_AUTH_MODE` in CI (done in Dockerfile.prod + workflow); enforce prod JWT TTL=240.
+- **Docs:** `docs/Authentification.md` (how it works), `.agent/authelia-implementation.md` (tracker),
+  `.agent/security-review.md` §Authelia (findings AO-1..AO-FOLLOWUP).
+
 ---
 
 ## [DISCOVERIES]
@@ -157,5 +183,13 @@
 | 11 | Discord notifications | module built, integration pending |
 | 12 | Automated tests (vitest/E2E) | pending |
 | 13–15 | VPS prod / paper (4–8wk) / live | pending |
+| Auth | Authelia OIDC (BFF, PKCE S256, step-up, dev bypass) — code-complete (A–I), 32 API tests + vue-tsc pass | ✅ code; not yet deployed/E2E |
+
+> **Auth note (2026-06-14):** Authelia OIDC implemented on `feature/authelia-implementation`. Validated:
+> `import api.main` OK, 32 `api/tests/test_oidc_auth.py` pass (incl. route-coverage guard), frontend
+> `vue-tsc --noEmit` clean. `npm run lint` is non-functional repo-wide (no eslint config tracked → default
+> parser fails on all `.ts`/`.vue`); pre-existing, out of scope. Pre-deploy TODO: fill `authelia/` secrets
+> on VPS; verify `prompt=login`/`max_age=0` refreshes `auth_time` (authelia#2596); enforce prod JWT TTL=240;
+> migrate `authlib.jose`→`joserfc`. Tracker: `.agent/authelia-implementation.md`.
 
 **Objective:** beat buy-and-hold BTC over 1 year live; formal eval 12 months after Phase 15.
