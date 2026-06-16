@@ -129,8 +129,9 @@ async def list_runs(
         params["environment"] = environment
 
     if symbol:
-        conditions.append(f"symbol = ${len(params) + 1}")
-        params["symbol"] = symbol
+        # Case-insensitive partial match: "btc" -> BTCUSDC, "usd" -> BTCUSDC/ETHUSDC
+        conditions.append(f"symbol ILIKE ${len(params) + 1}")
+        params["symbol"] = f"%{symbol}%"
 
     where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
 

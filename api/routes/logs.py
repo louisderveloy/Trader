@@ -70,8 +70,9 @@ async def list_errors(
         params["severity"] = severity
 
     if category:
-        conditions.append(f"category = ${len(params) + 1}")
-        params["category"] = category
+        # Case-insensitive partial match (e.g. "STRAT" -> strategy)
+        conditions.append(f"category ILIKE ${len(params) + 1}")
+        params["category"] = f"%{category}%"
 
     if start_date:
         conditions.append(f"timestamp >= ${len(params) + 1}")

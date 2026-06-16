@@ -1,5 +1,5 @@
 <template>
-  <header class="bg-white shadow-sm border-b border-gray-200">
+  <header class="sticky top-0 z-20 bg-white shadow-sm border-b border-gray-200">
     <div class="px-4 py-3 flex items-center justify-between">
       <!-- Left: Hamburger menu + Title -->
       <div class="flex items-center space-x-4">
