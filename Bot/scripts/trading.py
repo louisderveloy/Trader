@@ -931,6 +931,8 @@ class TradingBot:
                     quantity=quantity,
                     entry_time=entry_time,
                     entry_order_id=order_id,
+                    stop_loss_price=stop_loss,
+                    take_profit_price=take_profit,
                 )
 
                 self.position = {
@@ -1543,9 +1545,12 @@ class TradingBot:
             quantity: Decimal,
             entry_time: datetime,
             entry_order_id: UUID,
+            stop_loss_price: Optional[Decimal] = None,
+            take_profit_price: Optional[Decimal] = None,
     ) -> UUID:
         """
         Create trade entry in database when position opens.
+        Persists the stop-loss / take-profit levels the position was opened with.
         Returns trade_id to track the ongoing trade.
         """
         # Calculate entry commission (0.1% of entry value)
@@ -1555,8 +1560,9 @@ class TradingBot:
             INSERT INTO trades (
                 run_id, symbol, side, entry_order_id,
                 opened_at, entry_price, quantity,
-                commission_total, status
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                commission_total, status,
+                stop_loss_price, take_profit_price
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING id
         """
 
@@ -1572,6 +1578,8 @@ class TradingBot:
                 quantity,
                 entry_commission,
                 "open",
+                stop_loss_price,
+                take_profit_price,
             )
 
         trade_id = row["id"]
@@ -1619,8 +1627,9 @@ class TradingBot:
                 pnl = $5,
                 pnl_percent = $6,
                 commission_total = commission_total + $7,
+                exit_reason = $8,
                 status = 'closed'
-            WHERE id = $8
+            WHERE id = $9
         """
 
         async with self.db_pool.acquire() as conn:
@@ -1633,6 +1642,7 @@ class TradingBot:
                 net_pnl,
                 net_pnl_pct,
                 exit_commission,
+                exit_reason,
                 trade_id,
             )
 
