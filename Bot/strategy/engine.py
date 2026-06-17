@@ -120,10 +120,16 @@ class StrategyEngine:
             if row is None:
                 raise ValueError("No active weights set found in database")
 
+            # asyncpg returns JSONB as a str unless a codec is configured on the
+            # pool (the bot's pool has none), so decode defensively.
+            weights = row["weights"]
+            if isinstance(weights, str):
+                weights = json.loads(weights)
+
             weights_snapshot = WeightsSnapshot(
                 weights_set_id=row["id"],
                 weights_set_name=row["name"],
-                weights=row["weights"],  # Already JSONB dict
+                weights=weights,
                 timestamp=row["created_at"]
             )
 

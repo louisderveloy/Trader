@@ -220,6 +220,30 @@ async def test_load_active_weights_not_found(strategy_engine, mock_db_pool):
         await strategy_engine.load_active_weights()
 
 
+@pytest.mark.asyncio
+async def test_load_active_weights_decodes_str_jsonb(strategy_engine, mock_db_pool, weights_id):
+    """asyncpg returns JSONB as a str when no codec is set (the bot's pool has none).
+
+    Regression for #17: load_active_weights must decode it, otherwise
+    calculate_weighted_score does weights.items() on a str and the live loop
+    silently skips every iteration.
+    """
+    import json
+    mock_conn = AsyncMock()
+    mock_db_pool.acquire.return_value.__aenter__.return_value = mock_conn
+    mock_conn.fetchrow.return_value = {
+        "id": weights_id,
+        "name": "Test Weights",
+        "weights": json.dumps({"ema": 0.15, "macd": 0.20}),  # JSONB delivered as str
+        "created_at": datetime.now(timezone.utc),
+    }
+
+    weights = await strategy_engine.load_active_weights()
+
+    assert isinstance(weights.weights, dict)
+    assert weights.weights["ema"] == 0.15
+
+
 # --- calculate_weighted_score tests ---
 
 def test_calculate_weighted_score_success(strategy_engine, sample_weights):
