@@ -111,8 +111,14 @@ def compute_all_indicators(
             result = module.compute(candles, params.get(name, {}))
             result.signal = module.to_signal(result)
         except Exception as exc:  # noqa: BLE001 - one bad indicator must not abort the decision
+            # Include the indicator name and error in the message itself: the
+            # bot's log format ("%(message)s") drops the `extra` dict, so a bare
+            # message would hide which indicator failed and why.
             logger.warning(
-                "Indicator computation failed; using neutral signal",
+                "Indicator '%s' computation failed (%s: %s); using neutral signal",
+                name,
+                type(exc).__name__,
+                exc,
                 extra={"indicator": name, "error": str(exc)},
             )
             result = IndicatorResult(

@@ -130,6 +130,21 @@
   returns one value (last candle), so signals had to be **recomputed vectorized inline** in
   `vectorbt_engine.py` rather than calling indicator modules per-row.
 
+### Indicators (live-loop, branch `feature/stop-loss`)
+- **OBV `to_signal` could emit ±1.2 → spurious "compute failed" + neutral signal** (2026-06-17, fixed).
+  Symptom: live paper loop on **BTCUSDC** logged exactly one `Indicator computation failed; using neutral
+  signal` per cycle and a near-zero score (`0.037`), while a direct call worked. Root cause in
+  `bot/indicators/obv.py::to_signal`: the divergence boost clamped only one bound —
+  `min(1.0, signal_value*1.5 + 0.3)` (bullish) lets a base of `-1.0` become `-1.2`; the bearish branch
+  is symmetric. `IndicatorSignal.__post_init__` rejects out-of-[-1,1] → `ValueError` → caught by
+  `compute_all_indicators` per-indicator guard → neutral + warning. Symbol-dependent: BTCUSDT base never
+  hit the edge so it never surfaced, but the BTCUSDC volume pattern (falling OBV + bullish divergence) did.
+  **Fix:** clamp both bounds `max(-1.0, min(1.0, ...))` in both divergence branches. Regression test
+  `test_to_signal_divergence_boost_stays_clamped`. Verified on real BTCUSDC/BTCUSDT fetches: 0 failures,
+  OBV now `-1.0` (was raising). **Also fixed:** the warning now embeds indicator name + error in the
+  message string — the bot log format is `%(message)s` and was dropping the `extra={indicator,error}` dict,
+  so failures were undiagnosable from the logs.
+
 ### Dashboard / API (recent)
 - **Optimisations filter/sort is server-side SQL** (2026-06-12, user rejected client-side). ORDER BY
   column from a whitelist map, direction from enum, all values bound as `$n` → no user input in SQL;
