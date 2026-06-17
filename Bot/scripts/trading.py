@@ -35,7 +35,7 @@ import logging
 import os
 import signal
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional, Dict, Any
 from uuid import uuid4, UUID
@@ -89,7 +89,7 @@ class TradingBot:
             timeframe: str,
             mode: str,
             testnet: bool,
-            initial_capital: Decimal = Decimal("10000"),
+            initial_capital: Decimal = Decimal("100"),  # Initial capital for paper trading.
             run_id: Optional[int] = None,
     ):
         """
