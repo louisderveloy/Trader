@@ -230,18 +230,26 @@ differ from before. Same thresholds (0.6/-0.3).
   double-sell); paper=software-only. Tests `tests/test_native_stop.py` (mocked). **Live OCO
   fill-reconciliation still needs a testnet E2E before live (pre-Phase-14).** Full suite 423 pass/10 skip.
 
-**⚠ DISCOVERY (changes C5/C6 scope):** The event-driven backtester is **non-functional scaffold**, not a
-partial impl: `initialize_strategy_engine` builds StrategyEngineConfig with non-existent flat kwargs and
-no `run_id` (would crash), and `get_strategy_decision` is a SKIP stub that constructs TradingDecision with
-wrong kwargs (`confidence=`/`reason=` — real fields are `weights_snapshot`/`indicators_snapshot`/
-`decision_reason`). `test_backtesting_coherence.py` only tests the *compare* logic, never runs a
-backtester. So C5 = **complete the backtester** (config mapping, run_id, load weights, per-candle
-compute_all_indicators→make_decision, use decision SL/TP), not just swap 2x/3x. Design Q: make_decision
-logs score+decision per candle → tens of thousands of DB writes per backtest run. **PAUSED here to ask
-Louis how to scope C5/C6** (full completion vs scoped SL/TP-only vs follow-up issue).
+**DISCOVERY:** event-driven backtester (`event_driven.py`) is **non-functional scaffold** — broken engine
+init (no run_id, flat kwargs) + `get_strategy_decision` SKIP stub with wrong TradingDecision kwargs.
+`test_backtesting_coherence.py` only tests compare logic, never runs a backtester.
 
-**Remaining:** C5 event_driven (see discovery), C6 vectorbt `sl_stop`/`tp_stop` (Context7; identical SL/TP
-semantics as event_driven for <2% coherence), C7 coherence/integration tests.
+**User decision (2026-06-17):** vectorbt SL/TP now; **event-driven completion deferred to follow-up issue #26.**
+
+**Done (committed) cont'd:**
+- C6: vectorbt `from_signals` now passes `sl_stop`/`tp_stop` as fractions (FIXED=pct/100; ATR=per-bar
+  `atr*mult/close`, warm-up→no stop). Raw ATR retained on signals_df. Tests `tests/test_vectorbt_stops.py`
+  (incl. real from_signals applying sl_stop). Verified via Context7.
+- C7: tests delivered per-commit (test_trading_stop_loss, test_native_stop, test_vectorbt_stops + engine
+  fixture fix). Coherence end-to-end test deferred with event-driven (#26).
+
+**ISSUE #17 STATUS: COMPLETE for this PR** (branch `feature/stop-loss`, 7 commits). Full suite **427
+pass / 10 skip**. Follow-up **#26** tracks event-driven backtester completion. PR pending user (never
+open PR to main — open to Dev/equivalent; only user merges).
+
+**Pre-live TODO (not blocking PR):** testnet E2E of the native OCO fill-reconciliation path before
+Phase 15. Backtest runner should populate `strategy_params['stop_loss'/'take_profit']` so vectorbt reads
+real config (currently defaults) — folded into #26.
 
 **Test env:** run in bot container. Bash path-mangles `/app`; prefix `MSYS_NO_PATHCONV=1` and use
 `docker compose run --rm --entrypoint python bot -m pytest /tests/...`. pytest addopts forces `--cov=bot`.
