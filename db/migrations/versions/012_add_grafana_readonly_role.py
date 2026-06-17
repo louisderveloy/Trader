@@ -70,16 +70,18 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Revoke privileges and drop the role."""
-    op.execute(f"ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE SELECT ON TABLES FROM {ROLE_NAME};")
-    op.execute(f"REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {ROLE_NAME};")
-    op.execute(f"REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {ROLE_NAME};")
-    op.execute(f"REVOKE ALL ON SCHEMA public FROM {ROLE_NAME};")
+    role_name = os.getenv('POSTGRES_GRAFANA_READONLY_USER')
+
+    op.execute(f"ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE SELECT ON TABLES FROM {role_name};")
+    op.execute(f"REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {role_name};")
+    op.execute(f"REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {role_name};")
+    op.execute(f"REVOKE ALL ON SCHEMA public FROM {role_name};")
     op.execute(f"""
         DO $$
         BEGIN
-            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{ROLE_NAME}') THEN
-                EXECUTE 'REVOKE CONNECT ON DATABASE ' || quote_ident(current_database()) || ' FROM {ROLE_NAME}';
-                DROP ROLE {ROLE_NAME};
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role_name}') THEN
+                EXECUTE 'REVOKE CONNECT ON DATABASE ' || quote_ident(current_database()) || ' FROM {role_name}';
+                DROP ROLE {role_name};
             END IF;
         END
         $$;
