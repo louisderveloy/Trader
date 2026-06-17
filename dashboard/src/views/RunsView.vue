@@ -4,6 +4,13 @@
       <!-- Header -->
       <div class="flex items-center justify-between">
         <h1 class="text-3xl font-bold text-gray-900">Runs</h1>
+        <button
+          v-if="authStore.isAdmin"
+          @click="showStartModal = true"
+          class="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500"
+        >
+          Démarrer un run
+        </button>
       </div>
 
       <!-- Filters -->
@@ -21,7 +28,6 @@
             >
               <option value="">Tous</option>
               <option value="backtest">Backtest</option>
-              <option value="optimization">Optimization</option>
               <option value="paper">Paper Trading</option>
               <option value="live">Live</option>
             </select>
@@ -82,14 +88,21 @@
 
       <!-- Empty state -->
       <EmptyState
-        v-else-if="runsStore.runs.length === 0"
+        v-else-if="visibleRuns.length === 0"
         title="Aucun run trouvé"
         message="Aucun run ne correspond aux filtres sélectionnés."
       />
 
       <!-- Runs list -->
       <div v-else class="space-y-4">
-        <RunCard v-for="run in runsStore.runs" :key="run.id" :run="run" />
+        <RunCard
+          v-for="run in visibleRuns"
+          :key="run.id"
+          :run="run"
+          @logs="openLogs"
+          @stop="handleStop"
+          @kill="handleKill"
+        />
       </div>
 
       <!-- Pagination -->
@@ -116,25 +129,54 @@
         </button>
       </div>
     </div>
+
+    <!-- Start run modal -->
+    <StartRunModal
+      v-if="showStartModal"
+      :is-loading="isStarting"
+      @close="showStartModal = false"
+      @launch="handleStart"
+    />
+
+    <!-- Logs modal -->
+    <LogsModal
+      v-if="logsRunId !== null"
+      :run-id="logsRunId"
+      @close="logsRunId = null"
+    />
   </AppLayout>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRunsStore } from '@/stores/runs'
+import { useAuthStore } from '@/stores/auth'
+import type { StartRunRequest } from '@/api/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import RunCard from '@/components/runs/RunCard.vue'
+import StartRunModal from '@/components/runs/StartRunModal.vue'
+import LogsModal from '@/components/runs/LogsModal.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import ErrorAlert from '@/components/common/ErrorAlert.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 
 const runsStore = useRunsStore()
+const authStore = useAuthStore()
 
 const filters = ref({
   run_type: '',
   status: '',
   symbol: '',
 })
+
+const showStartModal = ref(false)
+const isStarting = ref(false)
+const logsRunId = ref<number | null>(null)
+
+// Optimization runs have a dedicated page; never show them here.
+const visibleRuns = computed(() =>
+  runsStore.runs.filter((run) => run.run_type !== 'optimization')
+)
 
 const currentPage = computed(() => Math.floor(runsStore.offset / runsStore.limit) + 1)
 const totalPages = computed(() => Math.ceil(runsStore.total / runsStore.limit))
@@ -148,6 +190,34 @@ function applyFilters() {
     status: filters.value.status || undefined,
     symbol: filters.value.symbol || undefined,
   })
+}
+
+async function handleStart(payload: StartRunRequest) {
+  isStarting.value = true
+  try {
+    const runId = await runsStore.startRun(payload)
+    if (runId !== null) showStartModal.value = false
+  } finally {
+    isStarting.value = false
+  }
+}
+
+function openLogs(runId: number) {
+  logsRunId.value = runId
+}
+
+async function handleStop(runId: number) {
+  if (!window.confirm(`Arrêter le run #${runId} ? Les positions ouvertes seront fermées proprement.`)) {
+    return
+  }
+  await runsStore.stopRun(runId)
+}
+
+async function handleKill(runId: number) {
+  if (!window.confirm(`Tuer (SIGKILL) le run #${runId} ? À utiliser uniquement pour les backtests.`)) {
+    return
+  }
+  await runsStore.killRun(runId)
 }
 
 onMounted(() => {

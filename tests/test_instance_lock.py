@@ -309,14 +309,18 @@ class TestInstanceLockManager:
                 await db_pool.release(conn)
 
     @pytest.mark.asyncio
-    async def test_check_existing_runs_multiple_runs_returns_latest(self, db_pool, clean_runs_table):
-        """Test that check_existing_runs returns the most recent run when multiple exist."""
-        # Insert two running instances with different timestamps
+    async def test_single_instance_constraint_blocks_second_active_run(self, db_pool, clean_runs_table):
+        """A second concurrently-active paper/live run is rejected by the DB.
+
+        The ``uq_runs_single_instance`` partial unique index (migration 011) is the
+        database-level backstop for the single-instance rule: at most one paper (and
+        one live) run may be pending or running at a time. This mirrors the advisory
+        lock at runtime, so two simultaneously-running paper runs cannot exist.
+        """
         started_at_1 = datetime(2024, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
-        started_at_2 = datetime(2024, 1, 1, 11, 0, 0, tzinfo=timezone.utc)  # Later
+        started_at_2 = datetime(2024, 1, 1, 11, 0, 0, tzinfo=timezone.utc)
 
         async with db_pool.acquire() as conn:
-            # Note: runs.id is an auto-increment INTEGER, not UUID
             row1 = await conn.fetchrow(
                 """
                 INSERT INTO runs (
@@ -325,27 +329,26 @@ class TestInstanceLockManager:
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 RETURNING id
                 """,
-                'paper', 'paper', 'running', 'BTCUSDT', '15m',
-                started_at_1, started_at_1, '{"symbol": "BTCUSDT"}', started_at_1
+                'paper', 'paper', 'running', 'BTCUSDC', '15m',
+                started_at_1, started_at_1, '{"symbol": "BTCUSDC"}', started_at_1
             )
             run_id_1 = row1['id']
 
-            row2 = await conn.fetchrow(
-                """
-                INSERT INTO runs (
-                    run_type, environment, status, symbol, timeframe,
-                    start_date, end_date, config_snapshot, started_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                RETURNING id
-                """,
-                'paper', 'paper', 'running', 'ETHUSDT', '15m',
-                started_at_2, started_at_2, '{"symbol": "ETHUSDT"}', started_at_2
-            )
-            run_id_2 = row2['id']
+            # A second active paper run must be rejected by the unique index.
+            with pytest.raises(asyncpg.exceptions.UniqueViolationError):
+                await conn.execute(
+                    """
+                    INSERT INTO runs (
+                        run_type, environment, status, symbol, timeframe,
+                        start_date, end_date, config_snapshot, started_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    """,
+                    'paper', 'paper', 'running', 'ETHUSDC', '15m',
+                    started_at_2, started_at_2, '{"symbol": "ETHUSDC"}', started_at_2
+                )
 
-        # Check should return the most recent (run_id_2)
+        # check_existing_runs returns the single active run.
         result = await InstanceLockManager.check_existing_runs(db_pool, 'paper')
-
         assert result is not None
-        assert result['id'] == run_id_2
-        assert result['symbol'] == 'ETHUSDT'
+        assert result['id'] == run_id_1
+        assert result['symbol'] == 'BTCUSDC'

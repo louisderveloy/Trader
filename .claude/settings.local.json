@@ -23,7 +23,20 @@
       "PowerShell(git add Bot/backtesting/vectorbt_engine.py Bot/optimization/objective.py Bot/strategy/engine.py)",
       "Bash(git commit -m 'Bug C: Normalize weighted_score and fix entry/exit thresholds *)",
       "PowerShell(git commit -m \"Bug C: Normalize weighted_score and fix thresholds`n`nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\")",
-      "PowerShell(git commit --no-gpg-sign -m \"Bug C: Normalize weighted_score and fix thresholds`n`n- Normalize weighted_score by dividing by sum of absolute weights`n- Clip to [-1,1] after normalization`n- Update DB config: entry_threshold 0.6->0.3, exit_threshold 0.3->-0.2`n- Add inline diagnostic logging for signal generation`n`nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\")"
+      "PowerShell(git commit --no-gpg-sign -m \"Bug C: Normalize weighted_score and fix thresholds`n`n- Normalize weighted_score by dividing by sum of absolute weights`n- Clip to [-1,1] after normalization`n- Update DB config: entry_threshold 0.6->0.3, exit_threshold 0.3->-0.2`n- Add inline diagnostic logging for signal generation`n`nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\")",
+      "mcp__Github__issue_read"
     ]
+  },
+  "skillOverrides": {
+    "algorithmic-art": "user-invocable-only",
+    "canvas-design": "user-invocable-only",
+    "claude-api": "user-invocable-only",
+    "doc-coauthoring": "user-invocable-only",
+    "docx": "user-invocable-only",
+    "mcp-builder": "user-invocable-only",
+    "pdf": "user-invocable-only",
+    "pptx": "user-invocable-only",
+    "web-artifacts-builder": "user-invocable-only",
+    "xlsx": "user-invocable-only"
   }
 }

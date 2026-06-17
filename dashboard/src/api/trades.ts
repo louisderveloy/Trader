@@ -39,6 +39,10 @@ export interface TradeFilters {
   environment?: 'testnet' | 'live' | 'paper' | 'backtest'
   min_pnl?: number
   max_pnl?: number
+  /** ISO 8601 lower bound on trade open time (inclusive). */
+  start_date?: string
+  /** ISO 8601 upper bound on trade open time (inclusive). */
+  end_date?: string
   limit?: number
   offset?: number
 }
@@ -55,7 +59,9 @@ export async function getTrades(filters: TradeFilters = {}): Promise<TradeListRe
     ...(filters.side && { side: filters.side }),
     ...(filters.environment && { environment: filters.environment }),
     ...(filters.min_pnl !== undefined && { min_pnl: filters.min_pnl }),
-    ...(filters.max_pnl !== undefined && { max_pnl: filters.max_pnl })
+    ...(filters.max_pnl !== undefined && { max_pnl: filters.max_pnl }),
+    ...(filters.start_date && { start_date: filters.start_date }),
+    ...(filters.end_date && { end_date: filters.end_date })
   }
 
   const response = await apiClient.get<TradeListResponse>('/trades', { params })

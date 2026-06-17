@@ -21,10 +21,17 @@ export async function login(username: string, password: string): Promise<LoginRe
 }
 
 /**
- * Logout - clears httpOnly cookie on server
+ * Logout - clears httpOnly cookie on server (local mode)
  */
 export async function logout(): Promise<void> {
   await apiClient.post('/auth/logout')
+}
+
+/**
+ * Logout in OIDC mode - clears the session and any step-up grant.
+ */
+export async function oidcLogout(): Promise<void> {
+  await apiClient.post('/auth/oidc/logout')
 }
 
 /**

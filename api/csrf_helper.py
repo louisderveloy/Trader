@@ -10,6 +10,8 @@ Note: With httpOnly session cookies and SameSite=strict, CSRF is already
 largely mitigated, but this provides defense in depth.
 """
 
+import hmac
+
 from fastapi import HTTPException, Request, status
 
 
@@ -38,7 +40,8 @@ async def validate_csrf_token(request: Request) -> None:
             detail="CSRF token missing"
         )
 
-    if cookie_token != header_token:
+    # Constant-time comparison to avoid leaking the token via timing.
+    if not hmac.compare_digest(cookie_token, header_token):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="CSRF token validation failed"

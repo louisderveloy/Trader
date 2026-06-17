@@ -145,8 +145,8 @@ def sample_indicator_results():
         mock_result.values = {"signal": signal, "value": 42000}  # Simplified
         results[indicator] = mock_result
 
-    # Add ATR value for position sizing
-    results["atr"].values = {"value": Decimal("500"), "signal": 0.0}
+    # Add ATR value for position sizing (real atr.compute() exposes it under "atr")
+    results["atr"].values = {"atr": Decimal("500"), "signal": 0.0}
 
     return results
 
@@ -179,6 +179,43 @@ def test_strategy_engine_with_custom_risk_manager(run_id, strategy_config, mock_
     )
 
     assert engine.risk_manager == mock_risk_manager
+
+
+def test_update_config_propagates_to_engine_and_risk_manager(strategy_engine, weights_id):
+    """Regression: hot-reloaded config must reach the engine AND its risk manager.
+
+    Previously the trading loop reloaded its own ``self.config`` but never updated
+    the engine, so dashboard threshold/risk changes were silently ignored and the
+    engine kept skipping with stale thresholds.
+    """
+    new_config_id = uuid4()
+    new_config = StrategyEngineConfig(
+        strategy=StrategyConfig(
+            entry_threshold=-0.5,
+            exit_threshold=-0.51,
+            confirmation_candles=1,
+        ),
+        risk=RiskConfig(
+            max_trades_per_day=99,
+            max_exposure_percent=80.0,
+            position_size_mode=PositionSizeMode.FIXED,
+            fixed_size_usdt=250.0,
+        ),
+        stop_loss=StopLossConfig(mode=StopLossMode.ATR, atr_multiplier=2.0),
+        take_profit=TakeProfitConfig(mode=TakeProfitMode.ATR, atr_multiplier=3.0),
+        cooldown=CooldownConfig(after_trade_seconds=120),
+    )
+
+    strategy_engine.update_config(new_config, new_config_id)
+
+    # Engine sees the new thresholds and config id used for decision logging.
+    assert strategy_engine.config.strategy.entry_threshold == -0.5
+    assert strategy_engine.config.strategy.exit_threshold == -0.51
+    assert strategy_engine.config_id == new_config_id
+    # Risk manager's own config references are refreshed too.
+    assert strategy_engine.risk_manager.risk_config is new_config.risk
+    assert strategy_engine.risk_manager.cooldown_config is new_config.cooldown
+    assert strategy_engine.risk_manager.risk_config.max_trades_per_day == 99
 
 
 # --- load_active_weights tests ---
@@ -218,6 +255,30 @@ async def test_load_active_weights_not_found(strategy_engine, mock_db_pool):
 
     with pytest.raises(ValueError, match="No active weights set found"):
         await strategy_engine.load_active_weights()
+
+
+@pytest.mark.asyncio
+async def test_load_active_weights_decodes_str_jsonb(strategy_engine, mock_db_pool, weights_id):
+    """asyncpg returns JSONB as a str when no codec is set (the bot's pool has none).
+
+    Regression for #17: load_active_weights must decode it, otherwise
+    calculate_weighted_score does weights.items() on a str and the live loop
+    silently skips every iteration.
+    """
+    import json
+    mock_conn = AsyncMock()
+    mock_db_pool.acquire.return_value.__aenter__.return_value = mock_conn
+    mock_conn.fetchrow.return_value = {
+        "id": weights_id,
+        "name": "Test Weights",
+        "weights": json.dumps({"ema": 0.15, "macd": 0.20}),  # JSONB delivered as str
+        "created_at": datetime.now(timezone.utc),
+    }
+
+    weights = await strategy_engine.load_active_weights()
+
+    assert isinstance(weights.weights, dict)
+    assert weights.weights["ema"] == 0.15
 
 
 # --- calculate_weighted_score tests ---

@@ -257,6 +257,19 @@ class VectorbtBacktester(BacktesterBase):
         # Load weights from strategy_params (or use defaults)
         weights = self.config.strategy_params.get('weights', self._get_default_weights())
 
+        # Defensive guard: the weights dict must use unprefixed indicator keys
+        # (e.g. "ema", "macd"). If a caller passes a wrong namespace (e.g. Optuna's
+        # prefixed "weight_ema"), every weights.get('ema', default) lookup misses and
+        # the backtest silently runs on DEFAULT weights — which previously produced
+        # meaningless (often zero) walk-forward test scores. Warn loudly instead.
+        if weights and not any(ind in weights for ind in self._get_default_weights()):
+            logger.warning(
+                "[WEIGHTS] Supplied weights dict has no recognised indicator keys "
+                "(got %s) — falling back to DEFAULT weights. Pass unprefixed keys "
+                "like 'ema'/'macd', not 'weight_ema'.",
+                list(weights.keys()),
+            )
+
         close = self.candles_df['close'].astype(float)
         high = self.candles_df['high'].astype(float)
         low = self.candles_df['low'].astype(float)
@@ -353,6 +366,8 @@ class VectorbtBacktester(BacktesterBase):
         tr3 = (low - close.shift(1)).abs()
         true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         atr_values = true_range.ewm(span=atr_period, adjust=False).mean()
+        # Keep the raw ATR series for ATR-based SL/TP stop sizing (see _compute_stop_arrays)
+        self.signals_df['atr'] = atr_values
 
         # ATR percentile: high volatility = cautious (neutral to negative)
         atr_percentile = atr_values.rolling(window=100, min_periods=20).apply(
@@ -511,6 +526,11 @@ class VectorbtBacktester(BacktesterBase):
         # Calculate fees and slippage
         total_fees = float(self.config.commission_rate + self.config.slippage_pct)
 
+        # Stop-loss / take-profit as fractions of entry price (vectorbt convention).
+        # Same semantics as the strategy engine / event-driven backtester so the
+        # two engines stay coherent (CLAUDE.md <2% rule).
+        sl_stop, tp_stop = self._compute_stop_arrays(close_prices)
+
         # Run portfolio simulation
         portfolio = vbt.Portfolio.from_signals(
             close=close_prices,
@@ -518,10 +538,42 @@ class VectorbtBacktester(BacktesterBase):
             exits=exits,
             init_cash=float(self.config.initial_capital),
             fees=total_fees,  # Combined commission + slippage
+            sl_stop=sl_stop,
+            tp_stop=tp_stop,
             freq='15T'  # 15-minute frequency
         )
 
         return portfolio
+
+    def _compute_stop_arrays(self, close_prices: pd.Series):
+        """Build sl_stop / tp_stop for vectorbt as fractions of entry price.
+
+        - FIXED mode: a flat fraction (e.g. 2% → 0.02).
+        - ATR mode: a per-bar fraction = ATR * multiplier / close, matching
+          SL = entry - ATR*mult used by the strategy engine. Bars without a
+          valid ATR fall back to np.inf (vectorbt = "no stop") so warm-up bars
+          don't get a spurious tight stop.
+
+        Returns:
+            (sl_stop, tp_stop) — each a float scalar (FIXED) or np.ndarray (ATR).
+        """
+        sl_cfg = self.config.strategy_params.get('stop_loss', {}) or {}
+        tp_cfg = self.config.strategy_params.get('take_profit', {}) or {}
+
+        def _arr(cfg, default_mode, default_mult, default_pct):
+            mode = str(cfg.get('mode', default_mode)).lower()
+            if mode == 'fixed':
+                return float(cfg.get('fixed_percent', default_pct)) / 100.0
+            mult = float(cfg.get('atr_multiplier', default_mult))
+            if 'atr' in self.signals_df:
+                frac = (self.signals_df['atr'] * mult) / close_prices
+                return frac.replace([np.inf, -np.inf], np.nan).fillna(np.inf).to_numpy()
+            # No ATR available → no stop rather than a wrong one
+            return np.inf
+
+        sl_stop = _arr(sl_cfg, 'atr', 2.0, 2.0)
+        tp_stop = _arr(tp_cfg, 'atr', 3.0, 4.0)
+        return sl_stop, tp_stop
 
     def extract_trades(self, portfolio: vbt.Portfolio) -> List[BacktestTrade]:
         """

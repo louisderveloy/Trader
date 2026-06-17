@@ -6,7 +6,9 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { useIntervalFn } from '@vueuse/core'
 import * as runsApi from '@/api/runs'
-import type { Run, RunFilters } from '@/api/types'
+import type { Run, RunFilters, RunLogsResponse, StartRunRequest } from '@/api/types'
+import { useToastStore } from '@/stores/toast'
+import { useAuthStore } from '@/stores/auth'
 
 export const useRunsStore = defineStore('runs', () => {
   // State
@@ -92,6 +94,77 @@ export const useRunsStore = defineStore('runs', () => {
   }
 
   /**
+   * Start a run (backtest/paper/live). Returns the created run id or null.
+   */
+  async function startRun(payload: StartRunRequest): Promise<number | null> {
+    const toast = useToastStore()
+    try {
+      const res = await runsApi.startRun(payload)
+      toast.success(`Run #${res.run_id} démarré`)
+      await fetchRuns()
+      await fetchActiveRuns()
+      return res.run_id
+    } catch (err: any) {
+      const detail = err.response?.data?.detail || 'Erreur lors du démarrage du run'
+      // Live runs require a fresh OIDC step-up: redirect to re-authenticate, then
+      // the operator retries (the grant cookie is set on return).
+      if (err.response?.status === 403 && detail === 'step_up_required') {
+        toast.success('Ré-authentification requise pour lancer un run live…')
+        useAuthStore().redirectToStepUp('/runs')
+        return null
+      }
+      toast.error(typeof detail === 'string' ? detail : 'Paramètres invalides')
+      return null
+    }
+  }
+
+  /**
+   * Request a graceful stop of a run.
+   */
+  async function stopRun(runId: number): Promise<boolean> {
+    const toast = useToastStore()
+    try {
+      await runsApi.stopRun(runId)
+      toast.success(`Arrêt du run #${runId} demandé`)
+      await fetchRuns()
+      await fetchActiveRuns()
+      return true
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || "Erreur lors de l'arrêt du run")
+      return false
+    }
+  }
+
+  /**
+   * Force-kill a run (backtest only).
+   */
+  async function killRun(runId: number): Promise<boolean> {
+    const toast = useToastStore()
+    try {
+      await runsApi.killRun(runId)
+      toast.success(`Run #${runId} tué`)
+      await fetchRuns()
+      await fetchActiveRuns()
+      return true
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || 'Erreur lors du kill du run')
+      return false
+    }
+  }
+
+  /**
+   * Fetch the last log lines for a run (snapshot).
+   */
+  async function fetchLogs(runId: number): Promise<RunLogsResponse | null> {
+    try {
+      return await runsApi.getRunLogs(runId)
+    } catch (err) {
+      console.error('Failed to fetch run logs:', err)
+      return null
+    }
+  }
+
+  /**
    * Go to next page
    */
   function nextPage(): void {
@@ -148,6 +221,10 @@ export const useRunsStore = defineStore('runs', () => {
     fetchActiveRuns,
     getRun,
     updateStatus,
+    startRun,
+    stopRun,
+    killRun,
+    fetchLogs,
     nextPage,
     previousPage,
     startPolling,

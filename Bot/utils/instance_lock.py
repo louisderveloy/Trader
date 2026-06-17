@@ -2,9 +2,10 @@
 """
 Instance Lock Manager - PostgreSQL Advisory Lock Implementation
 
-Ensures only ONE instance of each trading mode can run at a time:
+Ensures only ONE instance of each mode can run at a time:
 - Only one paper trading instance globally
 - Only one live trading instance globally (testnet and mainnet share the same lock)
+- Only one optimization instance globally (independent lock; may run alongside trading)
 
 Uses PostgreSQL advisory locks for reliable, crash-safe instance locking.
 Locks are automatically released when the database connection closes.
@@ -32,6 +33,7 @@ class InstanceLockManager:
     Lock keys are deterministic integers derived from mode names:
     - 'paper': 1827364950
     - 'live': 1923847563
+    - 'optimization': 1456372819
 
     IMPORTANT: This class requires a persistent connection to be held for the
     duration of the lock. Use acquire_lock_connection() to get a connection
@@ -43,6 +45,7 @@ class InstanceLockManager:
     LOCK_KEYS = {
         'paper': 1827364950,  # hash('paper_trading') & 0x7FFFFFFF
         'live': 1923847563,  # hash('live_trading') & 0x7FFFFFFF
+        'optimization': 1456372819,  # hash('optimization') & 0x7FFFFFFF
     }
 
     @staticmethod
@@ -51,7 +54,7 @@ class InstanceLockManager:
         Get the integer lock key for a mode.
 
         Args:
-            mode: Trading mode ('paper' or 'live')
+            mode: Mode ('paper', 'live' or 'optimization')
 
         Returns:
             Integer lock key
@@ -60,7 +63,9 @@ class InstanceLockManager:
             ValueError: If mode is invalid
         """
         if mode not in InstanceLockManager.LOCK_KEYS:
-            raise ValueError(f"Invalid mode: {mode}. Must be 'paper' or 'live'")
+            raise ValueError(
+                f"Invalid mode: {mode}. Must be 'paper', 'live' or 'optimization'"
+            )
         return InstanceLockManager.LOCK_KEYS[mode]
 
     @staticmethod
@@ -176,7 +181,9 @@ class InstanceLockManager:
         return held
 
     @staticmethod
-    async def cleanup_stale_runs(db_pool: asyncpg.Pool, mode: str) -> int:
+    async def cleanup_stale_runs(
+        db_pool: asyncpg.Pool, mode: str, exclude_run_id: Optional[int] = None
+    ) -> int:
         """
         Mark stale 'running'/'pending' runs of the given mode as 'cancelled'.
 
@@ -187,6 +194,10 @@ class InstanceLockManager:
         Args:
             db_pool: Database connection pool
             mode: Trading mode ('paper' or 'live')
+            exclude_run_id: A run id to NEVER cancel. In the supervisor flow the bot
+                is launched to adopt a freshly pre-created PENDING run; that run must
+                be excluded here, otherwise we would cancel the very run we are about
+                to adopt (and _create_run_record would then fail to adopt it).
 
         Returns:
             Number of stale runs cleaned up
@@ -211,10 +222,12 @@ class InstanceLockManager:
                     result = COALESCE(result, $2::jsonb)
                 WHERE run_type = $3
                   AND status IN ('running', 'pending')
+                  AND ($4::int IS NULL OR id <> $4)
                 """,
                 now,
                 interrupted_result,
                 mode,
+                exclude_run_id,
             )
 
         count = int(result.split()[-1]) if result else 0
@@ -244,11 +257,13 @@ class InstanceLockManager:
             ValueError: If mode is invalid
             asyncpg.PostgresError: If database query fails
         """
-        if mode not in ['paper', 'live']:
-            raise ValueError(f"Invalid mode: {mode}. Must be 'paper' or 'live'")
+        if mode not in ['paper', 'live', 'optimization']:
+            raise ValueError(
+                f"Invalid mode: {mode}. Must be 'paper', 'live' or 'optimization'"
+            )
 
         # Query for runs with matching run_type and status='running'
-        # run_type is 'paper' for paper mode, 'live' for live mode
+        # run_type matches the mode name ('paper'/'live'/'optimization')
         query = """
             SELECT
                 id,

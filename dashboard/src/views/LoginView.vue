@@ -11,8 +11,22 @@
           </p>
         </div>
 
-        <!-- Login form -->
-        <form @submit.prevent="handleLogin" class="mt-8 space-y-6">
+        <!-- OIDC mode: redirect to Authelia (no password form in the dashboard) -->
+        <div v-if="authStore.oidcMode" class="mt-8 space-y-6">
+          <button
+              type="button"
+              @click="handleOidcLogin"
+              class="w-full flex justify-center items-center py-2.5 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+          >
+            Se connecter avec Authelia
+          </button>
+          <p class="text-center text-sm text-gray-500">
+            Vous serez redirigé vers le fournisseur d'authentification.
+          </p>
+        </div>
+
+        <!-- Local mode: built-in password form (dev only) -->
+        <form v-else @submit.prevent="handleLogin" class="mt-8 space-y-6">
           <!-- Username field -->
           <div>
             <label for="username" class="block text-sm font-medium text-gray-700">
@@ -59,8 +73,8 @@
           </button>
         </form>
 
-        <!-- Info -->
-        <div class="mt-6 text-center text-sm text-gray-500">
+        <!-- Info (local/dev only) -->
+        <div v-if="!authStore.oidcMode" class="mt-6 text-center text-sm text-gray-500">
           <p>Utilisateur par défaut: admin / admin</p>
           <p class="mt-1 text-xs">(configurable dans .env)</p>
         </div>
@@ -91,6 +105,12 @@ async function handleLogin() {
     const redirect = (route.query.redirect as string) || '/'
     router.push(redirect)
   }
+}
+
+/** OIDC mode: full-page redirect to the API, which redirects to Authelia. */
+function handleOidcLogin() {
+  const redirect = (route.query.redirect as string) || '/'
+  authStore.loginRedirect(redirect)
 }
 
 // Initialize auth store (fetch user if token exists)

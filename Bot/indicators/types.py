@@ -42,9 +42,13 @@ class IndicatorResult:
     Attributes:
         values: Dictionary of calculated indicator values (e.g., {"ema_50": 42000.5, "ema_200": 41000.2})
         metadata: Optional metadata about the calculation (e.g., {"insufficient_data": True})
+        signal: Optional normalized signal in [-1, 1]. Populated by compute_all_indicators()
+                (via the indicator's to_signal()) so consumers like the StrategyEngine can read
+                result.signal.value directly without recomputing.
     """
     values: Dict[str, Any]
     metadata: Optional[Dict[str, Any]] = None
+    signal: Optional["IndicatorSignal"] = None
 
 
 @dataclass

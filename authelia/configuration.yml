@@ -1,0 +1,176 @@
+# =============================================================================
+# Authelia configuration — OIDC provider for the Trader bot (PRODUCTION)
+# =============================================================================
+# This is a TEMPLATE. On the VPS it lives at /etc/authelia/configuration.yml and
+# is mounted read-only into the container (see docker-compose.prod.yml).
+#
+# Secrets are NOT in this file — they are injected as environment variables using
+# Authelia's AUTHELIA_* mapping (set the values in .env on the VPS):
+#   AUTHELIA_SESSION_SECRET                                  random ≥64 chars
+#   AUTHELIA_STORAGE_ENCRYPTION_KEY                          random ≥64 chars
+#   AUTHELIA_STORAGE_POSTGRES_USERNAME   (= ${POSTGRES_USER})
+#   AUTHELIA_STORAGE_POSTGRES_PASSWORD   (= ${POSTGRES_PASSWORD})
+#   AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET   random ≥64 chars
+#   AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET             random ≥64 chars
+#
+# The OIDC id_token signing key is NOT an environment variable (it has no _FILE
+# mapping — AUTHELIA_..._JWKS_0_KEY_FILE is ignored). It is loaded from the mounted
+# file /secrets/oidc.issuer.key by the `template` config filter, which is enabled with
+# `X_AUTHELIA_CONFIG_FILTERS: template` (see docker-compose.prod.yml). See `jwks:` below.
+#
+# -----------------------------------------------------------------------------
+# How to generate every secret / hash / key used by this deployment
+# -----------------------------------------------------------------------------
+# 1) Random secrets (SESSION_SECRET, STORAGE_ENCRYPTION_KEY, JWT_SECRET,
+#    OIDC_HMAC_SECRET). Any high-entropy string ≥64 chars works:
+#      docker run --rm authelia/authelia:4.39 authelia crypto rand --length 64 --charset alphanumeric
+#    (or:  openssl rand -hex 32 )
+#
+# 2) OIDC client_secret HASH (the `client_secret:` field further down). This is a
+#    PBKDF2-SHA512 digest of the PLAINTEXT secret the API uses — NOT an HMAC, so
+#    `openssl ... --hmac` will not produce a valid value:
+#      docker run --rm authelia/authelia:4.39 \
+#        authelia crypto hash generate pbkdf2 --variant sha512 --password 'YOUR_PLAINTEXT_CLIENT_SECRET'
+#    Put the PLAINTEXT in .env (AUTHELIA_OIDC_CLIENT_SECRET, used by the API) and
+#    the printed "Digest:" value (starts with $pbkdf2-sha512$) in `client_secret:`.
+#
+# 3) RSA issuer key (signs id_tokens, RS256). Generate the private key, mount it at
+#    /secrets/oidc.issuer.key, and load it via the `template` filter (see `jwks:` below):
+#      docker run --rm -v "$PWD:/keys" authelia/authelia:4.39 \
+#        authelia crypto pair rsa generate --directory /keys
+#    This writes private.pem (+ public.pem); rename private.pem -> oidc.issuer.key.
+#
+# 4) users_database.yml password hashes (argon2): see authelia/users_database.example.yml.
+#      docker run --rm authelia/authelia:4.39 \
+#        authelia crypto hash generate argon2 --password 'USER_PLAINTEXT_PASSWORD'
+# =============================================================================
+
+theme: 'light'
+
+server:
+  address: 'tcp://0.0.0.0:9091'
+
+log:
+  level: 'info'
+  format: 'json'
+
+# ------------------------------------------------------------------ users
+authentication_backend:
+  password_reset:
+    disable: true
+  file:
+    path: '/config/users_database.yml'
+    password:
+      algorithm: 'argon2'
+
+# ------------------------------------------------------------------ access control
+# Authelia here is a pure OIDC provider (no Traefik forward-auth on the app).
+# Any user in the database may authenticate (one_factor); the API performs the
+# group-based authorization (admins / viewers).
+access_control:
+  default_policy: 'one_factor'
+
+# ------------------------------------------------------------------ session
+session:
+  name: 'authelia_session'
+  cookies:
+    - domain: 'trader.derveloy.eu'
+      authelia_url: 'https://auth.trader.derveloy.eu'
+      default_redirection_url: 'https://trader.derveloy.eu'
+      expiration: '1h'
+      inactivity: '5m'
+
+# ------------------------------------------------------------------ storage / notifier
+# Storage = the SAME PostgreSQL server as the rest of the project (service
+# `postgres` on the trader-network). Authelia uses its own dedicated database
+# (`authelia`) on that server — it does NOT share the trading schema/tables.
+#
+# The `authelia` database must exist before first start (POSTGRES_DB only creates
+# the project DB). Create it once on the VPS. Run psql INSIDE the container via
+# `bash -c` and escape the dollar as \$ so POSTGRES_USER is expanded by the CONTAINER's
+# shell (where it is defined), not by your host shell (where it is not). The trailing
+# `postgres` is the maintenance database to connect to while creating `authelia`:
+#   docker compose -f docker-compose.prod.yml exec postgres \
+#     bash -c "psql -U \$POSTGRES_USER postgres -c 'CREATE DATABASE authelia;'"
+#
+# Non-secret connection settings live here; credentials + encryption key are
+# injected as environment variables (see docker-compose.prod.yml):
+#   AUTHELIA_STORAGE_ENCRYPTION_KEY        (encrypts sensitive columns at rest)
+#   AUTHELIA_STORAGE_POSTGRES_USERNAME     (= ${POSTGRES_USER})
+#   AUTHELIA_STORAGE_POSTGRES_PASSWORD     (= ${POSTGRES_PASSWORD})
+storage:
+  postgres:
+    address: 'tcp://postgres:5432'
+    database: 'authelia'
+    schema: 'public'
+    timeout: '5s'
+
+notifier:
+  # Filesystem notifier (no SMTP needed for a solo deployment). Switch to `smtp`
+  # if you want real email for password reset / 2FA enrolment.
+  filesystem:
+    filename: '/data/notification.txt'
+
+# ------------------------------------------------------------------ OIDC provider
+identity_providers:
+  oidc:
+    # hmac_secret is injected via env (AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET).
+    #
+    # jwks: the RSA private key that signs id_tokens (RS256). There is NO env-var
+    # mapping for this key — AUTHELIA_..._JWKS_0_KEY_FILE is NOT recognised (Authelia
+    # logs "configuration environment variable not expected" and ignores it). Instead
+    # the key is read from the mounted file /secrets/oidc.issuer.key using the
+    # `template` config filter, which MUST be enabled via the environment variable
+    # `X_AUTHELIA_CONFIG_FILTERS: template` (set on the container in docker-compose.prod.yml).
+    # `secret` reads the file; `mindent 10 "|"` re-indents the PEM as a block scalar to
+    # match the 8-space `key:` (10 = 8 + 2); `msquote` is a no-op safeguard for multiline.
+    # At least one RS256 RSA key (≥2048 bits) is required.
+    jwks:
+      - algorithm: 'RS256'
+        use: 'sig'
+        key: {{ secret "/secrets/oidc.issuer.key" | mindent 10 "|" | msquote }}
+
+    # Claims policy: restore claims to the id_token. Since Authelia v4.39 the
+    # id_token carries only the spec-required claims (sub, …) by default; scope-
+    # requested claims otherwise live only at the UserInfo endpoint. The BFF API
+    # validates the id_token (it does not call UserInfo), so we must hydrate the
+    # claims it needs here: `groups` (→ role) and `preferred_username`/`name`/`email`
+    # (→ display name in the dashboard header).
+    claims_policies:
+      with_groups:
+        id_token:
+          - 'groups'
+          - 'preferred_username'
+          - 'name'
+          - 'email'
+
+    clients:
+      - client_id: 'trader-api'
+        client_name: 'Trader API'
+        # client_secret = a PBKDF2-SHA512 HASH (PHC string format) of the plaintext
+        # AUTHELIA_OIDC_CLIENT_SECRET that the API sends on the token endpoint.
+        # NOTE: this is NOT an HMAC — `openssl ... --hmac` will NOT work. Authelia
+        # stores client secrets hashed with PBKDF2 and compares at runtime.
+        #
+        # Generate the hash (paste the same plaintext you put in AUTHELIA_OIDC_CLIENT_SECRET):
+        #   docker run --rm authelia/authelia:4.39 \
+        #     authelia crypto hash generate pbkdf2 --variant sha512 \
+        #     --password 'YOUR_PLAINTEXT_CLIENT_SECRET'
+        # Copy the value printed after "Digest:" (starts with $pbkdf2-sha512$) below.
+        # Example output:
+        #   Digest: $pbkdf2-sha512$310000$2tkWRFHRlvZT1kSaOiqtkw$gQl3zAcAVHh0...
+        client_secret: '$pbkdf2-sha512$REPLACE_WITH_HASH_OF_AUTHELIA_OIDC_CLIENT_SECRET'
+        public: false
+        authorization_policy: 'one_factor'
+        require_pkce: true
+        pkce_challenge_method: 'S256'
+        claims_policy: 'with_groups'
+        token_endpoint_auth_method: 'client_secret_post'
+        redirect_uris:
+          - 'https://api.trader.derveloy.eu/auth/oidc/callback'
+          - 'https://api.trader.derveloy.eu/auth/oidc/stepup/callback'
+        scopes:
+          - 'openid'
+          - 'profile'
+          - 'email'
+          - 'groups'

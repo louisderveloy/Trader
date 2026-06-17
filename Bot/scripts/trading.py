@@ -35,7 +35,7 @@ import logging
 import os
 import signal
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional, Dict, Any
 from uuid import uuid4, UUID
@@ -45,6 +45,8 @@ from dotenv import load_dotenv
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import pandas as pd
 
 from exchanges import BinanceExchange
 from exchanges.exceptions import ExchangeError
@@ -56,7 +58,10 @@ from runs.orders import (
     update_order_rejected,
 )
 from runs.errors import log_exception, ErrorCategory, ErrorSeverity
+from indicators import compute_all_indicators
 from strategy.config import StrategyEngineConfig
+from strategy.engine import StrategyEngine
+from strategy.types import DecisionType, PositionState
 from notifications.discord import DiscordNotifier
 from utils.instance_lock import InstanceLockManager
 
@@ -84,17 +89,20 @@ class TradingBot:
             timeframe: str,
             mode: str,
             testnet: bool,
-            initial_capital: Decimal = Decimal("10000")
+            initial_capital: Decimal = Decimal("1000"),  # Initial capital for paper trading.
+            run_id: Optional[int] = None,
     ):
         """
         Initialize trading bot.
 
         Args:
-            symbol: Trading symbol (e.g., BTCUSDT)
+            symbol: Trading symbol (e.g., BTCUSDC)
             timeframe: Candle timeframe (e.g., 15m)
             mode: Trading mode ('paper' or 'live')
             testnet: Whether to use testnet
             initial_capital: Initial capital for paper trading
+            run_id: Pre-created PENDING run to adopt (dashboard supervisor); when
+                None the bot creates its own run record (CLI behaviour).
         """
         self.symbol = symbol
         self.timeframe = timeframe
@@ -108,13 +116,17 @@ class TradingBot:
         self.discord_notifier: Optional[DiscordNotifier] = None
 
         # State
-        self.run_id: Optional[int] = None  # Set when run record is created
+        # When provided, the bot adopts this existing PENDING run instead of
+        # creating a new one (see _create_run_record).
+        self.run_id: Optional[int] = run_id
         self.capital = initial_capital
         self.position: Optional[Dict[str, Any]] = None  # Current position
         self.weights: Dict[str, float] = {}
         self.weights_set_id: Optional[UUID] = None  # Active weights set ID for score logging
         self.is_running = False
         self._stop_called = False  # Guards against double-stop
+        self._run_adopted = False  # True once we own the run row (adopted or created)
+        self._fatal_error: Optional[Exception] = None  # set if start() aborts
         self.lock_connection: Optional[asyncpg.Connection] = None  # Connection holding instance lock
         self.config_listener_conn: Optional[asyncpg.Connection] = None  # Dedicated connection for LISTEN
         self.config_listener_task: Optional[asyncio.Task] = None  # Background task for config updates
@@ -123,11 +135,15 @@ class TradingBot:
         self.config: Optional[StrategyEngineConfig] = None
         self.config_id: Optional[UUID] = None  # Database config ID for score logging
 
-        # Tracking
+        # Strategy engine — owns scoring, anti-repaint confirmation, threshold
+        # checks, risk quotas, sizing and SL/TP level computation. The trading
+        # loop only executes its decisions and monitors SL/TP price levels.
+        self.engine: Optional[StrategyEngine] = None
+
+        # Tracking (informational only; the engine's RiskManager is authoritative
+        # for the daily-quota / cooldown gating, sourced from the trades table)
         self.trades_today = 0
         self.last_trade_time: Optional[datetime] = None
-        self.confirmation_count = 0
-        self.pending_signal: Optional[str] = None
         self.pending_order: Optional[Dict[str, Any]] = None  # Track pending entry order
 
     async def start(self):
@@ -168,13 +184,22 @@ class TradingBot:
             # Advisory lock acquired — we are the sole instance.
             # Clean up any runs left in running/pending state by a previous crash or
             # container kill (SIGKILL leaves no time for graceful DB cleanup).
-            await InstanceLockManager.cleanup_stale_runs(self.db_pool, self.mode)
+            # Exclude the run we were launched to adopt — it is legitimately
+            # 'pending' and must survive this zombie cleanup.
+            await InstanceLockManager.cleanup_stale_runs(
+                self.db_pool, self.mode, exclude_run_id=self.run_id
+            )
 
             await self._load_config()
             await self._init_exchange()
             await self._init_discord()
             await self._load_weights()
             await self._create_run_record()
+            # We now own this run row (adopted a pending run, or created a new one).
+            self._run_adopted = True
+
+            # Initialize the strategy engine (needs config + run_id + db_pool)
+            self._init_engine()
 
             # Start config update listener (non-blocking background task)
             await self._start_config_listener()
@@ -213,6 +238,7 @@ class TradingBot:
 
         except Exception as e:
             logger.error(f"Fatal error: {e}", exc_info=True)
+            self._fatal_error = e
             raise
         finally:
             await self.stop()
@@ -231,10 +257,19 @@ class TradingBot:
         if self.db_pool and self.run_id:
             await self._ensure_all_positions_closed()
 
-        # Update run status
-        if self.db_pool and self.run_id:
+        # Update run status — only for a run we actually adopted/created. If start()
+        # aborted before adoption (e.g. lock held, adopt failed) we must NOT touch the
+        # row: the supervisor will mark it failed, and clobbering it here is what
+        # previously recorded never-started runs as 'completed'.
+        if self.db_pool and self.run_id and self._run_adopted:
+            if shutdown_requested:
+                final_status = "cancelled"
+            elif self._fatal_error is not None:
+                final_status = "failed"
+            else:
+                final_status = "completed"
             try:
-                await self._update_run_status("cancelled" if shutdown_requested else "completed")
+                await self._update_run_status(final_status)
             except Exception as e:
                 logger.error(f"Failed to update run status: {e}")
 
@@ -387,62 +422,6 @@ class TradingBot:
                 self.weights_set_id = None
                 logger.warning("No active weights set, using defaults")
 
-    async def _log_score(
-            self,
-            weighted_score: float,
-            signals: Dict[str, float],
-            current_time: datetime,
-            order_id: Optional[UUID] = None
-    ):
-        """
-        Log score calculation to score_logs table for statistical analysis.
-
-        Args:
-            weighted_score: Calculated weighted score
-            signals: Dictionary of indicator signals
-            current_time: Timestamp of calculation
-            order_id: Optional order ID if score resulted in an order
-        """
-        # Skip logging if we don't have all required IDs
-        if self.run_id is None or self.config_id is None or self.weights_set_id is None:
-            logger.debug(
-                f"Skipping score logging - missing IDs: "
-                f"run_id={self.run_id}, config_id={self.config_id}, weights_set_id={self.weights_set_id}"
-            )
-            return
-
-        # Build indicators snapshot
-        indicators_snapshot = {
-            "timestamp": current_time.isoformat(),
-            "signals": signals,
-            "weights": self.weights
-        }
-
-        async with self.db_pool.acquire() as conn:
-            try:
-                query = """
-                    INSERT INTO score_logs (
-                        run_id, config_id, weights_set_id, order_id,
-                        time, symbol, weighted_score, indicators_snapshot
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                    RETURNING id
-                """
-                score_log_id = await conn.fetchval(
-                    query,
-                    self.run_id,
-                    self.config_id,
-                    self.weights_set_id,
-                    order_id,
-                    current_time,
-                    self.symbol,
-                    Decimal(str(weighted_score)),
-                    json.dumps(indicators_snapshot)
-                )
-                logger.debug(f"Score logged to database (id: {score_log_id})")
-            except Exception as e:
-                logger.error(f"Failed to log score to database: {e}")
-
     async def _create_run_record(self):
         """Create run record in database."""
         environment = "testnet" if self.testnet else "live"
@@ -460,6 +439,38 @@ class TradingBot:
             "weights": self.weights,
             "initial_capital": str(self.initial_capital),
         })
+
+        if self.run_id is not None:
+            # Adopt a pre-created PENDING run (dashboard supervisor flow): flip it
+            # to RUNNING and enrich its snapshot. Fail loudly if it's not adoptable
+            # (already running, terminal, or missing) — never silently create one.
+            adopt_query = """
+                UPDATE runs
+                SET status = 'running',
+                    environment = $2,
+                    symbol = $3,
+                    timeframe = $4,
+                    config_snapshot = $5,
+                    started_at = COALESCE(started_at, $6)
+                WHERE id = $1 AND status = 'pending'
+                RETURNING id
+            """
+            async with self.db_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    adopt_query,
+                    self.run_id,
+                    environment,
+                    self.symbol,
+                    self.timeframe,
+                    json.dumps(config_snapshot),
+                    now,
+                )
+            if not row:
+                raise RuntimeError(
+                    f"Cannot adopt run {self.run_id}: not found or not in 'pending' state"
+                )
+            logger.info(f"Adopted pre-created run record: {self.run_id}")
+            return
 
         query = """
             INSERT INTO runs (
@@ -566,7 +577,15 @@ class TradingBot:
                 sleep_remaining -= sleep_chunk
 
     async def _trading_iteration(self):
-        """Single iteration of the trading loop."""
+        """Single iteration of the trading loop.
+
+        Decision-making (scoring, anti-repaint confirmation, thresholds, risk
+        quotas, sizing, SL/TP level computation) is delegated to the
+        StrategyEngine. This loop only:
+          1. Fetches/stores candles and computes indicator signals,
+          2. Monitors the open position's SL/TP price levels (software stop),
+          3. Executes the engine's entry/exit decisions.
+        """
         # Fetch latest candles
         candles = await self.exchange.get_candles(
             symbol=self.symbol,
@@ -581,15 +600,40 @@ class TradingBot:
         # Store latest candles in database
         await self._store_candles(candles)
 
-        # Calculate indicators and weighted score
-        signals = self._calculate_signals(candles)
-        weighted_score = self._calculate_weighted_score(signals)
-
         current_price = Decimal(str(candles[-1]["close"]))
         current_time = candles[-1]["time"]  # Already a datetime object from exchange
 
-        # Log score to database for statistical analysis
-        await self._log_score(weighted_score, signals, current_time)
+        # Check for pending order fills FIRST (skip everything else while pending)
+        if self.pending_order:
+            await self._check_pending_order(current_price)
+            return
+
+        # Compute all indicator signals via the shared aggregation helper
+        candles_df = self._candles_to_df(candles)
+        indicator_results = compute_all_indicators(candles_df)
+        signals = {name: r.signal.value for name, r in indicator_results.items()}
+
+        # Keep the engine's position view in sync with execution-layer state
+        self._sync_engine_position()
+
+        # Ask the engine for a decision (also logs score + decision snapshot).
+        # A decision-computation failure (e.g. SL/TP cannot be derived because an
+        # indicator is momentarily unavailable) is treated as a graceful skip for
+        # this iteration rather than aborting the loop.
+        total_capital = await self._get_available_capital()
+        try:
+            decision = await self.engine.make_decision(
+                candles=candles,
+                indicator_results=indicator_results,
+                current_price=current_price,
+                current_time=current_time,
+                total_capital=total_capital,
+                symbol=self.symbol,
+            )
+        except Exception as e:
+            logger.warning(f"Decision computation failed this iteration; skipping. ({e})")
+            return
+        weighted_score = decision.weighted_score
 
         # Get current balance for logging
         if self.mode == "live":
@@ -609,147 +653,216 @@ class TradingBot:
             f"{balance_str}"
         )
 
-        # Check for pending order fills FIRST
-        if self.pending_order:
-            await self._check_pending_order(current_price)
-            return  # Skip other logic while order is pending
+        # In position: SL/TP take precedence over signal exits.
+        if self.position is not None:
+            if self._has_native_stop():
+                # Live/testnet: the exchange OCO executes SL/TP. Detect fills here;
+                # only a signal exit triggers an active (software) close.
+                if await self._reconcile_native_stop(weighted_score, signals):
+                    return  # OCO resolved → position closed on the exchange
+                if decision.decision_type == DecisionType.EXIT:
+                    await self._cancel_native_stop()
+                    await self._execute_exit(current_price, "signal", weighted_score, signals)
+                return
+            # Software-monitored fallback (paper, or OCO placement failed)
+            stop_reason = self._price_stop_reason(current_price)
+            if stop_reason:
+                await self._execute_exit(current_price, stop_reason, weighted_score, signals)
+                return
+            if decision.decision_type == DecisionType.EXIT:
+                await self._execute_exit(current_price, "signal", weighted_score, signals)
+            return
 
-        # Trading logic
-        if self.position is None:
-            # Not in position - check for entry
-            await self._check_entry(weighted_score, current_price, candles, signals)
-        else:
-            # In position - check for exit
-            await self._check_exit(weighted_score, current_price, candles, signals)
+        # Flat: act on an entry decision
+        if decision.decision_type == DecisionType.ENTRY_LONG:
+            await self._execute_entry(decision, current_price, signals)
 
-    def _calculate_signals(self, candles: list) -> Dict[str, float]:
+    def _candles_to_df(self, candles: list) -> pd.DataFrame:
+        """Convert the exchange candle dicts to the indicator DataFrame schema.
+
+        Indicators expect columns [timestamp, open, high, low, close, volume];
+        the exchange returns dicts keyed by 'time'/'open'/.../'volume'.
         """
-        Calculate indicator signals from candles.
+        return pd.DataFrame({
+            "timestamp": [c["time"] for c in candles],
+            "open": [float(c["open"]) for c in candles],
+            "high": [float(c["high"]) for c in candles],
+            "low": [float(c["low"]) for c in candles],
+            "close": [float(c["close"]) for c in candles],
+            "volume": [float(c["volume"]) for c in candles],
+        })
 
-        This is a simplified inline calculation for the trading loop.
-        Returns signals normalized to [-1, 1].
+    def _sync_engine_position(self):
+        """Mirror the execution-layer position into the engine's position state."""
+        if self.position is not None:
+            self.engine.update_position_state(PositionState(
+                is_open=True,
+                symbol=self.symbol,
+                entry_price=self.position.get("entry_price"),
+                quantity=self.position.get("quantity"),
+                entry_time=self.position.get("entry_time"),
+                stop_loss_price=self.position.get("stop_loss"),
+                take_profit_price=self.position.get("take_profit"),
+            ))
+        else:
+            self.engine.update_position_state(PositionState(is_open=False))
+
+    def _price_stop_reason(self, price: Decimal) -> Optional[str]:
+        """Return 'stop_loss'/'take_profit' if the price breached a stored level.
+
+        This is the software-monitored stop (checked once per iteration). In
+        live/testnet a native exchange stop order is the primary protection;
+        this acts as a backup. Returns None if no level is breached.
         """
-        import pandas as pd
-        import numpy as np
+        if not self.position:
+            return None
+        stop_loss = self.position.get("stop_loss")
+        take_profit = self.position.get("take_profit")
+        if stop_loss is not None and price <= stop_loss:
+            return "stop_loss"
+        if take_profit is not None and price >= take_profit:
+            return "take_profit"
+        return None
 
-        # Convert to DataFrame
-        df = pd.DataFrame(candles)
-        close = df['close'].astype(float)
-        high = df['high'].astype(float)
-        low = df['low'].astype(float)
-        volume = df['volume'].astype(float)
+    def _has_native_stop(self) -> bool:
+        """True if the open position is protected by a resting exchange OCO."""
+        return bool(self.position and self.position.get("stop_order_list_id"))
 
-        signals = {}
+    async def _place_native_stop(self, entry_price, quantity, stop_loss, take_profit):
+        """Place an exchange-resident OCO (SL + TP) for a live/testnet position.
 
-        # EMA crossover
-        ema_fast = close.ewm(span=50, adjust=False).mean()
-        ema_slow = close.ewm(span=200, adjust=False).mean()
-        ema_diff = (ema_fast - ema_slow) / ema_slow * 100
-        signals["ema"] = float(np.clip(ema_diff.iloc[-1] / 5, -1, 1))
-
-        # MACD
-        ema_12 = close.ewm(span=12, adjust=False).mean()
-        ema_26 = close.ewm(span=26, adjust=False).mean()
-        macd_line = ema_12 - ema_26
-        signal_line = macd_line.ewm(span=9, adjust=False).mean()
-        histogram = macd_line - signal_line
-        hist_std = histogram.rolling(window=20).std()
-        if hist_std.iloc[-1] > 0:
-            signals["macd"] = float(np.clip(histogram.iloc[-1] / (hist_std.iloc[-1] * 2), -1, 1))
-        else:
-            signals["macd"] = 0.0
-
-        # RSI
-        delta = close.diff()
-        gain = delta.where(delta > 0, 0).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss.replace(0, np.inf)
-        rsi = 100 - (100 / (1 + rs))
-        rsi_value = rsi.iloc[-1]
-        if rsi_value > 70:
-            signals["rsi"] = -((rsi_value - 70) / 30)
-        elif rsi_value < 30:
-            signals["rsi"] = (30 - rsi_value) / 30
-        else:
-            signals["rsi"] = 0.0
-
-        # Stochastic RSI
-        rsi_min = rsi.rolling(window=14).min()
-        rsi_max = rsi.rolling(window=14).max()
-        stoch_rsi = (rsi - rsi_min) / (rsi_max - rsi_min + 1e-10)
-        stoch_k = stoch_rsi.rolling(window=3).mean() * 100
-        stoch_value = stoch_k.iloc[-1]
-        if stoch_value > 80:
-            signals["stoch_rsi"] = -((stoch_value - 80) / 20)
-        elif stoch_value < 20:
-            signals["stoch_rsi"] = (20 - stoch_value) / 20
-        else:
-            signals["stoch_rsi"] = 0.0
-
-        # Bollinger Bands
-        sma_20 = close.rolling(window=20).mean()
-        std_20 = close.rolling(window=20).std()
-        upper = sma_20 + 2 * std_20
-        lower = sma_20 - 2 * std_20
-        bb_position = (close - lower) / (upper - lower + 1e-10)
-        signals["bollinger"] = float(np.clip((0.5 - bb_position.iloc[-1]) * 2, -1, 1))
-
-        # ATR (volatility - neutral signal, used for position sizing)
-        tr = pd.concat([
-            high - low,
-            (high - close.shift()).abs(),
-            (low - close.shift()).abs()
-        ], axis=1).max(axis=1)
-        atr = tr.rolling(window=14).mean()
-        atr_pct = atr / close * 100
-        atr_percentile = atr_pct.rank(pct=True).iloc[-1]
-        signals["atr"] = float((atr_percentile - 0.5) * 2)
-
-        # OBV
-        obv = (np.sign(close.diff()) * volume).cumsum()
-        obv_fast = obv.ewm(span=10, adjust=False).mean()
-        obv_slow = obv.ewm(span=30, adjust=False).mean()
-        obv_diff = obv_fast - obv_slow
-        obv_std = obv_diff.rolling(window=20).std()
-        if obv_std.iloc[-1] > 0:
-            signals["obv"] = float(np.clip(obv_diff.iloc[-1] / (obv_std.iloc[-1] * 2), -1, 1))
-        else:
-            signals["obv"] = 0.0
-
-        # Fear & Greed (placeholder - would need external API)
-        signals["fear_greed"] = 0.0
-
-        # User indicator (placeholder - would need database lookup)
-        signals["user_indicator"] = 0.0
-
-        return signals
-
-    def _calculate_weighted_score(self, signals: Dict[str, float]) -> float:
-        """Calculate weighted score from signals."""
-        score = 0.0
-        contributions = {}
-        for indicator, signal in signals.items():
-            weight = self.weights.get(indicator, 0.0)
-            contribution = signal * weight
-            contributions[indicator] = contribution
-            score += contribution
-
-        # Log detailed breakdown
-        logger.info("=" * 60)
-        logger.info("SCORE CALCULATION BREAKDOWN:")
-        for indicator in sorted(contributions.keys()):
-            signal_val = signals[indicator]
-            weight_val = self.weights.get(indicator, 0.0)
-            contrib_val = contributions[indicator]
+        Paper mode is software-monitored only. On any failure we leave
+        stop_order_list_id=None so the software stop (_price_stop_reason) takes over.
+        """
+        if self.mode != "live" or not self.position:
+            return
+        try:
+            # Stop-limit a touch below the trigger to improve the odds it fills
+            stop_limit = stop_loss * Decimal("0.999")
+            oco = await self.exchange.place_oco_sell_order(
+                symbol=self.symbol,
+                quantity=quantity,
+                take_profit_price=take_profit,
+                stop_price=stop_loss,
+                stop_limit_price=stop_limit,
+            )
+            self.position["stop_order_list_id"] = oco.get("order_list_id")
+            self.position["stop_leg_order_ids"] = oco.get("leg_order_ids", [])
             logger.info(
-                f"  {indicator:15s}: signal={signal_val:+.3f}, weight={weight_val:.3f}, contrib={contrib_val:+.4f}")
-        logger.info(f"Raw score (before clamp): {score:+.4f}")
+                f"Native OCO stop placed: list_id={oco.get('order_list_id')} "
+                f"legs={oco.get('leg_order_ids')} (SL {stop_loss:.2f} / TP {take_profit:.2f})"
+            )
+        except Exception as e:
+            logger.error(f"Failed to place native OCO stop; falling back to software monitoring: {e}")
+            await log_exception(
+                self.db_pool, e,
+                severity=ErrorSeverity.HIGH,
+                category=ErrorCategory.ORDER,
+                context={"symbol": self.symbol, "phase": "place_oco"},
+                run_id=self.run_id,
+            )
+            self.position["stop_order_list_id"] = None
+            self.position["stop_leg_order_ids"] = []
 
-        clamped_score = max(-1.0, min(1.0, score))
-        logger.info(f"Final score (after clamp): {clamped_score:+.4f}")
+    async def _cancel_native_stop(self):
+        """Cancel the resting OCO (best-effort, idempotent) before an active exit."""
+        if not self._has_native_stop():
+            return
+        for leg_id in (self.position.get("stop_leg_order_ids") or []):
+            try:
+                await self.exchange.cancel_oco_order(self.symbol, leg_id)
+                break  # cancelling one leg cancels the whole OCO pair
+            except Exception as e:
+                logger.warning(f"OCO cancel via leg {leg_id} failed (may already be gone): {e}")
+        self.position["stop_order_list_id"] = None
+        self.position["stop_leg_order_ids"] = []
+
+    async def _reconcile_native_stop(self, score: float, signals: Dict[str, float]) -> bool:
+        """Detect a server-side OCO fill for a live position and close the trade.
+
+        Returns True if the OCO has resolved and the position has been closed
+        (caller stops processing this iteration); False if the OCO is still resting
+        (exchange protection active — no software action needed).
+        """
+        if not self._has_native_stop():
+            return False
+        legs = self.position.get("stop_leg_order_ids") or []
+        try:
+            open_orders = await self.exchange.get_open_orders(self.symbol)
+            open_ids = {str(o.get("order_id")) for o in open_orders}
+        except Exception as e:
+            # Don't software-sell while a native OCO may still be live on the exchange
+            logger.error(f"Failed to poll open orders for native stop; holding position: {e}")
+            return True
+        if any(str(leg) in open_ids for leg in legs):
+            return False  # still resting
+
+        # OCO no longer open → find the filled leg to learn the exit price + reason
+        filled_price = None
+        exit_reason = "stop_loss"
+        for leg_id in legs:
+            try:
+                st = await self.exchange.get_order_status(self.symbol, leg_id)
+            except Exception:
+                continue
+            if st.get("status") == "filled":
+                typ = (st.get("type") or "").lower()
+                exit_reason = "stop_loss" if "stop" in typ else "take_profit"
+                filled_price = st.get("filled_price")
+                break
+
+        if filled_price is None:
+            logger.warning("Native OCO no longer open but no filled leg found; reverting to software stop.")
+            self.position["stop_order_list_id"] = None
+            self.position["stop_leg_order_ids"] = []
+            return False
+
+        await self._finalize_native_exit(Decimal(str(filled_price)), exit_reason, score, signals)
+        return True
+
+    async def _finalize_native_exit(self, filled_price: Decimal, exit_reason: str,
+                                    score: float, signals: Dict[str, float]):
+        """Record a position closed by the exchange-side OCO (no new order placed)."""
+        entry_price = self.position["entry_price"]
+        quantity = self.position["quantity"]
+        entry_commission = self.position["entry_commission"]
+
+        exit_commission = quantity * filled_price * Decimal("0.001")
+        gross_pnl = (filled_price - entry_price) * quantity
+        net_pnl = gross_pnl - entry_commission - exit_commission
+        net_pnl_pct = (net_pnl / (entry_price * quantity)) * 100
+        self.capital += net_pnl
+
+        await self._log_trade(
+            trade_id=self.position["trade_id"],
+            exit_price=filled_price,
+            exit_reason=exit_reason,
+            net_pnl=net_pnl,
+            net_pnl_pct=float(net_pnl_pct),
+            exit_score=score,
+            exit_signals=signals,
+            exit_order_id=None,
+            exit_commission=exit_commission,
+        )
+
+        logger.info("=" * 60)
+        logger.info(f"POSITION CLOSED (native OCO: {exit_reason})")
+        logger.info(f"Entry: {entry_price:.2f} | Exit: {filled_price:.2f} | "
+                    f"P&L: {net_pnl:.2f} USDT ({net_pnl_pct:+.2f}%)")
         logger.info("=" * 60)
 
-        return clamped_score
+        if self.discord_notifier:
+            try:
+                await self.discord_notifier.notify_trade_closed(
+                    symbol=self.symbol, side="long", entry_price=entry_price,
+                    exit_price=filled_price, pnl=net_pnl, pnl_pct=float(net_pnl_pct),
+                    reason=exit_reason,
+                )
+            except Exception as e:
+                logger.error(f"Failed to send Discord trade completion notification: {e}")
+
+        self.last_trade_time = datetime.now(timezone.utc)
+        self.position = None
 
     async def _check_pending_order(self, current_price: Decimal):
         """
@@ -876,6 +989,8 @@ class TradingBot:
                     quantity=quantity,
                     entry_time=entry_time,
                     entry_order_id=order_id,
+                    stop_loss_price=stop_loss,
+                    take_profit_price=take_profit,
                 )
 
                 self.position = {
@@ -889,7 +1004,10 @@ class TradingBot:
                     "order_id": exchange_order_id,
                     "entry_order_id": order_id,
                     "entry_score": entry_score,
-                    "entry_signals": entry_signals
+                    "entry_signals": entry_signals,
+                    # Native exchange OCO (live only); None ⇒ software-monitored fallback
+                    "stop_order_list_id": None,
+                    "stop_leg_order_ids": [],
                 }
 
                 logger.info("=" * 60)
@@ -898,6 +1016,11 @@ class TradingBot:
                 logger.info(f"SL: {stop_loss:.2f} | TP: {take_profit:.2f}")
                 logger.info(f"Trade ID: {trade_id}")
                 logger.info("=" * 60)
+
+                # Place an exchange-resident OCO (SL + TP) for live/testnet so the
+                # position is protected even if the bot process goes down. Paper
+                # mode and any failure here fall back to software monitoring.
+                await self._place_native_stop(filled_price, quantity, stop_loss, take_profit)
 
                 # Send Discord notification for trade opened
                 if self.discord_notifier:
@@ -977,82 +1100,20 @@ class TradingBot:
             # Clear pending order
             self.pending_order = None
 
-    async def _check_entry(
-            self,
-            score: float,
-            price: Decimal,
-            candles: list,
-            signals: Dict[str, float]
-    ):
-        """Check for entry conditions and execute if met."""
-        # Check daily trade limit
-        if self.trades_today >= self.config.risk.max_trades_per_day:
-            return
+    def _init_engine(self):
+        """Instantiate the StrategyEngine once config, run_id and db_pool are ready.
 
-        # Check cooldown
-        if self.last_trade_time:
-            cooldown_seconds = self.config.cooldown.after_trade_seconds
-            cooldown_end = self.last_trade_time + timedelta(seconds=cooldown_seconds)
-            if datetime.now(timezone.utc) < cooldown_end:
-                return
-
-        # Check entry threshold
-        if score >= self.config.strategy.entry_threshold:
-            # Anti-repainting confirmation
-            if self.pending_signal == "entry":
-                self.confirmation_count += 1
-            else:
-                self.pending_signal = "entry"
-                self.confirmation_count = 1
-
-            if self.confirmation_count >= self.config.strategy.confirmation_candles:
-                # Execute entry
-                await self._execute_entry(price, score, signals)
-                self.pending_signal = None
-                self.confirmation_count = 0
-        else:
-            self.pending_signal = None
-            self.confirmation_count = 0
-
-    async def _check_exit(
-            self,
-            score: float,
-            price: Decimal,
-            candles: list,
-            signals: Dict[str, float]
-    ):
-        """Check for exit conditions and execute if met."""
-        if not self.position:
-            return
-
-        exit_reason = None
-
-        # Check stop-loss
-        if self.position.get("stop_loss") and price <= self.position["stop_loss"]:
-            exit_reason = "stop_loss"
-
-        # Check take-profit
-        elif self.position.get("take_profit") and price >= self.position["take_profit"]:
-            exit_reason = "take_profit"
-
-        # Check signal-based exit
-        elif score <= self.config.strategy.exit_threshold:
-            if self.pending_signal == "exit":
-                self.confirmation_count += 1
-            else:
-                self.pending_signal = "exit"
-                self.confirmation_count = 1
-
-            if self.confirmation_count >= self.config.strategy.confirmation_candles:
-                exit_reason = "signal"
-
-        if exit_reason:
-            await self._execute_exit(price, exit_reason, score, signals)
-            self.pending_signal = None
-            self.confirmation_count = 0
-        elif self.pending_signal != "exit":
-            self.pending_signal = None
-            self.confirmation_count = 0
+        The engine owns weighted scoring, anti-repaint confirmation, entry/exit
+        threshold checks, risk quotas (daily trades / cooldown / exposure, sourced
+        from the trades table), position sizing and SL/TP level computation.
+        """
+        self.engine = StrategyEngine(
+            config=self.config,
+            run_id=self.run_id,
+            db_pool=self.db_pool,
+            config_id=self.config_id,
+        )
+        logger.info("Strategy engine wired into trading loop")
 
     async def _get_available_capital(self) -> Decimal:
         """
@@ -1089,25 +1150,37 @@ class TradingBot:
 
     async def _execute_entry(
             self,
+            decision,
             price: Decimal,
-            score: float,
             signals: Dict[str, float]
     ):
-        """Execute entry order."""
+        """Execute entry order using the engine's sizing and SL/TP levels.
+
+        Sizing and stop-loss/take-profit come from the StrategyEngine decision
+        (ATR-based or fixed per the active config) — no longer hardcoded.
+        """
+        score = float(decision.weighted_score)
+
         # Get available capital (actual balance in live mode, simulated in paper mode)
         available_capital = await self._get_available_capital()
-
         if available_capital <= 0:
             logger.warning(f"No available capital (balance: {available_capital} USDT). Skipping entry.")
             return
 
-        # Calculate position size: use 95% of available capital
-        position_size = available_capital * Decimal("0.95")
-        quantity = position_size / price
+        # Position size comes from the engine; clamp so we never order more than
+        # the available capital allows (95% buffer for fees/slippage).
+        quantity = decision.position_size_qty
+        if quantity is None or quantity <= 0:
+            logger.warning("Engine returned no position size; skipping entry.")
+            return
+        order_value = quantity * price
+        max_value = available_capital * Decimal("0.95")
+        if order_value > max_value:
+            quantity = max_value / price
+            order_value = quantity * price
 
         # Validate minimum order size
         min_notional = Decimal("10")  # Binance minimum ~10 USDT per order
-        order_value = quantity * price
         if order_value < min_notional:
             logger.warning(
                 f"Order value {order_value:.2f} USDT below minimum {min_notional} USDT. "
@@ -1115,16 +1188,18 @@ class TradingBot:
             )
             return
 
-        # Calculate stop-loss and take-profit (simplified: fixed percentages)
-        stop_loss = price * Decimal("0.98")  # 2% stop-loss
-        take_profit = price * Decimal("1.04")  # 4% take-profit
+        # Stop-loss / take-profit computed by the engine (ATR or fixed per config)
+        stop_loss = decision.stop_loss_price
+        take_profit = decision.take_profit_price
+        if stop_loss is None or take_profit is None:
+            logger.warning("Engine decision missing SL/TP levels; skipping entry.")
+            return
 
         logger.info("=" * 60)
         logger.info(f"ENTRY SIGNAL - Score: {score:.3f}")
         logger.info(f"Available capital: {available_capital:.2f} USDT")
-        logger.info(f"Position size: {position_size:.2f} USDT (95% of capital)")
-        logger.info(f"Price: {price:.2f} | Quantity: {quantity:.6f}")
-        logger.info(f"Order value: {order_value:.2f} USDT")
+        logger.info(f"Position size: {order_value:.2f} USDT | Quantity: {quantity:.6f}")
+        logger.info(f"Price: {price:.2f}")
         logger.info(f"Stop-loss: {stop_loss:.2f} | Take-profit: {take_profit:.2f}")
         logger.info("=" * 60)
 
@@ -1207,9 +1282,13 @@ class TradingBot:
             score: float,
             signals: Dict[str, float]
     ):
-        """Execute exit order."""
+        """Execute exit order (places a new market sell)."""
         if not self.position:
             return
+
+        # Never leave a resting OCO behind when we actively market-sell, or the
+        # exchange could double-sell once the OCO also triggers.
+        await self._cancel_native_stop()
 
         quantity = self.position["quantity"]
         entry_price = self.position["entry_price"]
@@ -1488,9 +1567,12 @@ class TradingBot:
             quantity: Decimal,
             entry_time: datetime,
             entry_order_id: UUID,
+            stop_loss_price: Optional[Decimal] = None,
+            take_profit_price: Optional[Decimal] = None,
     ) -> UUID:
         """
         Create trade entry in database when position opens.
+        Persists the stop-loss / take-profit levels the position was opened with.
         Returns trade_id to track the ongoing trade.
         """
         # Calculate entry commission (0.1% of entry value)
@@ -1500,8 +1582,9 @@ class TradingBot:
             INSERT INTO trades (
                 run_id, symbol, side, entry_order_id,
                 opened_at, entry_price, quantity,
-                commission_total, status
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                commission_total, status,
+                stop_loss_price, take_profit_price
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING id
         """
 
@@ -1517,6 +1600,8 @@ class TradingBot:
                 quantity,
                 entry_commission,
                 "open",
+                stop_loss_price,
+                take_profit_price,
             )
 
         trade_id = row["id"]
@@ -1564,8 +1649,9 @@ class TradingBot:
                 pnl = $5,
                 pnl_percent = $6,
                 commission_total = commission_total + $7,
+                exit_reason = $8,
                 status = 'closed'
-            WHERE id = $8
+            WHERE id = $9
         """
 
         async with self.db_pool.acquire() as conn:
@@ -1578,6 +1664,7 @@ class TradingBot:
                 net_pnl,
                 net_pnl_pct,
                 exit_commission,
+                exit_reason,
                 trade_id,
             )
 
@@ -1691,6 +1778,13 @@ class TradingBot:
             self.config_id = new_config_id
             logger.info(f"  New config ID: {new_config_id}")
 
+            # Propagate to the strategy engine, otherwise it keeps its
+            # construction-time config and silently ignores the new thresholds,
+            # sizing, stop-loss and risk/cooldown settings (the engine owns the
+            # entry/exit decision, so a stale config here = decisions never change).
+            if self.engine is not None:
+                self.engine.update_config(new_config, new_config_id)
+
             # Reload weights (they might have changed too)
             await self._load_weights()
 
@@ -1726,7 +1820,8 @@ async def run_trading_loop(
         timeframe: str,
         mode: str,
         testnet: bool,
-        verbose: bool = False
+        verbose: bool = False,
+        run_id: Optional[int] = None,
 ):
     """
     Main entry point for trading loop.
@@ -1737,6 +1832,7 @@ async def run_trading_loop(
         mode: 'paper' or 'live'
         testnet: Use testnet
         verbose: Enable verbose logging
+        run_id: Pre-created PENDING run to adopt (dashboard supervisor)
     """
     load_dotenv()
 
@@ -1777,7 +1873,8 @@ async def run_trading_loop(
         symbol=symbol,
         timeframe=timeframe,
         mode=mode,
-        testnet=testnet
+        testnet=testnet,
+        run_id=run_id,
     )
 
     try:

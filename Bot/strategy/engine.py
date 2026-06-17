@@ -94,6 +94,34 @@ class StrategyEngine:
             }
         )
 
+    def update_config(
+        self,
+        config: StrategyEngineConfig,
+        config_id: Optional[UUID] = None,
+    ) -> None:
+        """Apply a hot-reloaded configuration to the engine and its risk manager.
+
+        The trading loop owns config reload (via PostgreSQL LISTEN/NOTIFY). Without
+        this the engine would keep its construction-time ``config`` and silently
+        ignore threshold, sizing, stop-loss and risk/cooldown changes made from the
+        dashboard. The risk manager holds its own references to ``risk``/``cooldown``
+        config, so those are refreshed too. Runtime state (confirmation progress,
+        active weights, position, risk counters) is intentionally preserved.
+
+        Args:
+            config: The newly loaded strategy engine configuration.
+            config_id: Optional database config ID used for decision logging.
+        """
+        self.config = config
+        if config_id is not None:
+            self.config_id = config_id
+        self.risk_manager.risk_config = config.risk
+        self.risk_manager.cooldown_config = config.cooldown
+        logger.info(
+            "Strategy engine configuration updated",
+            extra={"run_id": str(self.run_id), "config": config.to_snapshot()},
+        )
+
     async def load_active_weights(self) -> WeightsSnapshot:
         """
         Load active indicator weights from weights_sets table.
@@ -120,10 +148,16 @@ class StrategyEngine:
             if row is None:
                 raise ValueError("No active weights set found in database")
 
+            # asyncpg returns JSONB as a str unless a codec is configured on the
+            # pool (the bot's pool has none), so decode defensively.
+            weights = row["weights"]
+            if isinstance(weights, str):
+                weights = json.loads(weights)
+
             weights_snapshot = WeightsSnapshot(
                 weights_set_id=row["id"],
                 weights_set_name=row["name"],
-                weights=row["weights"],  # Already JSONB dict
+                weights=weights,
                 timestamp=row["created_at"]
             )
 
@@ -389,7 +423,9 @@ class StrategyEngine:
                 atr_value = None
                 if "atr" in indicator_results:
                     atr_result = indicator_results["atr"]
-                    atr_value = atr_result.values.get("value")
+                    atr_raw = atr_result.values.get("atr")
+                    if atr_raw is not None:
+                        atr_value = Decimal(str(atr_raw))
 
                 # Calculate position size
                 position_size_usdt = calculate_position_size(
@@ -493,7 +529,7 @@ class StrategyEngine:
         atr_value = None
         if "atr" in indicator_results:
             atr_result = indicator_results["atr"]
-            atr_value = atr_result.values.get("value")
+            atr_value = atr_result.values.get("atr")
             if atr_value is not None:
                 atr_value = Decimal(str(atr_value))
 

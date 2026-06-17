@@ -127,3 +127,28 @@ class TestOBVToSignal:
         # Signal should be strongly bullish with bullish divergence
         assert signal.value > 0
         assert 'divergence' in signal.metadata.get('reason', '')
+
+    def test_to_signal_divergence_boost_stays_clamped(self):
+        """Regression: a strongly negative base + bullish divergence (and the
+        symmetric positive + bearish case) must stay within [-1, 1].
+
+        The divergence boost previously clamped only one bound, so a base signal
+        of -1.0 with bullish divergence produced -1.2, which IndicatorSignal
+        rejects (caught upstream as a spurious "compute failed" + neutral signal).
+        """
+        # Base signal_value = (obv - obv_ema) / abs(obv_ema) / 0.05, clamped.
+        # obv far below ema → base clamps to -1.0; bullish divergence → -1.0*1.5+0.3.
+        bullish_on_negative = IndicatorResult(
+            values={'obv': -1000.0, 'obv_ema': 1000.0, 'trend': 'falling'},
+            metadata={'divergence': 'bullish'},
+        )
+        signal = obv.to_signal(bullish_on_negative)
+        assert -1.0 <= signal.value <= 1.0
+
+        # Symmetric: obv far above ema → base +1.0; bearish divergence → 1.0*1.5-0.3.
+        bearish_on_positive = IndicatorResult(
+            values={'obv': 1000.0, 'obv_ema': 1.0, 'trend': 'rising'},
+            metadata={'divergence': 'bearish'},
+        )
+        signal = obv.to_signal(bearish_on_positive)
+        assert -1.0 <= signal.value <= 1.0

@@ -5,12 +5,13 @@ REST API for querying and analyzing completed trades.
 """
 
 import logging
+from datetime import datetime
 from typing import Annotated
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from ..auth import User, get_current_user
+from ..auth import Principal, require_viewer
 from ..database import get_db_pool
 from ..models.enums import TradeSide, TradeEnvironment
 from ..models.trades import TradeListResponse, TradeResponse
@@ -29,9 +30,13 @@ async def list_trades(
             TradeEnvironment | None, Query(description="Filter by environment (testnet/live/paper/backtest)")] = None,
         min_pnl: Annotated[float | None, Query(description="Minimum P&L")] = None,
         max_pnl: Annotated[float | None, Query(description="Maximum P&L")] = None,
+        start_date: Annotated[
+            datetime | None, Query(description="Only trades opened on/after this date (ISO 8601)")] = None,
+        end_date: Annotated[
+            datetime | None, Query(description="Only trades opened on/before this date (ISO 8601)")] = None,
         limit: Annotated[int, Query(ge=1, le=1000, description="Maximum results")] = 100,
         offset: Annotated[int, Query(ge=0, description="Offset for pagination")] = 0,
-        user: User = Depends(get_current_user),
+        user: Principal = Depends(require_viewer),
         db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> TradeListResponse:
     """
@@ -52,8 +57,9 @@ async def list_trades(
             param_values.append(run_id)
 
         if symbol:
-            conditions.append(f"t.symbol = ${len(param_values) + 1}")
-            param_values.append(symbol)
+            # Case-insensitive partial match: "btc" -> BTCUSDC, "usd" -> BTCUSDC/ETHUSDC
+            conditions.append(f"t.symbol ILIKE ${len(param_values) + 1}")
+            param_values.append(f"%{symbol}%")
 
         if side:
             conditions.append(f"t.side = ${len(param_values) + 1}")
@@ -70,6 +76,14 @@ async def list_trades(
         if max_pnl is not None:
             conditions.append(f"t.pnl <= ${len(param_values) + 1}")
             param_values.append(max_pnl)
+
+        if start_date is not None:
+            conditions.append(f"t.opened_at >= ${len(param_values) + 1}")
+            param_values.append(start_date)
+
+        if end_date is not None:
+            conditions.append(f"t.opened_at <= ${len(param_values) + 1}")
+            param_values.append(end_date)
 
         where_clause = "WHERE " + " AND ".join(
             conditions) if conditions else ""  # TODO: Check for dashboard data. For SQLInjection breach
@@ -121,7 +135,7 @@ async def list_trades(
 @router.get("/{trade_id}", response_model=TradeResponse)
 async def get_trade(
         trade_id: str,
-        user: User = Depends(get_current_user),
+        user: Principal = Depends(require_viewer),
         db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> TradeResponse:
     """

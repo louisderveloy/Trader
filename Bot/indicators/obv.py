@@ -203,12 +203,15 @@ def to_signal(values: IndicatorResult) -> IndicatorSignal:
         metadata['divergence'] = divergence
         if divergence == 'bullish':
             reason_parts.append('bullish_divergence')
-            # Strong boost for bullish divergence
-            signal_value = min(1.0, signal_value * 1.5 + 0.3)
+            # Strong boost for bullish divergence. Clamp both bounds: a strongly
+            # negative base (down to -1.0) would otherwise yield -1.2 here, which
+            # violates the [-1, 1] IndicatorSignal contract.
+            signal_value = max(-1.0, min(1.0, signal_value * 1.5 + 0.3))
         elif divergence == 'bearish':
             reason_parts.append('bearish_divergence')
-            # Strong boost for bearish divergence
-            signal_value = max(-1.0, signal_value * 1.5 - 0.3)
+            # Strong boost for bearish divergence. Clamp both bounds: a strongly
+            # positive base (up to 1.0) would otherwise yield 1.2 here.
+            signal_value = max(-1.0, min(1.0, signal_value * 1.5 - 0.3))
 
     metadata['reason'] = '_'.join(reason_parts) if reason_parts else 'neutral'
 

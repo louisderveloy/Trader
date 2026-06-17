@@ -1,0 +1,18 @@
+# Placeholder — the REAL server.crt is gitignored (db/certificates/*.crt).
+#
+# This is the PostgreSQL server's TLS certificate, used ONLY in production
+# (docker-compose.prod.yml) to encrypt the external Grafana <-> Postgres link.
+# Dev has no TLS.
+#
+# Generate it on the VPS, in this directory:
+#   openssl req -new -x509 -days 825 -nodes -text \
+#     -out server.crt -keyout server.key \
+#     -subj "/CN=<your-postgres-host-or-ip>"
+#
+# The resulting server.crt is a PEM file:
+#   -----BEGIN CERTIFICATE-----
+#   ...
+#   -----END CERTIFICATE-----
+#
+# Upload this same file to Grafana as the CA root cert if you use
+# sslmode=verify-ca / verify-full.

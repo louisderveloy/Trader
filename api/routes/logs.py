@@ -12,7 +12,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from ..auth import User, get_current_user
+from ..auth import Principal, require_viewer
 from ..database import get_db_pool
 from ..models.enums import ErrorSeverity
 from ..models.errors import ErrorLogListResponse, ErrorLogResponse, ErrorStatsResponse
@@ -50,7 +50,7 @@ async def list_errors(
     run_id: Annotated[str | None, Query(description="Filter by run ID")] = None,
     limit: Annotated[int, Query(ge=1, le=1000, description="Maximum results")] = 100,
     offset: Annotated[int, Query(ge=0, description="Offset for pagination")] = 0,
-    user: User = Depends(get_current_user),
+    user: Principal = Depends(require_viewer),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> ErrorLogListResponse:
     """
@@ -70,8 +70,9 @@ async def list_errors(
         params["severity"] = severity
 
     if category:
-        conditions.append(f"category = ${len(params) + 1}")
-        params["category"] = category
+        # Case-insensitive partial match (e.g. "STRAT" -> strategy)
+        conditions.append(f"category ILIKE ${len(params) + 1}")
+        params["category"] = f"%{category}%"
 
     if start_date:
         conditions.append(f"timestamp >= ${len(params) + 1}")
@@ -121,7 +122,7 @@ async def list_errors(
 
 @router.get("/stats", response_model=ErrorStatsResponse)
 async def get_error_stats(
-    user: User = Depends(get_current_user),
+    user: Principal = Depends(require_viewer),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> ErrorStatsResponse:
     """
@@ -173,7 +174,7 @@ async def get_error_stats(
 
 @router.get("/categories", response_model=list[str])
 async def list_categories(
-    user: User = Depends(get_current_user),
+    user: Principal = Depends(require_viewer),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[str]:
     """
@@ -198,7 +199,7 @@ async def list_categories(
 @router.get("/{error_id}", response_model=ErrorLogResponse)
 async def get_error(
     error_id: str,
-    user: User = Depends(get_current_user),
+    user: Principal = Depends(require_viewer),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> ErrorLogResponse:
     """

@@ -33,8 +33,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backtesting.types import BacktestConfig, BacktestMode
 from backtesting.vectorbt_engine import VectorbtBacktester
-from runs.types import RunConfig, RunType, RunEnvironment, RunResult
+from runs.types import RunConfig, RunType, RunEnvironment, RunResult, RunStatus
 from runs.context import create_run, run_context
+from runs.manager import RunManager
 from strategy.config import StrategyEngineConfig
 
 # Setup logging
@@ -131,7 +132,8 @@ async def run_backtest(
     strategy_config: StrategyEngineConfig,
     engine: str = "vectorbt",
     save_results: bool = False,
-    weights_set_id: Optional[int] = None
+    weights_set_id: Optional[UUID] = None,
+    run_id: Optional[int] = None,
 ):
     """
     Run backtest with specified parameters.
@@ -147,6 +149,9 @@ async def run_backtest(
         engine: Backtesting engine ('vectorbt' or 'event_driven')
         save_results: Whether to save results to database
         weights_set_id: Optional weights set ID for linking
+        run_id: Pre-created PENDING run to adopt (dashboard supervisor); when set,
+            the existing run is driven through running -> completed/failed instead
+            of creating a new run record.
 
     Returns:
         BacktestResult: Complete backtest results
@@ -183,7 +188,24 @@ async def run_backtest(
             }
         )
 
-        # Create run configuration if saving results
+        # Dashboard supervisor flow: adopt the pre-created PENDING run.
+        if run_id is not None:
+            manager = RunManager(db_pool)
+            await manager.update_status(run_id, RunStatus.RUNNING)
+            logger.info(f"Adopted backtest run with ID: {run_id}")
+            try:
+                result = await _execute_backtest(db_pool, config, engine)
+            except Exception:
+                await manager.update_status(run_id, RunStatus.FAILED)
+                raise
+            if result.success:
+                await _save_backtest_result(db_pool, run_id, result)
+                await manager.update_status(run_id, RunStatus.COMPLETED)
+            else:
+                await manager.update_status(run_id, RunStatus.FAILED)
+            return result
+
+        # Create run configuration if saving results (CLI flow)
         if save_results:
             run_config = RunConfig(
                 run_type=RunType.BACKTEST,
@@ -394,7 +416,8 @@ async def run_backtest_cli(args):
         strategy_config=strategy_config,
         engine=args.engine,
         save_results=args.save,
-        weights_set_id=weights_set_id
+        weights_set_id=weights_set_id,
+        run_id=getattr(args, 'run_id', None),
     )
 
 

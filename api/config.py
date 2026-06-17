@@ -61,10 +61,73 @@ class Settings(BaseSettings):
     )
 
     # ==========================================
+    # AUTHENTICATION MODE
+    # ==========================================
+    # local         -> built-in JWT-cookie login (mono-user). Only mode usable in dev.
+    # authelia_oidc -> Authelia (auth.trader.derveloy.eu) as an OIDC provider; the API is a
+    #                  confidential Relying Party (Authorization Code + PKCE). PROD-ONLY and
+    #                  MANDATORY in prod (validate_production_secrets enforces it).
+    auth_mode: str = Field(default="local", description="Auth mode: local or authelia_oidc")
+
+    # ==========================================
+    # AUTHELIA OIDC (prod-only relying party)
+    # ==========================================
+    # Issuer base URL; the RP discovers endpoints via {issuer}/.well-known/openid-configuration.
+    authelia_oidc_issuer: str = Field(
+        default="", description="Authelia OIDC issuer URL, e.g. https://auth.trader.derveloy.eu"
+    )
+    authelia_oidc_client_id: str = Field(
+        default="", description="OIDC client_id registered in Authelia for the API (trader-api)"
+    )
+    authelia_oidc_client_secret: str = Field(
+        default="", description="OIDC client secret (confidential client); >=32 chars in prod"
+    )
+    # Public base URL of the API, used to build the OIDC redirect_uri(s). No trailing slash.
+    api_public_base_url: str = Field(
+        default="http://localhost:8000",
+        description="Public base URL of the API (used for OIDC redirect URIs)",
+    )
+    # Public base URL of the dashboard, used for post-login / no-access redirects. No trailing slash.
+    dashboard_public_base_url: str = Field(
+        default="http://localhost:5173",
+        description="Public base URL of the dashboard (post-login redirect target)",
+    )
+    # Dedicated key encrypting the short-lived OIDC transaction cookie (state/nonce/PKCE).
+    # MUST be distinct from jwt_secret_key and csrf_secret_key. >=32 chars in prod.
+    oidc_transaction_secret: str = Field(
+        default="generate_oidc_txn_secret_with_openssl_rand_hex_32",
+        description="Encryption key for the OIDC transaction cookie (state/nonce/PKCE)",
+    )
+    # Authelia group names mapped to internal roles. Membership is read from the id_token
+    # `groups` claim; an identity in neither group is denied access (no session issued).
+    oidc_admin_group: str = Field(default="admins", description="Authelia group → Role.ADMIN")
+    oidc_viewer_group: str = Field(default="viewers", description="Authelia group → Role.VIEWER")
+    # Step-up freshness: a live-run authorization requires a re-authentication whose auth_time
+    # is no older than this many seconds.
+    oidc_stepup_max_age_seconds: int = Field(
+        default=300, description="Max age (s) of step-up re-authentication for live runs"
+    )
+    # DEV-ONLY auth bypass: when environment==dev AND auth_mode==local, the synthesized
+    # principal's groups are taken from here (comma-separated). Refused in prod.
+    dev_user_group: str = Field(
+        default="admins", description="DEV-ONLY: synthesized groups when auth is disabled"
+    )
+
+    @computed_field
+    @property
+    def dev_user_groups_list(self) -> list[str]:
+        """Parse the dev bypass groups into a list."""
+        return [g.strip() for g in self.dev_user_group.split(",") if g.strip()]
+
+    # ==========================================
     # ADMIN USER (mono-user v1)
     # ==========================================
     admin_username: str = Field(default="admin", description="Admin username")
-    admin_password: str = Field(default="admin", description="Admin password")
+    admin_password: str = Field(default="admin", description="Admin password (dev fallback if no hash set)")
+    admin_password_hash: str = Field(
+        default="",
+        description="Bcrypt hash of the admin password; takes precedence over admin_password when set",
+    )
     admin_email: str = Field(default="admin@localhost", description="Admin email")
 
     # ==========================================
@@ -132,8 +195,24 @@ class Settings(BaseSettings):
 
     # Binance
     binance_default_symbol: str = Field(
-        default="BTCUSDT", description="Default trading symbol"
+        default="BTCUSDC", description="Default trading symbol (USDC only; USDT not authorised in EU)"
     )
+    # Symbols offered in the dashboard's run-start combo box. Comma-separated;
+    # the first entry is treated as the default. USDC quote only.
+    available_symbols: str = Field(
+        default="BTCUSDC", description="Comma-separated list of selectable trading symbols"
+    )
+
+    @computed_field
+    @property
+    def available_symbols_list(self) -> list[str]:
+        """Parse available symbols into an upper-cased, de-duplicated list."""
+        seen: list[str] = []
+        for raw in self.available_symbols.split(","):
+            sym = raw.strip().upper()
+            if sym and sym not in seen:
+                seen.append(sym)
+        return seen or [self.binance_default_symbol.upper()]
     binance_default_timeframe: str = Field(
         default="15m", description="Default timeframe"
     )
@@ -198,6 +277,20 @@ class Settings(BaseSettings):
     )
 
     # ==========================================
+    # RUN CONTROL (start/stop/kill + logs)
+    # ==========================================
+    bot_logs_dir: str = Field(
+        default="/var/log/trader-bot",
+        description="Directory holding per-run log files (mounted read-only from the bot volume)",
+    )
+    run_logs_max_lines: int = Field(
+        default=100, description="Max log lines returned by the run logs endpoint"
+    )
+    max_concurrent_backtests: int = Field(
+        default=2, description="Max simultaneously active backtests (API + supervisor cap)"
+    )
+
+    # ==========================================
     # BACKTESTING
     # ==========================================
     backtest_initial_capital: float = Field(
@@ -215,16 +308,35 @@ class Settings(BaseSettings):
         Only validates in production environment (environment='prod').
         Checks JWT secret and database password for minimum length and weak patterns.
 
-        Note: Admin password validation is skipped as Authelia will replace authentication.
+        Note: Admin password validation is skipped because production forces
+        AUTH_MODE=authelia_oidc (the local password path returns 404 in that mode —
+        see api/auth/routes.py). These two facts are load-bearing on each other:
+        the skip is only safe because the local login is disabled in OIDC mode.
 
         Raises:
-            ValueError: If any secret is weak in production mode
+            ValueError: If any secret is weak or auth is misconfigured in production
         """
         if self.environment == "prod":
             weak_patterns = [
                 "change_me", "admin", "password", "secret",
                 "generate", "your_", "example", "localhost", "test"
             ]
+
+            # Production MUST run Authelia OIDC. AUTH_MODE=local is a dev-only mode whose
+            # DEV_USER_GROUP bypass is a total authentication bypass; refuse to boot so it
+            # can never be reachable in production.
+            if self.auth_mode != "authelia_oidc":
+                raise ValueError(
+                    "Production requires AUTH_MODE=authelia_oidc. "
+                    "AUTH_MODE=local is a dev-only mode and must never run in production."
+                )
+
+            # Reject wildcard CORS origins in production (credentials are sent with requests).
+            for origin in self.cors_origins_list:
+                if origin == "*" or "*" in origin:
+                    raise ValueError(
+                        f"Production CORS_ORIGINS must be explicit; wildcard not allowed: {origin!r}"
+                    )
 
             # Check JWT secret
             if len(self.jwt_secret_key) < 32:
@@ -252,7 +364,42 @@ class Settings(BaseSettings):
                         "Generate with: openssl rand -base64 24"
                     )
 
-            # Skip admin password check - Authelia will replace authentication
+            # Skip admin password check - Authelia replaces authentication in prod
+            # (and the local /auth/login path returns 404 when auth_mode != local).
+
+            # OIDC relying-party configuration must be present and strong.
+            if not self.authelia_oidc_issuer.startswith("https://"):
+                raise ValueError(
+                    "Production requires AUTHELIA_OIDC_ISSUER to be an https:// URL."
+                )
+            if not self.authelia_oidc_client_id:
+                raise ValueError("Production requires AUTHELIA_OIDC_CLIENT_ID to be set.")
+            if len(self.authelia_oidc_client_secret) < 32:
+                raise ValueError(
+                    "Production requires AUTHELIA_OIDC_CLIENT_SECRET >= 32 characters. "
+                    "Generate with: openssl rand -hex 32"
+                )
+            for pattern in weak_patterns:
+                if pattern in self.authelia_oidc_client_secret.lower():
+                    raise ValueError(
+                        f"Production AUTHELIA_OIDC_CLIENT_SECRET contains weak pattern: '{pattern}'."
+                    )
+
+            # Dedicated OIDC transaction-cookie encryption key (must not reuse other secrets).
+            if len(self.oidc_transaction_secret) < 32:
+                raise ValueError(
+                    "Production requires OIDC_TRANSACTION_SECRET >= 32 characters. "
+                    "Generate with: openssl rand -hex 32"
+                )
+            for pattern in weak_patterns:
+                if pattern in self.oidc_transaction_secret.lower():
+                    raise ValueError(
+                        f"Production OIDC_TRANSACTION_SECRET contains weak pattern: '{pattern}'."
+                    )
+            if self.oidc_transaction_secret in (self.jwt_secret_key, self.csrf_secret_key):
+                raise ValueError(
+                    "OIDC_TRANSACTION_SECRET must be distinct from JWT_SECRET_KEY and CSRF_SECRET_KEY."
+                )
 
         return self
 

@@ -33,10 +33,11 @@ from .walk_forward import generate_splits_from_db
 from .objective import create_objective_function, evaluate_weights
 from .db import save_weights_set, save_study_result
 
-from runs.types import RunConfig, RunType, RunEnvironment, RunResult
+from runs.types import RunConfig, RunType, RunEnvironment, RunResult, RunStatus
 from runs.context import create_run, run_context
 from runs.manager import RunManager
 from runs.errors import log_exception, ErrorCategory, ErrorSeverity
+from utils.instance_lock import InstanceLockManager
 
 from strategy.config import StrategyEngineConfig
 from notifications.discord import DiscordNotifier
@@ -69,7 +70,7 @@ class OptimizationRunner:
         config: OptimizationConfig,
         db_pool: asyncpg.Pool,
         search_space: Optional[WeightsSearchSpace] = None,
-        run_id: Optional[UUID] = None
+        run_id: Optional[int] = None
     ):
         """
         Initialize optimization runner.
@@ -78,7 +79,7 @@ class OptimizationRunner:
             config: Optimization configuration
             db_pool: Database connection pool
             search_space: Optional custom search space (uses defaults if not provided)
-            run_id: Optional run ID to link results to
+            run_id: Optional run ID (integer ``runs.id``) to adopt and link results to
         """
         self.config = config
         self.db_pool = db_pool
@@ -124,28 +125,58 @@ class OptimizationRunner:
             extra={"study_name": self.config.study_name}
         )
 
-        # Create run record if not provided
-        if self.run_id is None:
-            run_config = RunConfig(
-                run_type=RunType.OPTIMIZATION,
-                environment=RunEnvironment.DEV,
-                symbol=self.config.symbol,
-                timeframe=self.config.timeframe,
-                start_date=self.config.start_date,
-                end_date=self.config.end_date,
-                initial_capital=Decimal("10000"),  # Default, not used in optimization
-                strategy_config=self.config.to_snapshot(),
-                optimization_config=self.config.to_snapshot(),
-            )
+        # Single-instance guard: hold a PostgreSQL advisory lock for the whole run,
+        # exactly like paper/live trading. The lock is session-scoped and crash-safe
+        # (auto-released when the connection closes). Optimization has its own lock key,
+        # so it may run alongside a paper/live run but never alongside another optimization.
+        lock_conn = await InstanceLockManager.acquire_lock_connection(self.db_pool, "optimization")
+        if lock_conn is None:
+            existing = await InstanceLockManager.check_existing_runs(self.db_pool, "optimization")
+            msg = "Cannot start optimization: another optimization is already running"
+            if existing:
+                msg += f" (active run_id={existing['id']})"
+            logger.error(msg)
+            raise RuntimeError(msg)
 
-            async with create_run(self.db_pool, run_config) as run:
-                async with run_context(run):
-                    self.run_id = run.id
-                    logger.info(f"Created optimization run with ID: {run.id}")
-                    return await self._run_optimization()
-        else:
-            # Run with provided run_id (don't create new run)
-            return await self._run_optimization()
+        try:
+            # Create run record if not provided (CLI flow)
+            if self.run_id is None:
+                run_config = RunConfig(
+                    run_type=RunType.OPTIMIZATION,
+                    environment=RunEnvironment.DEV,
+                    symbol=self.config.symbol,
+                    timeframe=self.config.timeframe,
+                    start_date=self.config.start_date,
+                    end_date=self.config.end_date,
+                    initial_capital=Decimal("10000"),  # Default, not used in optimization
+                    strategy_config=self.config.to_snapshot(),
+                    optimization_config=self.config.to_snapshot(),
+                )
+
+                async with create_run(self.db_pool, run_config) as run:
+                    async with run_context(run):
+                        self.run_id = run.id
+                        logger.info(f"Created optimization run with ID: {run.id}")
+                        return await self._run_optimization()
+            else:
+                # Adopted run (dashboard supervisor): the API pre-created a PENDING run
+                # and passed its id via --run-id. The adoption path bypasses run_context,
+                # so drive the status PENDING -> RUNNING -> terminal explicitly here
+                # (mirrors scripts/backtest.py).
+                manager = RunManager(self.db_pool)
+                await manager.update_status(self.run_id, RunStatus.RUNNING)
+                logger.info(f"Adopted optimization run with ID: {self.run_id}")
+                try:
+                    result = await self._run_optimization()
+                except Exception:
+                    await manager.update_status(self.run_id, RunStatus.FAILED)
+                    raise
+                await manager.update_status(self.run_id, RunStatus.COMPLETED)
+                return result
+        finally:
+            await InstanceLockManager.release_lock_connection(
+                self.db_pool, lock_conn, "optimization"
+            )
 
     async def _run_optimization(self) -> StudyResult:
         """Internal optimization logic."""
@@ -177,9 +208,13 @@ class OptimizationRunner:
                 db_url = os.getenv("DATABASE_URL", "")
                 db_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
 
-                # Evaluate best params on test set
+                # Evaluate the best weights on the test set. Use the resolved
+                # (unprefixed, normalized) weights the best trial actually used —
+                # NOT study.best_params, whose prefixed keys silently fall back to
+                # default weights in the backtester.
+                best_weights = train_result["best_weights"]
                 test_score = await evaluate_weights(
-                    weights=train_result["best_params"],
+                    weights=best_weights,
                     config=self.config,
                     split=split,
                     db_url=db_url,
@@ -192,7 +227,7 @@ class OptimizationRunner:
                     split=split,
                     train_score=train_result["best_value"],
                     test_score=test_score,
-                    best_params=train_result["best_params"],
+                    best_params=best_weights,
                     n_trials=train_result["n_trials"],
                     optimization_time_seconds=train_result["optimization_time"]
                 )
@@ -201,7 +236,7 @@ class OptimizationRunner:
                 # Track overall best
                 if test_score > best_overall_value:
                     best_overall_value = test_score
-                    best_overall_params = train_result["best_params"]
+                    best_overall_params = best_weights
 
                 logger.info(
                     f"Split {split.split_index + 1} completed",
@@ -247,11 +282,13 @@ class OptimizationRunner:
             # Save study result to database
             study_db_id = await save_study_result(self.db_pool, study_result)
 
-            # Link run to optuna study if we have a run_id
+            # Link run to optuna study (and the weights set it produced) if we have a run_id
             if self.run_id and study_db_id:
                 try:
                     manager = RunManager(self.db_pool)
-                    await manager.link_optuna_study(self.run_id, study_db_id)
+                    await manager.link_optuna_study(
+                        self.run_id, study_db_id, weights_set_id=weights_set_id
+                    )
                 except Exception as e:
                     logger.warning(f"Failed to link run to optuna study: {e}")
 
@@ -427,6 +464,13 @@ class OptimizationRunner:
         best_value = study.best_value
         best_params = study.best_params
 
+        # Resolve the EXACT weights the best trial used (unprefixed, normalized,
+        # including fixed weights). Prefer the per-trial recorded weights; fall back
+        # to reconstructing them from the prefixed best_params if unavailable.
+        best_weights = study.best_trial.user_attrs.get("weights")
+        if not best_weights:
+            best_weights = self.search_space.weights_from_params(best_params)
+
         logger.info(
             f"Split {split.split_index} optimization completed",
             extra={
@@ -440,6 +484,7 @@ class OptimizationRunner:
         return {
             "best_value": best_value,
             "best_params": best_params,
+            "best_weights": best_weights,
             "n_trials": len(study.trials),
             "optimization_time": split_optimization_time
         }
@@ -517,7 +562,7 @@ async def run_optimization(
     config: OptimizationConfig,
     db_pool: asyncpg.Pool,
     search_space: Optional[WeightsSearchSpace] = None,
-    run_id: Optional[UUID] = None
+    run_id: Optional[int] = None
 ) -> StudyResult:
     """
     Convenience function to run optimization.
@@ -526,7 +571,7 @@ async def run_optimization(
         config: Optimization configuration
         db_pool: Database connection pool
         search_space: Optional custom search space
-        run_id: Optional run ID to link results to
+        run_id: Optional run ID (integer ``runs.id``) to adopt and link results to
 
     Returns:
         StudyResult with complete optimization results
