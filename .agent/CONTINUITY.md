@@ -223,12 +223,25 @@ cancellation on exit); refactor loop → StrategyEngine; single PR segmented by 
 not 95%-all-in) and scores on the weight-normalized scale (`Σ|w|`), so entry/exit frequency + sizes
 differ from before. Same thresholds (0.6/-0.3).
 
-**Remaining:** C4 native OCO/STOP in `exchanges/base.py`+`binance.py` (verify python-binance API via
-Context7: `create_oco_order` vs `STOP_LOSS_LIMIT`), per-mode precedence (paper=software,
-testnet/live=native+backup), `stop_order_id` polling + cancel-on-exit. C5 `event_driven.py` real
-make_decision + config multipliers (not 2x/3x). C6 `vectorbt` `sl_stop`/`tp_stop` (Context7; keep
-identical SL/TP semantics as event_driven for <2% coherence rule). C7 update
-`tests/test_backtesting_coherence.py` + more integration tests.
+**Done (committed) cont'd:**
+- C4: native Binance OCO (`place_oco_sell_order`/`cancel_oco_order` in base+binance, verified via
+  Context7). trading.py: OCO placed on live entry fill; `_reconcile_native_stop` detects server-side
+  fills + closes without a new order; `_cancel_native_stop` before signal market-exit (anti
+  double-sell); paper=software-only. Tests `tests/test_native_stop.py` (mocked). **Live OCO
+  fill-reconciliation still needs a testnet E2E before live (pre-Phase-14).** Full suite 423 pass/10 skip.
+
+**⚠ DISCOVERY (changes C5/C6 scope):** The event-driven backtester is **non-functional scaffold**, not a
+partial impl: `initialize_strategy_engine` builds StrategyEngineConfig with non-existent flat kwargs and
+no `run_id` (would crash), and `get_strategy_decision` is a SKIP stub that constructs TradingDecision with
+wrong kwargs (`confidence=`/`reason=` — real fields are `weights_snapshot`/`indicators_snapshot`/
+`decision_reason`). `test_backtesting_coherence.py` only tests the *compare* logic, never runs a
+backtester. So C5 = **complete the backtester** (config mapping, run_id, load weights, per-candle
+compute_all_indicators→make_decision, use decision SL/TP), not just swap 2x/3x. Design Q: make_decision
+logs score+decision per candle → tens of thousands of DB writes per backtest run. **PAUSED here to ask
+Louis how to scope C5/C6** (full completion vs scoped SL/TP-only vs follow-up issue).
+
+**Remaining:** C5 event_driven (see discovery), C6 vectorbt `sl_stop`/`tp_stop` (Context7; identical SL/TP
+semantics as event_driven for <2% coherence), C7 coherence/integration tests.
 
 **Test env:** run in bot container. Bash path-mangles `/app`; prefix `MSYS_NO_PATHCONV=1` and use
 `docker compose run --rm --entrypoint python bot -m pytest /tests/...`. pytest addopts forces `--cov=bot`.
