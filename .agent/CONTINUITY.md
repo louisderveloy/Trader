@@ -130,6 +130,34 @@
   returns one value (last candle), so signals had to be **recomputed vectorized inline** in
   `vectorbt_engine.py` rather than calling indicator modules per-row.
 
+### Indicators (live-loop, branch `feature/stop-loss`)
+- **OBV `to_signal` could emit ±1.2 → spurious "compute failed" + neutral signal** (2026-06-17, fixed).
+  Symptom: live paper loop on **BTCUSDC** logged exactly one `Indicator computation failed; using neutral
+  signal` per cycle and a near-zero score (`0.037`), while a direct call worked. Root cause in
+  `bot/indicators/obv.py::to_signal`: the divergence boost clamped only one bound —
+  `min(1.0, signal_value*1.5 + 0.3)` (bullish) lets a base of `-1.0` become `-1.2`; the bearish branch
+  is symmetric. `IndicatorSignal.__post_init__` rejects out-of-[-1,1] → `ValueError` → caught by
+  `compute_all_indicators` per-indicator guard → neutral + warning. Symbol-dependent: BTCUSDT base never
+  hit the edge so it never surfaced, but the BTCUSDC volume pattern (falling OBV + bullish divergence) did.
+  **Fix:** clamp both bounds `max(-1.0, min(1.0, ...))` in both divergence branches. Regression test
+  `test_to_signal_divergence_boost_stays_clamped`. Verified on real BTCUSDC/BTCUSDT fetches: 0 failures,
+  OBV now `-1.0` (was raising). **Also fixed:** the warning now embeds indicator name + error in the
+  message string — the bot log format is `%(message)s` and was dropping the `extra={indicator,error}` dict,
+  so failures were undiagnosable from the logs.
+
+### Strategy engine (live-loop, branch `feature/stop-loss`)
+- **Config hot-reload never reached the StrategyEngine → decisions used stale thresholds** (2026-06-17,
+  fixed). Symptom: dashboard set entry threshold `0.09 → -0.5`; the loop logged the change and "✓
+  Configuration reloaded", yet every decision stayed `skip` "score 0.0xx in neutral zone" with scores
+  (~0.07) that are *below the old 0.09 but above the new -0.5*. Root cause: `_reload_config()` in
+  `trading.py` rebinds `self.config`/`self.config_id` but never updated `self.engine` — `StrategyEngine`
+  holds its own `config` (set at construction) and a `RiskManager` with its own `risk_config`/
+  `cooldown_config` copies. **Fix:** new `StrategyEngine.update_config(config, config_id)` refreshes
+  engine.config, config_id and the risk manager's two config refs (runtime state — confirmation, weights,
+  position, risk counters — preserved); `_reload_config` now calls it. Regression test
+  `test_update_config_propagates_to_engine_and_risk_manager`. NOTE: a running bot process must be
+  restarted to pick up code changes; config changes alone now hot-reload correctly.
+
 ### Dashboard / API (recent)
 - **Optimisations filter/sort is server-side SQL** (2026-06-12, user rejected client-side). ORDER BY
   column from a whitelist map, direction from enum, all values bound as `$n` → no user input in SQL;
@@ -193,3 +221,71 @@
 > migrate `authlib.jose`→`joserfc`. Tracker: `.agent/authelia-implementation.md`.
 
 **Objective:** beat buy-and-hold BTC over 1 year live; formal eval 12 months after Phase 15.
+
+---
+
+## [PROGRESS] Issue #17 — real stop-loss (branch `feature/stop-loss`, started 2026-06-17)
+
+**Problem found:** SL/TP calc layer (`strategy/stops.py`) was complete + tested but NO execution path
+used it. Live/paper/testnet hardcoded 2%/4% (`scripts/trading.py`) and never called the engine;
+`event_driven.py`'s `get_strategy_decision` is a SKIP stub; `vectorbt_engine.py` had no SL/TP; `trades`
+table lacked SL/TP/exit_reason columns. (This explains the -8% Louis saw in paper: hardcoded 2% checked
+only on the latest *close* every ~60s — discrete sampling overshoots/misses; 60s cadence ruled out of
+scope by user.) Latent bug: engine read ATR under `values["value"]` but indicator emits `values["atr"]`.
+
+**User decisions:** native Binance OCO/STOP **+** software fallback (manage stop-order state +
+cancellation on exit); refactor loop → StrategyEngine; single PR segmented by commits.
+
+**Done (committed):**
+- C1: `indicators.compute_all_indicators()` — shared helper, attaches `.signal` to IndicatorResult.
+  fear_greed/user_indicator are neutral placeholders (async/DB, can't run in sync loop).
+- C2: migration `016` adds `stop_loss_price`/`take_profit_price`/`exit_reason` to `trades`; trading.py
+  persists them. Single alembic head = 016 (chain 003→7f964c375235→005→…→016).
+- C3: `_trading_iteration` now delegates to `engine.make_decision`; removed duplicate
+  `_calculate_signals`/`_calculate_weighted_score`/`_log_score`/confirmation gating. Entries use
+  `decision.stop_loss_price/take_profit_price/position_size_qty`. Fixed ATR key bug. SL/TP price
+  monitoring kept as `_price_stop_reason` (precedence over signal exit). Verified by
+  `tests/test_trading_stop_loss.py` (real loop: ATR stop not 2%; price breach → "stop_loss" exit).
+
+**⚠ Behavioural shift to flag:** paper now sizes via engine `position_size_mode` (default CONFIDENCE,
+not 95%-all-in) and scores on the weight-normalized scale (`Σ|w|`), so entry/exit frequency + sizes
+differ from before. Same thresholds (0.6/-0.3).
+
+**Done (committed) cont'd:**
+- C4: native Binance OCO (`place_oco_sell_order`/`cancel_oco_order` in base+binance, verified via
+  Context7). trading.py: OCO placed on live entry fill; `_reconcile_native_stop` detects server-side
+  fills + closes without a new order; `_cancel_native_stop` before signal market-exit (anti
+  double-sell); paper=software-only. Tests `tests/test_native_stop.py` (mocked). **Live OCO
+  fill-reconciliation still needs a testnet E2E before live (pre-Phase-14).** Full suite 423 pass/10 skip.
+
+**DISCOVERY:** event-driven backtester (`event_driven.py`) is **non-functional scaffold** — broken engine
+init (no run_id, flat kwargs) + `get_strategy_decision` SKIP stub with wrong TradingDecision kwargs.
+`test_backtesting_coherence.py` only tests compare logic, never runs a backtester.
+
+**User decision (2026-06-17):** vectorbt SL/TP now; **event-driven completion deferred to follow-up issue #26.**
+
+**Done (committed) cont'd:**
+- C6: vectorbt `from_signals` now passes `sl_stop`/`tp_stop` as fractions (FIXED=pct/100; ATR=per-bar
+  `atr*mult/close`, warm-up→no stop). Raw ATR retained on signals_df. Tests `tests/test_vectorbt_stops.py`
+  (incl. real from_signals applying sl_stop). Verified via Context7.
+- C7: tests delivered per-commit (test_trading_stop_loss, test_native_stop, test_vectorbt_stops + engine
+  fixture fix). Coherence end-to-end test deferred with event-driven (#26).
+
+**CRITICAL FIX (real-DB verification):** `engine.load_active_weights` assumed `row["weights"]` was a
+dict, but asyncpg returns JSONB as **str** (bot pool has no codec). Once the loop started calling
+`make_decision`, `calculate_weighted_score` did `str.items()` → raised → swallowed by the loop guard as
+"decision skipped" **every iteration → bot silently never trades**. Fixed with defensive `json.loads`;
+regression test simulates str-JSONB. Found by seeding runs/config/weights_sets and executing all three
+write paths (`make_decision`→`_log_score`/`_log_decision`, `_create_trade_entry`, `_log_trade`) against
+the live migrated DB — all clean, returned `entry_long` with ATR SL/TP, rows persisted, cleaned up.
+
+**ISSUE #17 STATUS: COMPLETE for this PR** (branch `feature/stop-loss`, 8 commits + docs). Full suite
+**428 pass / 10 skip**. Follow-up **#26** tracks event-driven backtester completion. PR pending user
+(never open PR to main — open to Dev/equivalent; only user merges).
+
+**Pre-live TODO (not blocking PR):** testnet E2E of the native OCO fill-reconciliation path before
+Phase 15. Backtest runner should populate `strategy_params['stop_loss'/'take_profit']` so vectorbt reads
+real config (currently defaults) — folded into #26.
+
+**Test env:** run in bot container. Bash path-mangles `/app`; prefix `MSYS_NO_PATHCONV=1` and use
+`docker compose run --rm --entrypoint python bot -m pytest /tests/...`. pytest addopts forces `--cov=bot`.

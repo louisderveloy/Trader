@@ -192,6 +192,61 @@ class ExchangeBase(ABC):
         pass
 
     @abstractmethod
+    async def place_oco_sell_order(
+        self,
+        symbol: str,
+        quantity: Decimal,
+        take_profit_price: Decimal,
+        stop_price: Decimal,
+        stop_limit_price: Optional[Decimal] = None,
+    ) -> Dict[str, Any]:
+        """Place a One-Cancels-Other SELL order (exchange-side SL + TP for a LONG).
+
+        Combines a take-profit limit order and a stop-loss stop-limit order. When
+        one fills the exchange cancels the other automatically — exchange-resident
+        protection that holds even if the bot process is down.
+
+        Args:
+            symbol: Trading pair (e.g., "BTCUSDT").
+            quantity: Quantity to sell (the open position size).
+            take_profit_price: Limit price of the take-profit leg (above current price).
+            stop_price: Trigger price of the stop-loss leg (below current price).
+            stop_limit_price: Limit price once the stop triggers. Defaults to
+                ``stop_price`` (a slightly lower value reduces non-fill risk).
+
+        Returns:
+            Dictionary with:
+                - order_list_id: str (OCO list identifier)
+                - leg_order_ids: list[str] (the two leg order IDs)
+                - status: str
+                - created_at: datetime
+
+        Raises:
+            ValueError: If parameters are invalid.
+            ExchangeError: If the exchange rejects the OCO order.
+        """
+        pass
+
+    @abstractmethod
+    async def cancel_oco_order(self, symbol: str, leg_order_id: str) -> Dict[str, Any]:
+        """Cancel a resting OCO order by one of its leg order IDs.
+
+        Cancelling either leg of an OCO cancels the whole pair on Binance.
+
+        Args:
+            symbol: Trading pair (e.g., "BTCUSDT").
+            leg_order_id: Exchange order ID of either OCO leg.
+
+        Returns:
+            Dictionary with cancellation confirmation.
+
+        Raises:
+            OrderNotFoundError: If the order no longer exists (already filled/cancelled).
+            ExchangeError: If cancellation fails.
+        """
+        pass
+
+    @abstractmethod
     async def cancel_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
         """Cancel an open order.
 
