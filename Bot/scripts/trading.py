@@ -89,7 +89,7 @@ class TradingBot:
             timeframe: str,
             mode: str,
             testnet: bool,
-            initial_capital: Decimal = Decimal("100"),  # Initial capital for paper trading.
+            initial_capital: Decimal = Decimal("1000"),  # Initial capital for paper trading.
             run_id: Optional[int] = None,
     ):
         """
