@@ -33,8 +33,26 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       TIMESCALEDB_TELEMETRY: off
+    # Enable TLS so the EXTERNAL Grafana connection (over the public 5432 port)
+    # is encrypted. SSL is enabled but NOT required: local containers (bot, api,
+    # authelia) keep connecting over the trader-network without TLS. The Grafana
+    # client enforces encryption on its side with sslmode=require (see notes below).
+    command:
+      - "postgres"
+      - "-c"
+      - "ssl=on"
+      - "-c"
+      - "ssl_cert_file=/var/lib/postgresql/data/server.crt"
+      - "-c"
+      - "ssl_key_file=/var/lib/postgresql/data/server.key"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # TLS material — real files are gitignored (db/certificates/*.crt|*.key).
+      # On the VPS the key MUST be owned root:root with mode 600/640, or owned by
+      # the container postgres user with mode 600, otherwise postgres refuses to
+      # start. See the "PostgreSQL TLS setup" note at the bottom of this file.
+      - ./db/certificates/server.crt:/var/lib/postgresql/data/server.crt:ro
+      - ./db/certificates/server.key:/var/lib/postgresql/data/server.key:ro
     ports:
       # Expose on all interfaces for external Grafana connection
       # SECURITY: Configure firewall (ufw) to allow ONLY Grafana server IP
@@ -221,3 +239,34 @@ services:
   #    Password: ${POSTGRES_PASSWORD}
   # 3. Import dashboard JSON files from /grafana/dashboards/ into external Grafana
   # 4. Configure datasource in external Grafana (see /grafana/provisioning/datasources/ for reference)
+
+# ==========================================
+# PostgreSQL TLS setup (prod only — dev has no TLS)
+# ==========================================
+# Goal: encrypt the EXTERNAL Grafana <-> Postgres link over the public 5432 port,
+# without forcing TLS on local container traffic (the bot does not use it).
+#
+# 1. Generate a self-signed server certificate on the VPS, in ./db/certificates/:
+#      cd db/certificates
+#      openssl req -new -x509 -days 825 -nodes -text \
+#        -out server.crt -keyout server.key \
+#        -subj "/CN=<your-postgres-host-or-ip>"
+#    (CN must match the host Grafana connects to if you ever use sslmode=verify-full.)
+#
+# 2. Lock down the private key so postgres will accept it (mounted read-only):
+#      sudo chown root:root server.key && sudo chmod 640 server.key
+#    (Or chown to the container postgres user + chmod 600. A group/world-readable
+#     key owned by the db user makes postgres refuse to start.)
+#
+# 3. Bring the stack up; verify TLS is active:
+#      docker compose -f docker-compose.prod.yml exec postgres \
+#        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SHOW ssl;"   # -> on
+#
+# 4. On the external Grafana datasource, set TLS/SSL Mode = require (encrypt only,
+#    no cert verification — self-signed). For full verification use verify-ca /
+#    verify-full and upload server.crt as the CA root cert in Grafana.
+#
+# NOTE: ssl=on only ENABLES TLS; it does not require it. Local services keep
+# connecting unencrypted. To force TLS for the public connection specifically you
+# would add a `hostssl` rule in pg_hba.conf for the external IP range — not done
+# here on purpose, per the local-traffic exemption.
