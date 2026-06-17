@@ -93,7 +93,20 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik_certs:/letsencrypt
     networks:
-      - trader-network
+      trader-network:
+        # Internal DNS aliases so containers on trader-network resolve the public
+        # hostnames to Traefik itself, instead of the VPS public IP. Without this,
+        # server-to-server calls to a public hostname (notably the API as an OIDC
+        # relying party reaching https://auth.trader.derveloy.eu for discovery/token/
+        # JWKS) leave the bridge network for the host's public IP and hang (most VPS
+        # don't NAT-hairpin), surfacing as "OIDC discovery failed:" (empty connect-
+        # timeout) → 503 at login. Traefik terminates TLS with the valid Let's Encrypt
+        # cert for each host and routes by Host header, so issuer/URL strings stay
+        # identical to the public ones.
+        aliases:
+          - ${DOMAIN_AUTH}
+          - ${DOMAIN_API}
+          - ${DOMAIN_DASHBOARD}
     labels:
       - "traefik.enable=true"
 
@@ -128,7 +141,7 @@ services:
     volumes:
       # Config + users DB live OUTSIDE the repo on the VPS (never committed).
       - /etc/trader/authelia/configuration.yml:/config/configuration.yml:ro
-      - /etc/trader/authelia/users_database.yml:/config/users_database.yml:ro
+      - /etc/trader/authelia/users_database.yml:/config/users_database.yml
       - /etc/trader/authelia/oidc.issuer.key:/secrets/oidc.issuer.key:ro
       - authelia_data:/data
     networks:
