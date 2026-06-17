@@ -24,8 +24,6 @@ down_revision = '011'
 branch_labels = None
 depends_on = None
 
-ROLE_NAME = 'grafana_readonly'
-
 
 def _sql_quote(value: str) -> str:
     """Escape a string literal for safe inline use in SQL (double single-quotes)."""
@@ -35,6 +33,7 @@ def _sql_quote(value: str) -> str:
 def upgrade() -> None:
     """Create the grafana_readonly role with SELECT-only privileges."""
     password = os.getenv('POSTGRES_GRAFANA_READONLY_PASSWORD')
+    role_name = os.getenv('POSTGRES_GRAFANA_READONLY_USER')
 
     if password:
         login_clause = f"LOGIN PASSWORD '{_sql_quote(password)}'"
@@ -47,8 +46,8 @@ def upgrade() -> None:
     op.execute(f"""
         DO $$
         BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{ROLE_NAME}') THEN
-                CREATE ROLE {ROLE_NAME} {login_clause};
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role_name}') THEN
+                CREATE ROLE {role_name} {login_clause};
             END IF;
         END
         $$;
@@ -56,17 +55,17 @@ def upgrade() -> None:
 
     # Grant read-only access to the current database/schema.
     db_name = os.getenv('POSTGRES_DB', 'trader_bot')
-    op.execute(f'GRANT CONNECT ON DATABASE "{db_name}" TO {ROLE_NAME};')
-    op.execute(f"GRANT USAGE ON SCHEMA public TO {ROLE_NAME};")
-    op.execute(f"GRANT SELECT ON ALL TABLES IN SCHEMA public TO {ROLE_NAME};")
-    op.execute(f"GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO {ROLE_NAME};")
+    op.execute(f'GRANT CONNECT ON DATABASE "{db_name}" TO {role_name};')
+    op.execute(f"GRANT USAGE ON SCHEMA public TO {role_name};")
+    op.execute(f"GRANT SELECT ON ALL TABLES IN SCHEMA public TO {role_name};")
+    op.execute(f"GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO {role_name};")
 
     # Future tables created by the migration role inherit SELECT for grafana.
     op.execute(f"ALTER DEFAULT PRIVILEGES IN SCHEMA public "
-               f"GRANT SELECT ON TABLES TO {ROLE_NAME};")
+               f"GRANT SELECT ON TABLES TO {role_name};")
 
     # Defense in depth: explicitly revoke any write capability.
-    op.execute(f"REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public FROM {ROLE_NAME};")
+    op.execute(f"REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public FROM {role_name};")
 
 
 def downgrade() -> None:
