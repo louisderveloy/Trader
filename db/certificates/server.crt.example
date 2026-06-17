@@ -9,6 +9,12 @@
 #     -out server.crt -keyout server.key \
 #     -subj "/CN=<your-postgres-host-or-ip>"
 #
+# CRITICAL — permissions, or postgres refuses to start (key mounted read-only):
+#   sudo chown 70:70 server.key && sudo chmod 600 server.key
+#   # alternatively: chown to the container postgres user + chmod 600
+#
+# 70 is the userid of the user used in the timescaledb image. 
+#
 # The resulting server.crt is a PEM file:
 #   -----BEGIN CERTIFICATE-----
 #   ...

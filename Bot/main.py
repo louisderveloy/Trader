@@ -34,12 +34,10 @@ Examples:
 
 import argparse
 import asyncio
-import sys
-import os
 import logging
+import os
+import sys
 from datetime import datetime, timezone
-from decimal import Decimal
-from typing import Optional
 
 import asyncpg
 from dotenv import load_dotenv
@@ -326,6 +324,7 @@ async def check_services():
 
 def cmd_status(args):
     """Display system status and exit."""
+
     async def _status():
         print("\n" + "=" * 80)
         print("TRADING BOT - SYSTEM STATUS")
@@ -475,47 +474,47 @@ Examples:
     # FETCH subcommand
     # -------------------------------------------------------------------------
     fetch_parser = subparsers.add_parser('fetch',
-        help='Fetch historical candle data from Binance')
+                                         help='Fetch historical candle data from Binance')
     fetch_parser.add_argument('--symbol', required=True,
-        help='Trading symbol (e.g., BTCUSDT)')
+                              help='Trading symbol (e.g., BTCUSDT)')
     fetch_parser.add_argument('--timeframe', default='15m',
-        help='Candle timeframe (default: 15m)')
+                              help='Candle timeframe (default: 15m)')
     fetch_parser.add_argument('--start-date', required=True,
-        help='Start date (ISO format: YYYY-MM-DD)')
+                              help='Start date (ISO format: YYYY-MM-DD)')
     fetch_parser.add_argument('--end-date', required=True,
-        help='End date (ISO format: YYYY-MM-DD)')
+                              help='End date (ISO format: YYYY-MM-DD)')
     fetch_parser.add_argument('--testnet', action='store_true',
-        help='Use Binance testnet (limited historical data)')
+                              help='Use Binance testnet (limited historical data)')
 
     # -------------------------------------------------------------------------
     # BACKTEST subcommand
     # -------------------------------------------------------------------------
     backtest_parser = subparsers.add_parser('backtest',
-        help='Run backtesting on historical data')
+                                            help='Run backtesting on historical data')
     backtest_parser.add_argument('--symbol', default='BTCUSDC',
-        help='Trading symbol (default: BTCUSDC)')
+                                 help='Trading symbol (default: BTCUSDC)')
     backtest_parser.add_argument('--timeframe', default='15m',
-        help='Candle timeframe (default: 15m)')
+                                 help='Candle timeframe (default: 15m)')
     backtest_parser.add_argument('--start-date', required=True,
-        help='Start date (ISO format: YYYY-MM-DD)')
+                                 help='Start date (ISO format: YYYY-MM-DD)')
     backtest_parser.add_argument('--end-date', required=True,
-        help='End date (ISO format: YYYY-MM-DD)')
+                                 help='End date (ISO format: YYYY-MM-DD)')
     backtest_parser.add_argument('--initial-capital', type=float, default=10000,
-        help='Initial capital in USDC (default: 10000)')
+                                 help='Initial capital in USDC (default: 10000)')
     backtest_parser.add_argument('--weights-set-id',
-        help='UUID of weights set to use (default: active set)')
+                                 help='UUID of weights set to use (default: active set)')
     backtest_parser.add_argument('--engine', choices=['vectorbt', 'event_driven'],
-        default='vectorbt', help='Backtesting engine (default: vectorbt)')
+                                 default='vectorbt', help='Backtesting engine (default: vectorbt)')
     backtest_parser.add_argument('--save', action='store_true',
-        help='Save results to database')
+                                 help='Save results to database')
     backtest_parser.add_argument('--run-id', type=int, default=None,
-        help='Adopt a pre-created PENDING run (used by the dashboard supervisor)')
+                                 help='Adopt a pre-created PENDING run (used by the dashboard supervisor)')
 
     # -------------------------------------------------------------------------
     # OPTIMIZE subcommand
     # -------------------------------------------------------------------------
     opt_parser = subparsers.add_parser('optimize',
-        help='Run Optuna optimization for indicator weights')
+                                       help='Run Optuna optimization for indicator weights')
     opt_subparsers = opt_parser.add_subparsers(dest='subcmd', help='Optimization commands')
 
     # optimize run
@@ -526,21 +525,21 @@ Examples:
     opt_run.add_argument('--start-date', help='Start date (ISO format)')
     opt_run.add_argument('--end-date', help='End date (ISO format)')
     opt_run.add_argument('--objective',
-        choices=['sharpe_ratio', 'sortino_ratio', 'profit_factor', 'win_rate', 'total_return'],
-        help='Optimization objective')
+                         choices=['sharpe_ratio', 'sortino_ratio', 'profit_factor', 'win_rate', 'total_return'],
+                         help='Optimization objective')
     opt_run.add_argument('--n-trials', type=int, help='Number of trials per split')
     opt_run.add_argument('--n-splits', type=int, help='Number of walk-forward splits')
     opt_run.add_argument('--train-ratio', type=float, help='Training data ratio (0-1)')
     opt_run.add_argument('--walk-forward-mode', choices=['sliding', 'expanding'],
-        help='Walk-forward mode')
+                         help='Walk-forward mode')
     opt_run.add_argument('--sampler', choices=['tpe', 'random', 'grid', 'cmaes'],
-        help='Optuna sampler')
+                         help='Optuna sampler')
     opt_run.add_argument('--pruner', choices=['median', 'hyperband', 'none'],
-        help='Optuna pruner')
+                         help='Optuna pruner')
     opt_run.add_argument('--multithread', action='store_true',
-        help='Enable multithreaded optimization (use all CPU cores)')
+                         help='Enable multithreaded optimization (use all CPU cores)')
     opt_run.add_argument('--run-id', type=int, default=None,
-        help='Adopt a pre-created PENDING run (used by the dashboard supervisor)')
+                         help='Adopt a pre-created PENDING run (used by the dashboard supervisor)')
 
     # optimize list
     opt_list = opt_subparsers.add_parser('list', help='List optimization studies')
@@ -564,52 +563,52 @@ Examples:
     # PAPER subcommand
     # -------------------------------------------------------------------------
     paper_parser = subparsers.add_parser('paper',
-        help='Run paper trading (simulated, no real orders)')
+                                         help='Run paper trading (simulated, no real orders)')
     paper_parser.add_argument('--symbol', default='BTCUSDC',
-        help='Trading symbol (default: BTCUSDC)')
+                              help='Trading symbol (default: BTCUSDC)')
     paper_parser.add_argument('--timeframe', default='15m',
-        help='Candle timeframe (default: 15m)')
+                              help='Candle timeframe (default: 15m)')
     paper_parser.add_argument('--run-id', type=int, default=None,
-        help='Adopt a pre-created PENDING run (used by the dashboard supervisor)')
+                              help='Adopt a pre-created PENDING run (used by the dashboard supervisor)')
 
     # -------------------------------------------------------------------------
     # LIVE subcommand
     # -------------------------------------------------------------------------
     live_parser = subparsers.add_parser('live',
-        help='Run live trading (testnet or mainnet)')
+                                        help='Run live trading (testnet or mainnet)')
     live_parser.add_argument('--symbol', default='BTCUSDC',
-        help='Trading symbol (default: BTCUSDC)')
+                             help='Trading symbol (default: BTCUSDC)')
     live_parser.add_argument('--timeframe', default='15m',
-        help='Candle timeframe (default: 15m)')
+                             help='Candle timeframe (default: 15m)')
     live_parser.add_argument('--testnet', action='store_true',
-        help='Use Binance testnet (recommended for testing)')
+                             help='Use Binance testnet (recommended for testing)')
     live_parser.add_argument('--confirm', action='store_true',
-        help='Skip mainnet confirmation prompt (dangerous!)')
+                             help='Skip mainnet confirmation prompt (dangerous!)')
     live_parser.add_argument('--run-id', type=int, default=None,
-        help='Adopt a pre-created PENDING run (used by the dashboard supervisor)')
+                             help='Adopt a pre-created PENDING run (used by the dashboard supervisor)')
 
     # -------------------------------------------------------------------------
     # CONFIG subcommand
     # -------------------------------------------------------------------------
     config_parser = subparsers.add_parser('config',
-        help='Manage bot configuration')
+                                          help='Manage bot configuration')
     config_subparsers = config_parser.add_subparsers(dest='config_cmd', help='Config commands')
 
     # config create
     config_create = config_subparsers.add_parser('create',
-        help='Create new configuration interactively')
+                                                 help='Create new configuration interactively')
 
     # -------------------------------------------------------------------------
     # STATUS subcommand
     # -------------------------------------------------------------------------
     status_parser = subparsers.add_parser('status',
-        help='Check system health (database, environment)')
+                                          help='Check system health (database, environment)')
 
     # -------------------------------------------------------------------------
     # DOCKER_ENTRY subcommand
     # -------------------------------------------------------------------------
     docker_entry_parser = subparsers.add_parser('docker_entry',
-        help='Docker entry point - check health and keep container alive')
+                                                help='Docker entry point - check health and keep container alive')
 
     # Parse arguments
     args = parser.parse_args()

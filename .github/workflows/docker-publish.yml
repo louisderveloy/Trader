@@ -167,14 +167,6 @@ jobs:
             ./db ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:${{ secrets.VPS_DEPLOY_PATH }}/
           rm /tmp/ssh_key
 
-      - name: Copy authelia conf to VPS
-        run: |
-          echo "${{ secrets.VPS_SSH_KEY }}" > /tmp/ssh_key
-          chmod 600 /tmp/ssh_key
-          scp -i /tmp/ssh_key -r -o StrictHostKeyChecking=no \
-            ./authelia ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:${{ secrets.VPS_DEPLOY_PATH }}/
-          rm /tmp/ssh_key
-
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
         env:
