@@ -181,6 +181,43 @@ def test_strategy_engine_with_custom_risk_manager(run_id, strategy_config, mock_
     assert engine.risk_manager == mock_risk_manager
 
 
+def test_update_config_propagates_to_engine_and_risk_manager(strategy_engine, weights_id):
+    """Regression: hot-reloaded config must reach the engine AND its risk manager.
+
+    Previously the trading loop reloaded its own ``self.config`` but never updated
+    the engine, so dashboard threshold/risk changes were silently ignored and the
+    engine kept skipping with stale thresholds.
+    """
+    new_config_id = uuid4()
+    new_config = StrategyEngineConfig(
+        strategy=StrategyConfig(
+            entry_threshold=-0.5,
+            exit_threshold=-0.51,
+            confirmation_candles=1,
+        ),
+        risk=RiskConfig(
+            max_trades_per_day=99,
+            max_exposure_percent=80.0,
+            position_size_mode=PositionSizeMode.FIXED,
+            fixed_size_usdt=250.0,
+        ),
+        stop_loss=StopLossConfig(mode=StopLossMode.ATR, atr_multiplier=2.0),
+        take_profit=TakeProfitConfig(mode=TakeProfitMode.ATR, atr_multiplier=3.0),
+        cooldown=CooldownConfig(after_trade_seconds=120),
+    )
+
+    strategy_engine.update_config(new_config, new_config_id)
+
+    # Engine sees the new thresholds and config id used for decision logging.
+    assert strategy_engine.config.strategy.entry_threshold == -0.5
+    assert strategy_engine.config.strategy.exit_threshold == -0.51
+    assert strategy_engine.config_id == new_config_id
+    # Risk manager's own config references are refreshed too.
+    assert strategy_engine.risk_manager.risk_config is new_config.risk
+    assert strategy_engine.risk_manager.cooldown_config is new_config.cooldown
+    assert strategy_engine.risk_manager.risk_config.max_trades_per_day == 99
+
+
 # --- load_active_weights tests ---
 
 @pytest.mark.asyncio

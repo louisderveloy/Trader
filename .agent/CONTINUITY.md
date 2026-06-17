@@ -145,6 +145,19 @@
   message string — the bot log format is `%(message)s` and was dropping the `extra={indicator,error}` dict,
   so failures were undiagnosable from the logs.
 
+### Strategy engine (live-loop, branch `feature/stop-loss`)
+- **Config hot-reload never reached the StrategyEngine → decisions used stale thresholds** (2026-06-17,
+  fixed). Symptom: dashboard set entry threshold `0.09 → -0.5`; the loop logged the change and "✓
+  Configuration reloaded", yet every decision stayed `skip` "score 0.0xx in neutral zone" with scores
+  (~0.07) that are *below the old 0.09 but above the new -0.5*. Root cause: `_reload_config()` in
+  `trading.py` rebinds `self.config`/`self.config_id` but never updated `self.engine` — `StrategyEngine`
+  holds its own `config` (set at construction) and a `RiskManager` with its own `risk_config`/
+  `cooldown_config` copies. **Fix:** new `StrategyEngine.update_config(config, config_id)` refreshes
+  engine.config, config_id and the risk manager's two config refs (runtime state — confirmation, weights,
+  position, risk counters — preserved); `_reload_config` now calls it. Regression test
+  `test_update_config_propagates_to_engine_and_risk_manager`. NOTE: a running bot process must be
+  restarted to pick up code changes; config changes alone now hot-reload correctly.
+
 ### Dashboard / API (recent)
 - **Optimisations filter/sort is server-side SQL** (2026-06-12, user rejected client-side). ORDER BY
   column from a whitelist map, direction from enum, all values bound as `$n` → no user input in SQL;

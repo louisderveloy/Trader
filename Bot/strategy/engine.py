@@ -94,6 +94,34 @@ class StrategyEngine:
             }
         )
 
+    def update_config(
+        self,
+        config: StrategyEngineConfig,
+        config_id: Optional[UUID] = None,
+    ) -> None:
+        """Apply a hot-reloaded configuration to the engine and its risk manager.
+
+        The trading loop owns config reload (via PostgreSQL LISTEN/NOTIFY). Without
+        this the engine would keep its construction-time ``config`` and silently
+        ignore threshold, sizing, stop-loss and risk/cooldown changes made from the
+        dashboard. The risk manager holds its own references to ``risk``/``cooldown``
+        config, so those are refreshed too. Runtime state (confirmation progress,
+        active weights, position, risk counters) is intentionally preserved.
+
+        Args:
+            config: The newly loaded strategy engine configuration.
+            config_id: Optional database config ID used for decision logging.
+        """
+        self.config = config
+        if config_id is not None:
+            self.config_id = config_id
+        self.risk_manager.risk_config = config.risk
+        self.risk_manager.cooldown_config = config.cooldown
+        logger.info(
+            "Strategy engine configuration updated",
+            extra={"run_id": str(self.run_id), "config": config.to_snapshot()},
+        )
+
     async def load_active_weights(self) -> WeightsSnapshot:
         """
         Load active indicator weights from weights_sets table.

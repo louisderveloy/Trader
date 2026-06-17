@@ -1778,6 +1778,13 @@ class TradingBot:
             self.config_id = new_config_id
             logger.info(f"  New config ID: {new_config_id}")
 
+            # Propagate to the strategy engine, otherwise it keeps its
+            # construction-time config and silently ignores the new thresholds,
+            # sizing, stop-loss and risk/cooldown settings (the engine owns the
+            # entry/exit decision, so a stale config here = decisions never change).
+            if self.engine is not None:
+                self.engine.update_config(new_config, new_config_id)
+
             # Reload weights (they might have changed too)
             await self._load_weights()
 
