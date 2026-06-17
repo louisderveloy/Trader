@@ -243,9 +243,17 @@ init (no run_id, flat kwargs) + `get_strategy_decision` SKIP stub with wrong Tra
 - C7: tests delivered per-commit (test_trading_stop_loss, test_native_stop, test_vectorbt_stops + engine
   fixture fix). Coherence end-to-end test deferred with event-driven (#26).
 
-**ISSUE #17 STATUS: COMPLETE for this PR** (branch `feature/stop-loss`, 7 commits). Full suite **427
-pass / 10 skip**. Follow-up **#26** tracks event-driven backtester completion. PR pending user (never
-open PR to main — open to Dev/equivalent; only user merges).
+**CRITICAL FIX (real-DB verification):** `engine.load_active_weights` assumed `row["weights"]` was a
+dict, but asyncpg returns JSONB as **str** (bot pool has no codec). Once the loop started calling
+`make_decision`, `calculate_weighted_score` did `str.items()` → raised → swallowed by the loop guard as
+"decision skipped" **every iteration → bot silently never trades**. Fixed with defensive `json.loads`;
+regression test simulates str-JSONB. Found by seeding runs/config/weights_sets and executing all three
+write paths (`make_decision`→`_log_score`/`_log_decision`, `_create_trade_entry`, `_log_trade`) against
+the live migrated DB — all clean, returned `entry_long` with ATR SL/TP, rows persisted, cleaned up.
+
+**ISSUE #17 STATUS: COMPLETE for this PR** (branch `feature/stop-loss`, 8 commits + docs). Full suite
+**428 pass / 10 skip**. Follow-up **#26** tracks event-driven backtester completion. PR pending user
+(never open PR to main — open to Dev/equivalent; only user merges).
 
 **Pre-live TODO (not blocking PR):** testnet E2E of the native OCO fill-reconciliation path before
 Phase 15. Backtest runner should populate `strategy_params['stop_loss'/'take_profit']` so vectorbt reads
