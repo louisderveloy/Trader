@@ -653,8 +653,18 @@ class TradingBot:
             f"{balance_str}"
         )
 
-        # In position: SL/TP price levels take precedence over signal exits
+        # In position: SL/TP take precedence over signal exits.
         if self.position is not None:
+            if self._has_native_stop():
+                # Live/testnet: the exchange OCO executes SL/TP. Detect fills here;
+                # only a signal exit triggers an active (software) close.
+                if await self._reconcile_native_stop(weighted_score, signals):
+                    return  # OCO resolved → position closed on the exchange
+                if decision.decision_type == DecisionType.EXIT:
+                    await self._cancel_native_stop()
+                    await self._execute_exit(current_price, "signal", weighted_score, signals)
+                return
+            # Software-monitored fallback (paper, or OCO placement failed)
             stop_reason = self._price_stop_reason(current_price)
             if stop_reason:
                 await self._execute_exit(current_price, stop_reason, weighted_score, signals)
@@ -713,6 +723,146 @@ class TradingBot:
         if take_profit is not None and price >= take_profit:
             return "take_profit"
         return None
+
+    def _has_native_stop(self) -> bool:
+        """True if the open position is protected by a resting exchange OCO."""
+        return bool(self.position and self.position.get("stop_order_list_id"))
+
+    async def _place_native_stop(self, entry_price, quantity, stop_loss, take_profit):
+        """Place an exchange-resident OCO (SL + TP) for a live/testnet position.
+
+        Paper mode is software-monitored only. On any failure we leave
+        stop_order_list_id=None so the software stop (_price_stop_reason) takes over.
+        """
+        if self.mode != "live" or not self.position:
+            return
+        try:
+            # Stop-limit a touch below the trigger to improve the odds it fills
+            stop_limit = stop_loss * Decimal("0.999")
+            oco = await self.exchange.place_oco_sell_order(
+                symbol=self.symbol,
+                quantity=quantity,
+                take_profit_price=take_profit,
+                stop_price=stop_loss,
+                stop_limit_price=stop_limit,
+            )
+            self.position["stop_order_list_id"] = oco.get("order_list_id")
+            self.position["stop_leg_order_ids"] = oco.get("leg_order_ids", [])
+            logger.info(
+                f"Native OCO stop placed: list_id={oco.get('order_list_id')} "
+                f"legs={oco.get('leg_order_ids')} (SL {stop_loss:.2f} / TP {take_profit:.2f})"
+            )
+        except Exception as e:
+            logger.error(f"Failed to place native OCO stop; falling back to software monitoring: {e}")
+            await log_exception(
+                self.db_pool, e,
+                severity=ErrorSeverity.HIGH,
+                category=ErrorCategory.ORDER,
+                context={"symbol": self.symbol, "phase": "place_oco"},
+                run_id=self.run_id,
+            )
+            self.position["stop_order_list_id"] = None
+            self.position["stop_leg_order_ids"] = []
+
+    async def _cancel_native_stop(self):
+        """Cancel the resting OCO (best-effort, idempotent) before an active exit."""
+        if not self._has_native_stop():
+            return
+        for leg_id in (self.position.get("stop_leg_order_ids") or []):
+            try:
+                await self.exchange.cancel_oco_order(self.symbol, leg_id)
+                break  # cancelling one leg cancels the whole OCO pair
+            except Exception as e:
+                logger.warning(f"OCO cancel via leg {leg_id} failed (may already be gone): {e}")
+        self.position["stop_order_list_id"] = None
+        self.position["stop_leg_order_ids"] = []
+
+    async def _reconcile_native_stop(self, score: float, signals: Dict[str, float]) -> bool:
+        """Detect a server-side OCO fill for a live position and close the trade.
+
+        Returns True if the OCO has resolved and the position has been closed
+        (caller stops processing this iteration); False if the OCO is still resting
+        (exchange protection active — no software action needed).
+        """
+        if not self._has_native_stop():
+            return False
+        legs = self.position.get("stop_leg_order_ids") or []
+        try:
+            open_orders = await self.exchange.get_open_orders(self.symbol)
+            open_ids = {str(o.get("order_id")) for o in open_orders}
+        except Exception as e:
+            # Don't software-sell while a native OCO may still be live on the exchange
+            logger.error(f"Failed to poll open orders for native stop; holding position: {e}")
+            return True
+        if any(str(leg) in open_ids for leg in legs):
+            return False  # still resting
+
+        # OCO no longer open → find the filled leg to learn the exit price + reason
+        filled_price = None
+        exit_reason = "stop_loss"
+        for leg_id in legs:
+            try:
+                st = await self.exchange.get_order_status(self.symbol, leg_id)
+            except Exception:
+                continue
+            if st.get("status") == "filled":
+                typ = (st.get("type") or "").lower()
+                exit_reason = "stop_loss" if "stop" in typ else "take_profit"
+                filled_price = st.get("filled_price")
+                break
+
+        if filled_price is None:
+            logger.warning("Native OCO no longer open but no filled leg found; reverting to software stop.")
+            self.position["stop_order_list_id"] = None
+            self.position["stop_leg_order_ids"] = []
+            return False
+
+        await self._finalize_native_exit(Decimal(str(filled_price)), exit_reason, score, signals)
+        return True
+
+    async def _finalize_native_exit(self, filled_price: Decimal, exit_reason: str,
+                                    score: float, signals: Dict[str, float]):
+        """Record a position closed by the exchange-side OCO (no new order placed)."""
+        entry_price = self.position["entry_price"]
+        quantity = self.position["quantity"]
+        entry_commission = self.position["entry_commission"]
+
+        exit_commission = quantity * filled_price * Decimal("0.001")
+        gross_pnl = (filled_price - entry_price) * quantity
+        net_pnl = gross_pnl - entry_commission - exit_commission
+        net_pnl_pct = (net_pnl / (entry_price * quantity)) * 100
+        self.capital += net_pnl
+
+        await self._log_trade(
+            trade_id=self.position["trade_id"],
+            exit_price=filled_price,
+            exit_reason=exit_reason,
+            net_pnl=net_pnl,
+            net_pnl_pct=float(net_pnl_pct),
+            exit_score=score,
+            exit_signals=signals,
+            exit_order_id=None,
+            exit_commission=exit_commission,
+        )
+
+        logger.info("=" * 60)
+        logger.info(f"POSITION CLOSED (native OCO: {exit_reason})")
+        logger.info(f"Entry: {entry_price:.2f} | Exit: {filled_price:.2f} | "
+                    f"P&L: {net_pnl:.2f} USDT ({net_pnl_pct:+.2f}%)")
+        logger.info("=" * 60)
+
+        if self.discord_notifier:
+            try:
+                await self.discord_notifier.notify_trade_closed(
+                    symbol=self.symbol, side="long", entry_price=entry_price,
+                    exit_price=filled_price, pnl=net_pnl, pnl_pct=float(net_pnl_pct),
+                    reason=exit_reason,
+                )
+            except Exception as e:
+                logger.error(f"Failed to send Discord trade completion notification: {e}")
+
+        self.last_trade_time = datetime.now(timezone.utc)
+        self.position = None
 
     async def _check_pending_order(self, current_price: Decimal):
         """
@@ -854,7 +1004,10 @@ class TradingBot:
                     "order_id": exchange_order_id,
                     "entry_order_id": order_id,
                     "entry_score": entry_score,
-                    "entry_signals": entry_signals
+                    "entry_signals": entry_signals,
+                    # Native exchange OCO (live only); None ⇒ software-monitored fallback
+                    "stop_order_list_id": None,
+                    "stop_leg_order_ids": [],
                 }
 
                 logger.info("=" * 60)
@@ -863,6 +1016,11 @@ class TradingBot:
                 logger.info(f"SL: {stop_loss:.2f} | TP: {take_profit:.2f}")
                 logger.info(f"Trade ID: {trade_id}")
                 logger.info("=" * 60)
+
+                # Place an exchange-resident OCO (SL + TP) for live/testnet so the
+                # position is protected even if the bot process goes down. Paper
+                # mode and any failure here fall back to software monitoring.
+                await self._place_native_stop(filled_price, quantity, stop_loss, take_profit)
 
                 # Send Discord notification for trade opened
                 if self.discord_notifier:
@@ -1124,9 +1282,13 @@ class TradingBot:
             score: float,
             signals: Dict[str, float]
     ):
-        """Execute exit order."""
+        """Execute exit order (places a new market sell)."""
         if not self.position:
             return
+
+        # Never leave a resting OCO behind when we actively market-sell, or the
+        # exchange could double-sell once the OCO also triggers.
+        await self._cancel_native_stop()
 
         quantity = self.position["quantity"]
         entry_price = self.position["entry_price"]

@@ -449,6 +449,84 @@ class BinanceExchange(ExchangeBase):
             logger.error(f"Unexpected error placing market order: {e}")
             raise ExchangeError(f"Failed to place market order: {e}")
 
+    async def place_oco_sell_order(
+        self,
+        symbol: str,
+        quantity: Decimal,
+        take_profit_price: Decimal,
+        stop_price: Decimal,
+        stop_limit_price: Optional[Decimal] = None,
+    ) -> Dict[str, Any]:
+        """Place a One-Cancels-Other SELL order (exchange-side SL + TP for a LONG).
+
+        See ExchangeBase.place_oco_sell_order for the contract. The take-profit is
+        a LIMIT leg at ``take_profit_price``; the stop-loss is a STOP_LOSS_LIMIT leg
+        triggered at ``stop_price`` with limit ``stop_limit_price`` (defaults to the
+        trigger price).
+        """
+        if not self.client:
+            raise ConnectionError("Not connected to Binance. Call connect() first.")
+
+        symbol = self.normalize_symbol(symbol)
+        if stop_limit_price is None:
+            stop_limit_price = stop_price
+
+        try:
+            symbol_info = await self.get_symbol_info(symbol)
+            fmt_qty = self._format_quantity(quantity, symbol_info["lot_size_step"])
+            tick = symbol_info["price_tick"]
+            fmt_tp = self._format_price(take_profit_price, tick)
+            fmt_stop = self._format_price(stop_price, tick)
+            fmt_stop_limit = self._format_price(stop_limit_price, tick)
+
+            params = {
+                "symbol": symbol,
+                "side": "SELL",
+                "quantity": fmt_qty,
+                "price": fmt_tp,                 # take-profit limit leg
+                "stopPrice": fmt_stop,           # stop trigger
+                "stopLimitPrice": fmt_stop_limit,  # stop-loss limit once triggered
+                "stopLimitTimeInForce": "GTC",
+            }
+
+            logger.debug(f"Placing OCO sell order with params: {params}")
+            result = await self.client.create_oco_order(**params)
+            logger.debug(f"Binance OCO order response: {result}")
+
+            order_reports = result.get("orderReports", []) or result.get("orders", [])
+            leg_order_ids = [str(o["orderId"]) for o in order_reports if o.get("orderId") is not None]
+
+            return {
+                "order_list_id": str(result.get("orderListId")),
+                "leg_order_ids": leg_order_ids,
+                "status": "pending",
+                "created_at": datetime.now(timezone.utc),
+            }
+
+        except BinanceAPIException as e:
+            if e.code == -1121:
+                raise InvalidSymbolError(f"Invalid symbol: {symbol}")
+            elif e.code == -2010:
+                raise InsufficientBalanceError(f"Insufficient balance: {e.message}")
+            elif e.code in [-1013, -1111, -2011]:
+                raise OrderRejectError(f"OCO order rejected: {e.message}")
+            elif e.code == -1003:
+                raise RateLimitError(f"Rate limit exceeded: {e.message}")
+            else:
+                logger.error(f"Binance API error placing OCO order: {e.message}")
+                raise ExchangeError(f"Failed to place OCO order: {e.message}")
+        except Exception as e:
+            logger.error(f"Unexpected error placing OCO order: {e}")
+            raise ExchangeError(f"Failed to place OCO order: {e}")
+
+    async def cancel_oco_order(self, symbol: str, leg_order_id: str) -> Dict[str, Any]:
+        """Cancel a resting OCO order by one of its leg order IDs.
+
+        Cancelling either leg cancels the whole OCO pair on Binance, so this
+        delegates to the regular cancel_order path (already battle-tested).
+        """
+        return await self.cancel_order(symbol, leg_order_id)
+
     async def cancel_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
         """Cancel an open order on Binance.
 
