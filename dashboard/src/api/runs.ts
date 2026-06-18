@@ -85,6 +85,16 @@ export async function killRun(runId: number): Promise<RunCommandResponse> {
 }
 
 /**
+ * Retry a finished run (completed/failed/cancelled) with its original params
+ */
+export async function retryRun(runId: number, confirmPhrase?: string): Promise<StartRunResponse> {
+  const response = await apiClient.post<StartRunResponse>(`/runs/${runId}/retry`, {
+    confirm_phrase: confirmPhrase,
+  })
+  return response.data
+}
+
+/**
  * Get the last log lines for a run (snapshot)
  */
 export async function getRunLogs(runId: number): Promise<RunLogsResponse> {

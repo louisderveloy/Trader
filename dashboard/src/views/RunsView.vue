@@ -117,6 +117,7 @@
           @logs="openLogs"
           @stop="handleStop"
           @kill="handleKill"
+          @retry="handleRetry"
         />
       </div>
 
@@ -235,6 +236,13 @@ async function handleKill(runId: number) {
     return
   }
   await runsStore.killRun(runId)
+}
+
+async function handleRetry(runId: number) {
+  if (!window.confirm(`Relancer le run #${runId} avec les mêmes paramètres ?`)) {
+    return
+  }
+  await runsStore.retryRun(runId)
 }
 
 onMounted(() => {

@@ -305,6 +305,20 @@ class StartOptimizationRequest(BaseModel):
         return params
 
 
+class RetryRunRequest(BaseModel):
+    """Request to retry a finished (completed/failed/cancelled) run with its original params.
+
+    Only ``confirm_phrase`` is accepted from the client: every other param is
+    re-read from the original run's ``config_snapshot`` server-side, so a retry
+    cannot smuggle in different settings than what was actually run before.
+    Mainnet live retries still require the safety phrase, same as a fresh start.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    confirm_phrase: Optional[str] = Field(default=None, description="Mainnet safety phrase ('I UNDERSTAND')")
+
+
 class StartRunResponse(BaseModel):
     """Returned when a start command is accepted (run created in PENDING)."""
 

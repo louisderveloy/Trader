@@ -85,6 +85,15 @@
         Kill
       </button>
 
+      <button
+        v-if="canRetry"
+        type="button"
+        @click="$emit('retry', run.id)"
+        class="px-3 py-1.5 text-sm border border-primary-300 rounded-md text-primary-700 bg-primary-50 hover:bg-primary-100"
+      >
+        Réessayer
+      </button>
+
       <!-- Optional Grafana link -->
       <a
         v-if="grafanaUrl"
@@ -126,16 +135,21 @@ defineEmits<{
   logs: [runId: number]
   stop: [runId: number]
   kill: [runId: number]
+  retry: [runId: number]
 }>()
 
 const auth = useAuthStore()
 const grafanaUrl = computed(() => import.meta.env.VITE_GRAFANA_BASE_URL)
 
 const isActive = computed(() => ['running', 'pending'].includes(props.run.status))
+const isFinished = computed(() =>
+  ['completed', 'failed', 'cancelled'].includes(props.run.status)
+)
 // Stop is graceful and valid for any run type; kill is backtest-only (SIGKILL
 // would orphan live/paper positions). Both are admin-only.
 const canStop = computed(() => auth.isAdmin && isActive.value)
 const canKill = computed(() => auth.isAdmin && isActive.value && props.run.run_type === 'backtest')
+const canRetry = computed(() => auth.isAdmin && isFinished.value)
 
 // Display only first 4 result keys
 const displayedResults = computed(() => {
