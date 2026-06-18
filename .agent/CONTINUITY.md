@@ -92,6 +92,14 @@
   `coalesce(a,b)` parsed as the interval) → compute coalesced ts in a subquery, apply macro to plain col.
 - **Catalog still open:** #4 Run comparison, #5 Optuna insight, #7 Live "Now" monitor, #8 User indicator.
   Migration-needed only: Optuna per-trial importance, threshold historization.
+- **BUG FIXED — degenerate live candles (`trading.py::_store_candles`, 2026-06-18):** loop runs ~1×/min,
+  re-fetches the still-forming 15m candle, but stored with `ON CONFLICT DO NOTHING` → candle frozen at its
+  first-minute snapshot (no wick, wrong close → discontinuous "jumps" on chart, open[t]≠close[t-1] by
+  ±$100s). Fix = `DO UPDATE SET high/low/close/volume = EXCLUDED` (open preserved); self-heals within the
+  candles[-10:] window. **Bot must be restarted; already-stored bad candles need a re-fetch to repair.**
+- **score_logs cadence:** scores logged ~1×/min in `created_at`; but `time` is 15m-aligned (= candle time)
+  so plotting `time` collapsed to one point/15min. Candle dashboards' score panel now plots
+  `$__timeGroupAlias(created_at,'$__interval')` avg → per-minute on 24h, auto-coarser past 2 days.
 
 ### Production / deploy
 - **CI/CD** (`.github/workflows/docker-publish.yml`): parallel build of bot/api/dashboard → GHCR →

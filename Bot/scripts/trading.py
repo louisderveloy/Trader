@@ -1514,10 +1514,20 @@ class TradingBot:
 
     async def _store_candles(self, candles: list):
         """Store candles in database."""
+        # The loop runs every ~1 min and re-fetches the still-forming current
+        # candle. With DO NOTHING the candle was frozen at its first-minute
+        # snapshot (no wick, wrong close → discontinuous candles on the chart).
+        # DO UPDATE refreshes the forming candle each fetch with the exchange's
+        # authoritative running OHLC; the original `open` is preserved. A candle
+        # self-heals to its final OHLC while it stays in the candles[-10:] window.
         query = """
             INSERT INTO candles (time, symbol, timeframe, open, high, low, close, volume)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT (time, symbol, timeframe) DO NOTHING
+            ON CONFLICT (time, symbol, timeframe) DO UPDATE SET
+                high = EXCLUDED.high,
+                low = EXCLUDED.low,
+                close = EXCLUDED.close,
+                volume = EXCLUDED.volume
         """
         async with self.db_pool.acquire() as conn:
             for candle in candles[-10:]:  # Only store last 10 (most likely new)
