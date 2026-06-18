@@ -72,7 +72,7 @@ export interface LaunchOptimizationResponse {
   message: string
 }
 
-export type OptimizationSortField = 'completed_at' | 'best_value'
+export type OptimizationSortField = 'completed_at' | 'best_value' | 'started_at'
 export type SortDirection = 'asc' | 'desc'
 
 export interface OptimizationQuery {

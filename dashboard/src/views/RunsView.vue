@@ -15,7 +15,7 @@
 
       <!-- Filters -->
       <div class="bg-white rounded-lg shadow p-4">
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
           <!-- Run type filter -->
           <div>
             <label for="filter-type" class="block text-sm font-medium text-gray-700 mb-1">
@@ -64,6 +64,21 @@
               placeholder="BTCUSDT"
               class="block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500"
             />
+          </div>
+
+          <!-- Sort direction -->
+          <div>
+            <label for="filter-sort-dir" class="block text-sm font-medium text-gray-700 mb-1">
+              Trier par date
+            </label>
+            <select
+              id="filter-sort-dir"
+              v-model="filters.sort_dir"
+              class="block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+            >
+              <option value="desc">Plus récent d'abord</option>
+              <option value="asc">Plus ancien d'abord</option>
+            </select>
           </div>
 
           <!-- Apply button -->
@@ -167,6 +182,7 @@ const filters = ref({
   run_type: '',
   status: '',
   symbol: '',
+  sort_dir: 'desc' as 'asc' | 'desc',
 })
 
 const showStartModal = ref(false)
@@ -189,6 +205,7 @@ function applyFilters() {
     run_type: filters.value.run_type || undefined,
     status: filters.value.status || undefined,
     symbol: filters.value.symbol || undefined,
+    sort_dir: filters.value.sort_dir,
   })
 }
 

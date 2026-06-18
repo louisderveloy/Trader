@@ -24,6 +24,7 @@ export async function listRuns(filters: RunFilters = {}): Promise<RunListRespons
     ...(filters.status && { status: filters.status }),
     ...(filters.environment && { environment: filters.environment }),
     ...(filters.symbol && { symbol: filters.symbol }),
+    ...(filters.sort_dir && { sort_dir: filters.sort_dir }),
     limit: filters.limit || 20,
     offset: filters.offset || 0,
   }

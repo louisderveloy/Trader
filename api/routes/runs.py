@@ -11,6 +11,7 @@ import logging
 import os
 import pathlib
 from datetime import datetime, time, timezone
+from enum import Enum
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -39,6 +40,13 @@ router = APIRouter()
 # Resolve the log directory once; per-run paths are confined under it.
 _LOG_DIR = pathlib.Path(settings.bot_logs_dir).resolve()
 _LOG_MAX_LINE_CHARS = 2000
+
+
+class RunSortDirection(str, Enum):
+    """Allowed sort directions for ``created_at``."""
+
+    asc = "asc"
+    desc = "desc"
 
 
 def _tail_file(path: pathlib.Path, n: int, max_bytes: int = 262_144) -> tuple[list[str], bool]:
@@ -101,6 +109,9 @@ async def list_runs(
     symbol: Annotated[str | None, Query(max_length=20, description="Filter by symbol (max 20 chars)")] = None,
     limit: Annotated[int, Query(ge=1, le=1000, description="Maximum results")] = 100,
     offset: Annotated[int, Query(ge=0, description="Offset for pagination")] = 0,
+    sort_dir: Annotated[
+        RunSortDirection, Query(description="Sort direction for created_at")
+    ] = RunSortDirection.desc,
     principal: Principal = Depends(require_viewer),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> RunListResponse:
@@ -148,7 +159,7 @@ async def list_runs(
             weights_set_id, optuna_study_id
         FROM runs
         {where_clause}
-        ORDER BY created_at DESC
+        ORDER BY created_at {"ASC" if sort_dir == RunSortDirection.asc else "DESC"}
         LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}
     """
 

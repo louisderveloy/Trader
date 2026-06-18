@@ -87,6 +87,7 @@ class OptSortField(str, Enum):
 
     completed_at = "completed_at"
     best_value = "best_value"
+    started_at = "started_at"
 
 
 class SortDirection(str, Enum):
@@ -101,6 +102,7 @@ class SortDirection(str, Enum):
 _SORT_COLUMNS: dict[OptSortField, str] = {
     OptSortField.completed_at: "r.completed_at",
     OptSortField.best_value: "s.best_value",
+    OptSortField.started_at: "r.started_at",
 }
 
 # The objective lives in the JSONB config snapshot (dashboard launches store it under

@@ -87,6 +87,7 @@
               class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500"
             >
               <option value="completed_at">Date de fin</option>
+              <option value="started_at">Date de début</option>
               <option value="best_value">Meilleur score</option>
             </select>
           </div>

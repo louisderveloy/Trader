@@ -46,6 +46,7 @@ export interface RunFilters {
   symbol?: string
   limit?: number
   offset?: number
+  sort_dir?: 'asc' | 'desc'
 }
 
 export interface RunListResponse {
