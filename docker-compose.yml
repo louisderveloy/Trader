@@ -26,7 +26,6 @@ services:
   postgres:
     image: timescale/timescaledb:latest-pg16
     container_name: trader-postgres
-    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-trader_bot}
       POSTGRES_USER: ${POSTGRES_USER:-trader}
@@ -56,7 +55,6 @@ services:
       dockerfile: Dockerfile
       args:
         INSTALL_DEV: "true"  # Install dev dependencies in dev environment
-    restart: unless-stopped
     stop_grace_period: 60s
     env_file:
       - .env
@@ -93,7 +91,6 @@ services:
     build:
       context: ./api
       dockerfile: Dockerfile
-    restart: unless-stopped
     env_file:
       - .env
     environment:
@@ -126,7 +123,6 @@ services:
     build:
       context: ./dashboard
       dockerfile: Dockerfile
-    restart: unless-stopped
     env_file:
       - .env
     environment:

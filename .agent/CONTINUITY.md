@@ -73,6 +73,26 @@
   exchange `get_order_status` before marking filled; paper simulates 1-iteration delay + slippage. Earlier
   code dangerously marked limit orders filled on placement.
 
+### Grafana dashboards (2026-06-18, via grafana-mcp)
+- **Datasource:** `trader-postgresql` uid `efpfshwhb7thcd`. **Schema = migrations only** (prod ≠ local).
+  Migration 002 recreated `runs` with INTEGER `id` (SERIAL) + real `symbol`/`timeframe` cols; all
+  `run_id` FKs are INTEGER → cast `${run_id}::integer`. Thresholds at
+  `config_snapshot->'strategy'->>'entry_threshold'/'exit_threshold'`; B&H base at
+  `config_snapshot->>'initial_capital'` (top-level string, added in trading.py `_create_run_record`).
+- **5 dashboards built:** `trader-candles-{paper,live}` (candlestick + score panel w/ threshold lines +
+  trade region annotations), `trader-perf-bah` (equity strat-vs-B&H, drawdown, KPIs), `trader-trades`
+  (P&L histo, win-rate by exit_reason/hour, table), `trader-health` (errors, fill rate, latency,
+  slippage — global/time-range). User will rework the candle pair later.
+- **⚠️ PROD NEARLY EMPTY (verified via /api/ds/query):** only `candles` populated (112,973 BTCUSDC 15m →
+  06-17 23:45); **0 rows in score_logs/signals/trades/orders/errors_log**, 2 runs (optimization running,
+  paper cancelled). Empty "Score" panel is NOT a bug. Optimization runs don't write signals/score/trades.
+  **Real blocker upstream: paper/live runs aren't persisting trade/signal data.** All dashboards read
+  empty until fixed.
+- **Macro gotcha:** `$__timeGroup`/`$__timeFilter` break on a function as the time arg (comma in
+  `coalesce(a,b)` parsed as the interval) → compute coalesced ts in a subquery, apply macro to plain col.
+- **Catalog still open:** #4 Run comparison, #5 Optuna insight, #7 Live "Now" monitor, #8 User indicator.
+  Migration-needed only: Optuna per-trial importance, threshold historization.
+
 ### Production / deploy
 - **CI/CD** (`.github/workflows/docker-publish.yml`): parallel build of bot/api/dashboard → GHCR →
   SSH deploy to VPS on main. `docker-compose.prod.yml` uses GHCR images + `pull_policy: always`.
