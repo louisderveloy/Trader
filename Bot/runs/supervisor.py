@@ -141,6 +141,13 @@ def _validate_start_params(params: dict[str, Any]) -> dict[str, Any]:
             clean["weights_set_id"] = wsid
         clean["save"] = bool(params.get("save", True))
 
+    elif run_type == "paper":
+        capital = params.get("initial_capital")
+        if capital is not None:
+            if not isinstance(capital, (int, float)) or isinstance(capital, bool) or capital <= 0:
+                raise CommandValidationError(f"invalid initial_capital: {capital!r}")
+            clean["initial_capital"] = float(capital)
+
     elif run_type == "live":
         testnet = params.get("testnet")
         if not isinstance(testnet, bool):
@@ -261,6 +268,9 @@ def _build_argv(run_id: int, params: dict[str, Any]) -> list[str]:
             argv += ["--weights-set-id", params["weights_set_id"]]
         if params.get("save", True):
             argv += ["--save"]
+    elif run_type == "paper":
+        if "initial_capital" in params:
+            argv += ["--initial-capital", str(params["initial_capital"])]
     elif run_type == "live":
         if params.get("testnet"):
             argv += ["--testnet"]
