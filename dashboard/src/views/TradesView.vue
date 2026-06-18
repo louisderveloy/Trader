@@ -231,8 +231,28 @@
               <th class="px-4 py-3 text-left font-semibold text-gray-900">Side</th>
               <th class="px-4 py-3 text-right font-semibold text-gray-900">Entrée</th>
               <th class="px-4 py-3 text-right font-semibold text-gray-900">Sortie</th>
-              <th class="px-4 py-3 text-right font-semibold text-gray-900">Résultat</th>
-              <th class="px-4 py-3 text-right font-semibold text-gray-900">Durée</th>
+              <th class="px-4 py-3 text-right font-semibold text-gray-900">
+                <button
+                  type="button"
+                  @click="toggleSort('result')"
+                  class="inline-flex items-center gap-1 hover:text-blue-600 transition-colors"
+                  title="Trier par résultat"
+                >
+                  Résultat
+                  <span class="text-xs w-3 inline-block">{{ sortIcon('result') }}</span>
+                </button>
+              </th>
+              <th class="px-4 py-3 text-right font-semibold text-gray-900">
+                <button
+                  type="button"
+                  @click="toggleSort('duration')"
+                  class="inline-flex items-center gap-1 hover:text-blue-600 transition-colors"
+                  title="Trier par durée"
+                >
+                  Durée
+                  <span class="text-xs w-3 inline-block">{{ sortIcon('duration') }}</span>
+                </button>
+              </th>
             </tr>
           </thead>
           <tbody class="divide-y">
@@ -496,8 +516,34 @@ function clearAllFilters(): void {
     min_pnl: undefined,
     max_pnl: undefined,
     start_date: undefined,
-    end_date: undefined
+    end_date: undefined,
+    sort_by: undefined,
+    sort_dir: undefined
   })
   tradesStore.fetchTrades()
+}
+
+// Column sort: clicking a header cycles none -> ascending -> descending -> none
+// (issue #13). Selecting a column always replaces the other's sort state, since
+// only one sort is active at a time. No sort falls back to created_at desc.
+function toggleSort(column: 'result' | 'duration'): void {
+  let nextDir: 'asc' | 'desc' | undefined
+  if (filters.value.sort_by !== column) {
+    nextDir = 'asc'
+  } else if (filters.value.sort_dir === 'asc') {
+    nextDir = 'desc'
+  } else {
+    nextDir = undefined
+  }
+  tradesStore.setFilters({
+    sort_by: nextDir ? column : undefined,
+    sort_dir: nextDir
+  })
+  tradesStore.fetchTrades()
+}
+
+function sortIcon(column: 'result' | 'duration'): string {
+  if (filters.value.sort_by !== column) return ''
+  return filters.value.sort_dir === 'asc' ? '▲' : '▼'
 }
 </script>
