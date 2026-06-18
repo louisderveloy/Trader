@@ -38,6 +38,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import asyncpg
 from dotenv import load_dotenv
@@ -216,6 +217,7 @@ def cmd_paper(args):
         testnet=True,  # Paper always uses testnet for price data
         verbose=args.verbose,
         run_id=getattr(args, 'run_id', None),
+        initial_capital=Decimal(str(args.initial_capital)),
     ))
 
 
@@ -568,6 +570,8 @@ Examples:
                               help='Trading symbol (default: BTCUSDC)')
     paper_parser.add_argument('--timeframe', default='15m',
                               help='Candle timeframe (default: 15m)')
+    paper_parser.add_argument('--initial-capital', type=float, default=1000,
+                              help='Simulated initial capital in USDC (default: 1000)')
     paper_parser.add_argument('--run-id', type=int, default=None,
                               help='Adopt a pre-created PENDING run (used by the dashboard supervisor)')
 

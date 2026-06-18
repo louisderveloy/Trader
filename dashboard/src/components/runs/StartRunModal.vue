@@ -109,8 +109,28 @@
             />
           </template>
 
+          <!-- Paper-specific -->
+          <template v-if="form.run_type === 'paper'">
+            <ConfigField
+              id="paper-initial-capital"
+              label="Capital initial (USDC)"
+              tooltip="Capital de départ simulé pour le paper trading. Entier positif (0 < x < 2 147 483 647)."
+              :model-value="form.paper_initial_capital"
+              type="number"
+              :min="1"
+              :max="2147483646"
+              :step="1"
+              @update:model-value="form.paper_initial_capital = Number($event)"
+            />
+          </template>
+
           <!-- Live-specific -->
           <template v-if="form.run_type === 'live'">
+            <div>
+              <p class="text-xs text-gray-500 mb-1">
+                Le capital initial est récupéré automatiquement depuis le solde du compte Binance au démarrage (non configurable).
+              </p>
+            </div>
             <div>
               <label for="network" class="block text-sm font-medium text-gray-700 mb-1">
                 Réseau
@@ -219,6 +239,7 @@ const form = reactive({
   start_date: '',
   end_date: '',
   initial_capital: 10000,
+  paper_initial_capital: 1000,
   engine: 'vectorbt' as 'vectorbt' | 'event_driven',
   weights_set_id: '',
   confirm_phrase: '',
@@ -259,6 +280,10 @@ const canSubmit = computed(() => {
       cap < 2147483647
     )
   }
+  if (form.run_type === 'paper') {
+    const cap = Number(form.paper_initial_capital)
+    return Number.isInteger(cap) && cap > 0 && cap < 2147483647
+  }
   if (form.run_type === 'live' && network.value === 'mainnet') {
     return form.confirm_phrase === MAINNET_PHRASE
   }
@@ -281,6 +306,8 @@ function handleSubmit() {
     payload.engine = form.engine
     payload.save = true
     if (form.weights_set_id.trim()) payload.weights_set_id = form.weights_set_id.trim()
+  } else if (form.run_type === 'paper') {
+    payload.initial_capital = Number(form.paper_initial_capital)
   } else if (form.run_type === 'live') {
     payload.testnet = network.value === 'testnet'
     if (network.value === 'mainnet') payload.confirm_phrase = form.confirm_phrase

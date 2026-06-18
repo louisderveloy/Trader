@@ -29,6 +29,12 @@
         <p class="font-medium text-gray-900 capitalize">{{ run.environment }}</p>
       </div>
 
+      <!-- Initial capital (paper/live: simulated input or fetched from exchange) -->
+      <div v-if="initialCapital !== null">
+        <p class="text-gray-500">Capital initial</p>
+        <p class="font-medium text-gray-900">{{ Number(initialCapital).toFixed(2) }} USDC</p>
+      </div>
+
       <!-- Dates -->
       <div>
         <p class="text-gray-500">Créé</p>
@@ -44,6 +50,13 @@
         <p class="text-gray-500">Terminé</p>
         <p class="font-medium text-gray-900">{{ formatDateShort(run.completed_at) }}</p>
       </div>
+    </div>
+
+    <!-- Existing position warning (live: a base-asset balance was already on the account at startup) -->
+    <div v-if="existingPositionAtStart" class="mt-4 pt-4 border-t border-gray-200">
+      <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+        ⚠️ Position existante détectée au démarrage : {{ existingPositionAtStart }}
+      </p>
     </div>
 
     <!-- Result (if completed) -->
@@ -83,6 +96,15 @@
         class="px-3 py-1.5 text-sm border border-red-300 rounded-md text-red-800 bg-red-50 hover:bg-red-100"
       >
         Kill
+      </button>
+
+      <button
+        v-if="canRetry"
+        type="button"
+        @click="$emit('retry', run.id)"
+        class="px-3 py-1.5 text-sm border border-primary-300 rounded-md text-primary-700 bg-primary-50 hover:bg-primary-100"
+      >
+        Réessayer
       </button>
 
       <!-- Optional Grafana link -->
@@ -126,16 +148,28 @@ defineEmits<{
   logs: [runId: number]
   stop: [runId: number]
   kill: [runId: number]
+  retry: [runId: number]
 }>()
 
 const auth = useAuthStore()
 const grafanaUrl = computed(() => import.meta.env.VITE_GRAFANA_BASE_URL)
 
+// Persisted by the bot for paper/live runs (config.to_snapshot() + initial_capital,
+// and existing_position_at_start if a live run found a non-zero base-asset
+// balance at startup). Backtest config_snapshot has a different shape, so this
+// is simply absent there.
+const initialCapital = computed(() => props.run.config_snapshot?.initial_capital ?? null)
+const existingPositionAtStart = computed(() => props.run.config_snapshot?.existing_position_at_start ?? null)
+
 const isActive = computed(() => ['running', 'pending'].includes(props.run.status))
+const isFinished = computed(() =>
+  ['completed', 'failed', 'cancelled'].includes(props.run.status)
+)
 // Stop is graceful and valid for any run type; kill is backtest-only (SIGKILL
 // would orphan live/paper positions). Both are admin-only.
 const canStop = computed(() => auth.isAdmin && isActive.value)
 const canKill = computed(() => auth.isAdmin && isActive.value && props.run.run_type === 'backtest')
+const canRetry = computed(() => auth.isAdmin && isFinished.value)
 
 // Display only first 4 result keys
 const displayedResults = computed(() => {

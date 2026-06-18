@@ -14,11 +14,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from ..auth import Principal, require_viewer
 from ..database import get_db_pool
 from ..models.enums import TradeSide, TradeEnvironment
-from ..models.trades import TradeListResponse, TradeResponse
+from ..models.trades import TradeListResponse, TradeResponse, TradeSortBy, TradeSortDir
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Column whitelist for ORDER BY — never interpolate user input directly into SQL.
+_SORT_COLUMNS = {
+    TradeSortBy.RESULT: "t.pnl",
+    TradeSortBy.DURATION: "t.duration_seconds",
+}
 
 
 @router.get("", response_model=TradeListResponse)
@@ -34,6 +40,9 @@ async def list_trades(
             datetime | None, Query(description="Only trades opened on/after this date (ISO 8601)")] = None,
         end_date: Annotated[
             datetime | None, Query(description="Only trades opened on/before this date (ISO 8601)")] = None,
+        sort_by: Annotated[
+            TradeSortBy | None, Query(description="Column to sort by (result/duration); default created_at")] = None,
+        sort_dir: Annotated[TradeSortDir | None, Query(description="Sort direction (asc/desc)")] = None,
         limit: Annotated[int, Query(ge=1, le=1000, description="Maximum results")] = 100,
         offset: Annotated[int, Query(ge=0, description="Offset for pagination")] = 0,
         user: Principal = Depends(require_viewer),
@@ -95,6 +104,16 @@ async def list_trades(
             {where_clause}
         """
 
+        # Order by: an explicit sort_by/sort_dir pair sorts on the chosen column
+        # (column name comes from a fixed whitelist, never from raw user input);
+        # otherwise fall back to created_at, the historical default.
+        if sort_by is not None and sort_dir is not None:
+            column = _SORT_COLUMNS[sort_by]
+            direction = "ASC" if sort_dir == TradeSortDir.ASC else "DESC"
+            order_clause = f"ORDER BY {column} {direction} NULLS LAST, t.created_at DESC"
+        else:
+            order_clause = "ORDER BY t.created_at DESC"
+
         # Get trades
         trades_query = f"""
             SELECT
@@ -106,7 +125,7 @@ async def list_trades(
             FROM trades t
             JOIN runs r ON t.run_id = r.id
             {where_clause}
-            ORDER BY t.opened_at DESC
+            {order_clause}
             LIMIT ${len(param_values) + 1} OFFSET ${len(param_values) + 2}
         """
 

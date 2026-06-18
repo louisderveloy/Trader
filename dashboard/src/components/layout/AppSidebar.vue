@@ -9,7 +9,7 @@
   <!-- Sidebar -->
   <aside
       :class="[
-      'fixed inset-y-0 left-0 z-6 w-64 bg-white border-r border-gray-200 transform transition-transform duration-300 ease-in-out lg:top-[53px] overflow-y-auto',
+      'fixed top-[53px] bottom-0 left-0 z-6 w-64 bg-white border-r border-gray-200 transform transition-transform duration-300 ease-in-out overflow-y-auto',
       uiStore.sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
     ]"
   >

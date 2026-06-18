@@ -299,6 +299,9 @@ class Settings(BaseSettings):
     backtest_commission_percent: float = Field(
         default=0.1, description="Commission percent (Binance taker fee)"
     )
+    paper_initial_capital: float = Field(
+        default=1000.0, description="Default simulated initial capital for paper trading"
+    )
 
     @model_validator(mode='after')
     def validate_production_secrets(self):

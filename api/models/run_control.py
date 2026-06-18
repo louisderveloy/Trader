@@ -64,7 +64,12 @@ class StartRunRequest(BaseModel):
     # Backtest-only
     start_date: Optional[date] = Field(default=None, description="Backtest start date (ISO)")
     end_date: Optional[date] = Field(default=None, description="Backtest end date (ISO)")
-    initial_capital: Optional[int] = Field(default=None, description="Backtest starting capital (USDC), positive integer")
+    initial_capital: Optional[int] = Field(
+        default=None,
+        description="Starting capital (USDC), positive integer. Backtest: user-set, defaults to "
+        "settings.backtest_initial_capital. Paper: user-set, defaults to settings.paper_initial_capital. "
+        "Live: forbidden — fetched from the exchange account at startup.",
+    )
     weights_set_id: Optional[UUID] = Field(default=None, description="Weights set to use (active set if null)")
     engine: Optional[BacktestEngine] = Field(default=None, description="Backtest engine")
     save: bool = Field(default=True, description="Persist backtest results to the run record")
@@ -121,10 +126,12 @@ class StartRunRequest(BaseModel):
             self.confirm_phrase = None
 
         elif self.run_type == RunTypeStart.PAPER:
-            # Paper always runs against testnet prices; no capital/date/engine inputs.
+            # Paper always runs against testnet prices; user picks the simulated
+            # starting capital (date/engine/weights inputs stay meaningless).
             self.testnet = None
             self.confirm_phrase = None
-            self.initial_capital = None
+            if self.initial_capital is None:
+                self.initial_capital = int(settings.paper_initial_capital)
             self.weights_set_id = None
             self.start_date = self.end_date = None
             self.engine = None
@@ -170,6 +177,8 @@ class StartRunRequest(BaseModel):
                 engine=self.engine.value if self.engine else None,
                 save=self.save,
             )
+        elif self.run_type == RunTypeStart.PAPER:
+            params.update(initial_capital=self.initial_capital)
         elif self.run_type == RunTypeStart.LIVE:
             params.update(testnet=self.testnet)
         return params
@@ -303,6 +312,20 @@ class StartOptimizationRequest(BaseModel):
         if self.pruner:
             params["pruner"] = self.pruner.value
         return params
+
+
+class RetryRunRequest(BaseModel):
+    """Request to retry a finished (completed/failed/cancelled) run with its original params.
+
+    Only ``confirm_phrase`` is accepted from the client: every other param is
+    re-read from the original run's ``config_snapshot`` server-side, so a retry
+    cannot smuggle in different settings than what was actually run before.
+    Mainnet live retries still require the safety phrase, same as a fresh start.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    confirm_phrase: Optional[str] = Field(default=None, description="Mainnet safety phrase ('I UNDERSTAND')")
 
 
 class StartRunResponse(BaseModel):

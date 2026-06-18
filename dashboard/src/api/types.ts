@@ -46,6 +46,7 @@ export interface RunFilters {
   symbol?: string
   limit?: number
   offset?: number
+  sort_dir?: 'asc' | 'desc'
 }
 
 export interface RunListResponse {
@@ -70,6 +71,7 @@ export interface StartRunRequest {
   // backtest
   start_date?: string
   end_date?: string
+  // backtest and paper only — forbidden for live (fetched from the exchange)
   initial_capital?: number
   weights_set_id?: string
   engine?: 'vectorbt' | 'event_driven'
