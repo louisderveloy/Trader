@@ -156,4 +156,22 @@ async def apply_db_config_to_settings(db_pool: asyncpg.Pool, settings_obj: "Sett
     if "capital_risk_percent" in risk_config:
         settings_obj.risk_capital_risk_percent = float(risk_config["capital_risk_percent"])
 
+    # Apply stop-loss config
+    sl_config = config_dict.get("stop_loss", {})
+    if "mode" in sl_config:
+        settings_obj.sl_mode = str(sl_config["mode"])
+    if "atr_multiplier" in sl_config:
+        settings_obj.sl_atr_multiplier = float(sl_config["atr_multiplier"])
+    if "fixed_percent" in sl_config:
+        settings_obj.sl_fixed_percent = float(sl_config["fixed_percent"])
+
+    # Apply take-profit config
+    tp_config = config_dict.get("take_profit", {})
+    if "mode" in tp_config:
+        settings_obj.tp_mode = str(tp_config["mode"])
+    if "atr_multiplier" in tp_config:
+        settings_obj.tp_atr_multiplier = float(tp_config["atr_multiplier"])
+    if "fixed_percent" in tp_config:
+        settings_obj.tp_fixed_percent = float(tp_config["fixed_percent"])
+
     logger.info("Applied persisted configuration from database")

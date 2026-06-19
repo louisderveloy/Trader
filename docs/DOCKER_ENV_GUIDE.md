@@ -136,7 +136,6 @@ cp .env.example .env
 # 2. Éditer .env
 nano .env
 # Mettre ENVIRONMENT=dev
-# Configurer BINANCE_TESTNET=true
 
 # 3. Démarrer les services
 docker-compose up -d
@@ -157,7 +156,6 @@ rm -rf volumes/postgres volumes/redis volumes/grafana
 # 1. Sur le serveur VPS, créer .env
 nano .env
 # Mettre ENVIRONMENT=prod
-# BINANCE_TESTNET=false (pour le mainnet)
 # Changer tous les mots de passe par défaut !
 
 # 2. Démarrer avec le fichier prod
@@ -182,8 +180,7 @@ docker run --rm -v trader_postgres_data:/data \
 ### Toujours dans .env
 
 ```bash
-# Exchange
-BINANCE_TESTNET=true  # false en prod
+# Exchange (testnet vs mainnet chosen per run, not via env var)
 BINANCE_TESTNET_API_KEY=...
 BINANCE_MAINNET_API_KEY=...  # Seulement en prod
 
@@ -258,11 +255,9 @@ Oui, mais ce n'est pas recommandé pour débuter. Utilisez plutôt :
 ```bash
 # .env (pour dev)
 ENVIRONMENT=dev
-BINANCE_TESTNET=true
 
 # Sur le serveur prod, éditez .env directement
 ENVIRONMENT=prod
-BINANCE_TESTNET=false
 ```
 
 ### Q: Comment passer de dev à prod ?
@@ -274,7 +269,6 @@ docker-compose down
 # 2. Modifier .env
 nano .env
 # Changer ENVIRONMENT=dev → ENVIRONMENT=prod
-# Changer BINANCE_TESTNET=true → false
 # Changer tous les mots de passe !
 
 # 3. Démarrer prod
