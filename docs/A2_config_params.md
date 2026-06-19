@@ -114,11 +114,8 @@ Liste exhaustive des paramètres configurables via le dashboard Vue.js. Chaque p
 | Paramètre | Type | Défaut | Tooltip FR |
 |-----------|------|--------|------------|
 | `OPTUNA_N_TRIALS` | int | 100 | Nombre d'essais pour l'étude d'optimisation. Plus élevé = meilleure exploration mais plus long. |
-| `OPTUNA_N_JOBS` | int | 1 | Nombre de trials en parallèle. -1 utilise tous les CPUs disponibles. |
 | `OPTUNA_SAMPLER` | enum | TPE | Algorithme d'échantillonnage : 'TPE' (Tree-structured Parzen Estimator, recommandé), 'Random', 'Grid'. |
 | `OPTUNA_PRUNER` | enum | MedianPruner | Algorithme d'élagage : 'MedianPruner' (arrête les essais non prometteurs), 'HyperbandPruner'. |
-| `OPTUNA_WALK_FORWARD_SPLITS` | int | 4 | Nombre de splits pour la walk-forward analysis. Plus élevé = validation plus robuste mais plus lent. |
-| `OPTUNA_WALK_FORWARD_TRAIN_RATIO` | float | 0.75 | Ratio train/test pour chaque split de la walk-forward analysis. |
 
 ---
 
@@ -126,11 +123,8 @@ Liste exhaustive des paramètres configurables via le dashboard Vue.js. Chaque p
 
 | Paramètre | Type | Défaut | Tooltip FR |
 |-----------|------|--------|------------|
-| `BACKTEST_START_DATE` | date | 2023-01-01 | Date de début du backtest (format YYYY-MM-DD). |
-| `BACKTEST_END_DATE` | date | 2024-12-31 | Date de fin du backtest (format YYYY-MM-DD). |
 | `BACKTEST_INITIAL_CAPITAL` | float | 10000.0 | Capital initial en USDT pour le backtest. |
 | `BACKTEST_COMMISSION_PERCENT` | float | 0.1 | Frais de commission par trade en pourcentage (0.1 = Binance spot taker fee). |
-| `BACKTEST_COHERENCE_TOLERANCE_PERCENT` | float | 2.0 | Tolérance d'écart acceptable entre vectorbt et le backtester custom. Au-delà, une investigation est requise. |
 
 ---
 

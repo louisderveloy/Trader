@@ -4,10 +4,12 @@ import {
   Config,
   RiskConfig,
   StrategyConfig,
+  StopLossTakeProfitConfig,
   UserIndicator,
   getConfig,
   updateRiskConfig,
   updateStrategyConfig,
+  updateStopLossTakeProfitConfig,
   getUserIndicator,
   updateUserIndicator
 } from '@/api/config'
@@ -66,6 +68,19 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
+  async function updateStopLossTakeProfit(updates: Partial<StopLossTakeProfitConfig>): Promise<void> {
+    error.value = null
+    try {
+      const updated = await updateStopLossTakeProfitConfig(updates)
+      if (config.value) {
+        config.value.stop_loss_take_profit = updated
+      }
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'Failed to update stop-loss/take-profit configuration'
+      throw err
+    }
+  }
+
   async function fetchUserIndicator(symbol: string = 'BTCUSDT'): Promise<void> {
     isLoading.value = true
     error.value = null
@@ -113,6 +128,7 @@ export const useConfigStore = defineStore('config', () => {
     fetchConfig,
     updateStrategy,
     updateRisk,
+    updateStopLossTakeProfit,
     fetchUserIndicator,
     updateIndicator
   }

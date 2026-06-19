@@ -50,8 +50,12 @@ def normalize_to_range(
     normalized = (value - min_val) / (max_val - min_val)
     normalized = normalized * (target_max - target_min) + target_min
 
-    # Clamp to target range
-    return float(np.clip(normalized, target_min, target_max))
+    # Clamp to target range. np.clip requires its bounds in ascending order — callers
+    # like normalize_oscillator() pass (target_min, target_max) pairs where target_min
+    # is numerically greater than target_max (e.g. (1.0, 0.5) for a descending output
+    # range), which would otherwise make np.clip collapse every input to target_max.
+    lo, hi = (target_min, target_max) if target_min <= target_max else (target_max, target_min)
+    return float(np.clip(normalized, lo, hi))
 
 
 def normalize_oscillator(

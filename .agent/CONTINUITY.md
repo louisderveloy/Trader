@@ -97,6 +97,41 @@
   first-minute snapshot (no wick, wrong close → discontinuous "jumps" on chart, open[t]≠close[t-1] by
   ±$100s). Fix = `DO UPDATE SET high/low/close/volume = EXCLUDED` (open preserved); self-heals within the
   candles[-10:] window. **Bot must be restarted; already-stored bad candles need a re-fetch to repair.**
+### Indicator single-source-of-truth refactor (2026-06-19, GitHub issue #9)
+- **Root cause of "backtest score suspiciously low vs paper trading":** `bot/backtesting/vectorbt_engine.py`
+  re-implemented every indicator's signal formula inline by hand instead of reusing `bot/indicators/*.py`,
+  and the two had drifted (different RSI/MACD/Bollinger/OBV normalization math entirely). The CLI backtest
+  (`scripts/backtest.py`) only ever uses `VectorbtBacktester` — `bot/backtesting/event_driven.py` is an
+  unused stub (`get_strategy_decision` always returns `SKIP`); left untouched, out of scope.
+- **Fix — single source of truth:** every price indicator module (`ema`, `macd`, `rsi`, `stoch_rsi`,
+  `bollinger`, `atr`, `obv`) now exposes `compute_series()`/`signal_series()`, the vectorized full-history
+  equivalent of the existing scalar `compute()`/`to_signal()`. `compute()` is refactored to call
+  `compute_series()` internally and slice `.iloc[-1]`, so live and backtest read byte-identical math.
+  `to_signal()`'s public signature/behavior is unchanged. `vectorbt_engine.calculate_signals()` now calls
+  `indicators.<name>.signal_series()` directly instead of hand-rolled formulas. Also fixed a latent
+  param-key mismatch: vectorbt previously read `strategy_params` keys vectorbt invented itself
+  (`fast_period`/`slow_period`/`signal_period` for MACD, `k_period`/`d_period` for stoch_rsi, `std_dev` for
+  bollinger) that didn't match the indicator modules' real keys (`fast`/`slow`/`signal`, `k`/`d`, `std`) —
+  any custom strategy_params for those 3 indicators were silently ignored by the backtest before this fix.
+- **Deeper bug found mid-refactor — `normalize_oscillator` was a degenerate step function:**
+  `indicators/utils.py::normalize_to_range()` called `np.clip(normalized, target_min, target_max)` with
+  `target_min > target_max` (e.g. `clip(x, 1.0, 0.5)` for the oversold branch) — numpy clip requires
+  ascending bounds, so an inverted pair silently collapses every input to the upper-bound constant
+  regardless of `value`. This made RSI's and Stochastic RSI's `to_signal()` return one of exactly 4
+  constants (0.5 / -1.0 / 0.0 / -0.5) instead of the continuous piecewise-linear interpolation the
+  docstring describes — a real, pre-existing bug, not something this refactor introduced. Existing
+  `tests/indicators/test_rsi.py`/`test_stoch_rsi.py` never caught it because they only assert *sign*, not
+  magnitude. Fixed in `normalize_to_range()` by sorting the clip bounds before calling `np.clip`.
+- **Regression guard:** `tests/indicators/test_series_parity.py` asserts `compute_series()`/`signal_series()`
+  last-row values equal `compute()`/`to_signal()` for the same candles across 4 fixtures × 7 indicators —
+  this is what actually caught the `normalize_oscillator` bug above (RSI/stoch_rsi parity failed until fixed).
+  Full suite: 486 passed / 10 skipped (was ~411 before this work). Sanity-checked end-to-end via
+  `scripts.backtest --symbol BTCUSDC --start-date 2026-05-01 --end-date 2026-06-01`: signal score range
+  widened from near-flat to `[-0.53, 0.53]`, 285 entries over 2977 candles, no crashes.
+- **Paper trading confirmed already correct:** `bot/scripts/trading.py` (shared by paper+live) was already
+  calling `compute_all_indicators()` → the real indicator modules; no paper-specific indicator path existed.
+  Only the vectorbt backtest was divergent.
+
 - **score_logs cadence:** scores logged ~1×/min in `created_at`; but `time` is 15m-aligned (= candle time)
   so plotting `time` collapsed to one point/15min. Candle dashboards' score panel now plots
   `$__timeGroupAlias(created_at,'$__interval')` avg → per-minute on 24h, auto-coarser past 2 days.

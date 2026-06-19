@@ -81,9 +81,8 @@
                 label="Mode de dimensionnement"
                 tooltip="Fixe : la taille est identique à chaque transaction. Confiance : la taille est proportionnelle à la force du signal calculé. Indicateur de volatilité (moyenne de l'amplitude de prix sur plusieurs bougies) : la taille est calculée à partir du niveau de volatilité récent du marché et du pourcentage de capital que vous acceptez de risquer."
                 :model-value="formData.risk.position_size_mode"
-                type="text"
-                disabled
-                help-text="Éditable via API uniquement"
+                :options="positionSizeModeOptions"
+                @update:model-value="updateRiskField('position_size_mode', $event)"
             />
             <ConfigField
                 id="fixed_size_usdt"
@@ -147,9 +146,8 @@
                 label="Mode Stop-Loss"
                 tooltip="Détermine comment est calculée la distance du seuil de protection par rapport au prix d'entrée. Indicateur de volatilité : seuil basé sur l'amplitude moyenne récente des mouvements de prix. Fixe : pourcentage fixe du prix d'entrée, identique quelles que soient les conditions de marché."
                 :model-value="formData.stopLossTakeProfit.sl_mode"
-                type="text"
-                disabled
-                help-text="Éditable via API uniquement"
+                :options="stopLossTakeProfitModeOptions"
+                @update:model-value="updateSLTPField('sl_mode', $event)"
             />
             <ConfigField
                 id="sl_atr_multiplier"
@@ -178,9 +176,8 @@
                 label="Mode Take-Profit"
                 tooltip="Détermine comment est calculée la distance du seuil de prise de bénéfice par rapport au prix d'entrée. Indicateur de volatilité : seuil basé sur l'amplitude moyenne récente des mouvements de prix. Fixe : pourcentage fixe du prix d'entrée, identique quelles que soient les conditions de marché."
                 :model-value="formData.stopLossTakeProfit.tp_mode"
-                type="text"
-                disabled
-                help-text="Éditable via API uniquement"
+                :options="stopLossTakeProfitModeOptions"
+                @update:model-value="updateSLTPField('tp_mode', $event)"
             />
             <ConfigField
                 id="tp_atr_multiplier"
@@ -242,6 +239,17 @@ const toastStore = useToastStore()
 const isLoading = computed(() => configStore.isLoading)
 const config = computed(() => configStore.config)
 const isSaving = ref(false)
+
+const stopLossTakeProfitModeOptions = [
+  {value: 'atr', label: 'Indicateur de volatilité'},
+  {value: 'fixed', label: 'Fixe'}
+]
+
+const positionSizeModeOptions = [
+  {value: 'fixed', label: 'Fixe'},
+  {value: 'confidence', label: 'Confiance'},
+  {value: 'risk_atr', label: 'Indicateur de volatilité'}
+]
 
 // Form state
 const formData = ref({
@@ -322,8 +330,7 @@ async function saveConfiguration() {
 
     await configStore.updateStrategy(formData.value.strategy)
     await configStore.updateRisk(formData.value.risk)
-    // Note: stop-loss/take-profit update would require API endpoint
-    // For now, just update strategy and risk
+    await configStore.updateStopLossTakeProfit(formData.value.stopLossTakeProfit)
 
     // Show success toast
     toastStore.success('Configuration enregistrée avec succès')

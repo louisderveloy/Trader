@@ -18,6 +18,7 @@ Interpretation:
 import logging
 from typing import Any, Dict
 
+import numpy as np
 import pandas as pd
 
 from indicators.types import IndicatorResult, IndicatorSignal, validate_candles
@@ -38,9 +39,13 @@ def _calculate_rsi(close_prices: pd.Series, period: int) -> pd.Series:
     return rsi
 
 
-def compute(candles: pd.DataFrame, params: Dict[str, Any]) -> IndicatorResult:
+def compute_series(candles: pd.DataFrame, params: Dict[str, Any]) -> pd.DataFrame:
     """
-    Calculate Stochastic RSI indicator values.
+    Calculate Stochastic RSI %K/%D values for every bar (vectorized).
+
+    This is the single source of truth for Stochastic RSI raw values: ``compute()``
+    (live, scalar) slices the last row, and ``signal_series()`` (vectorbt backtest)
+    consumes the full series, so both paths can never drift from each other.
 
     Stochastic RSI formula:
     1. Calculate RSI
@@ -56,11 +61,8 @@ def compute(candles: pd.DataFrame, params: Dict[str, Any]) -> IndicatorResult:
             - d (int): %D smoothing period (default: 3)
 
     Returns:
-        IndicatorResult containing:
-            - stoch_rsi: Raw Stochastic RSI value (0-1)
-            - k: %K line value (0-1)
-            - d: %D line value (0-1)
-            - crossover: Current state ('bullish' | 'bearish' | 'neutral')
+        DataFrame indexed like ``candles`` with columns ``stoch_rsi``, ``k``, ``d``
+        (NaN for the warm-up bars before each value has enough history).
 
     Raises:
         ValueError: If insufficient candle data or invalid parameters
@@ -93,6 +95,125 @@ def compute(candles: pd.DataFrame, params: Dict[str, Any]) -> IndicatorResult:
 
     # Calculate %D (signal line - SMA of %K)
     d_line = calculate_sma(k_line, d_period)
+
+    return pd.DataFrame(
+        {'stoch_rsi': stoch_rsi, 'k': k_line, 'd': d_line}, index=candles.index
+    )
+
+
+def signal_series(candles: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
+    """
+    Calculate the normalized Stochastic RSI signal for every bar (vectorized
+    equivalent of ``to_signal()``), including the bullish/bearish crossover
+    recency boost.
+
+    Args:
+        candles: DataFrame with columns [timestamp, open, high, low, close, volume]
+        params: Same as ``compute_series()``
+
+    Returns:
+        Series indexed like ``candles`` with signal values in [-1, 1] (0.0 during warm-up).
+    """
+    series = compute_series(candles, params)
+    k = series['k']
+    d = series['d']
+
+    # Same scaling as to_signal(): %K in [0, 1] -> [0, 100] for oscillator normalization.
+    k_scaled = k * 100
+
+    overbought = 80.0
+    oversold = 20.0
+    neutral = 50.0
+
+    # Vectorized equivalent of normalize_oscillator(), replicating its piecewise-linear
+    # branches and the normalize_to_range() clip(((v-a)/(b-a))*(d-c)+c, min(c,d), max(c,d)) formula.
+    def _map(value: pd.Series, a: float, b: float, c: float, d_: float) -> pd.Series:
+        normalized = (value - a) / (b - a) * (d_ - c) + c
+        lo, hi = min(c, d_), max(c, d_)
+        return normalized.clip(lower=lo, upper=hi)
+
+    base_signal = pd.Series(
+        np.select(
+            [k_scaled <= oversold, k_scaled >= overbought],
+            [
+                _map(k_scaled, 0, oversold, 1.0, 0.5),
+                _map(k_scaled, overbought, 100, -0.5, -1.0),
+            ],
+            default=np.where(
+                k_scaled <= neutral,
+                _map(k_scaled, oversold, neutral, 0.5, 0.0),
+                _map(k_scaled, neutral, overbought, 0.0, -0.5),
+            ),
+        ),
+        index=candles.index,
+    )
+
+    # Crossover detection (within last 3 transitions, matching compute()'s range(-3, 0) loop).
+    bullish_cross = (k.shift(1) <= d.shift(1)) & (k > d)
+    bearish_cross = (k.shift(1) >= d.shift(1)) & (k < d)
+    recent_bullish = bullish_cross.rolling(3, min_periods=1).max().astype(bool)
+    recent_bearish = bearish_cross.rolling(3, min_periods=1).max().astype(bool)
+
+    # "in_oversold"/"in_overbought" are evaluated on the CURRENT bar's %K, matching
+    # compute()'s `current_k` (always the latest bar) used inside the crossover dict.
+    in_oversold = k <= 0.2
+    in_overbought = k >= 0.8
+
+    signal = base_signal.copy()
+
+    # Bullish crossover boost: from_oversold -> x1.4 clamped to 1.0; elif base > 0 -> x1.2 clamped to 1.0.
+    bullish_from_oversold = recent_bullish & in_oversold
+    bullish_base_positive = recent_bullish & ~in_oversold & (base_signal > 0)
+    signal = signal.where(~bullish_from_oversold, (base_signal * 1.4).clip(upper=1.0))
+    signal = signal.where(~bullish_base_positive, (base_signal * 1.2).clip(upper=1.0))
+
+    # Bearish crossover boost: from_overbought -> x1.4 clamped to -1.0; elif base < 0 -> x1.2 clamped to -1.0.
+    bearish_from_overbought = recent_bearish & in_overbought
+    bearish_base_negative = recent_bearish & ~in_overbought & (base_signal < 0)
+    signal = signal.where(~bearish_from_overbought, (base_signal * 1.4).clip(lower=-1.0))
+    signal = signal.where(~bearish_base_negative, (base_signal * 1.2).clip(lower=-1.0))
+
+    # Insufficient data (warm-up) -> neutral, matching to_signal()'s explicit check.
+    signal = signal.where(k.notna() & d.notna(), 0.0)
+
+    return signal.clip(-1.0, 1.0)
+
+
+def compute(candles: pd.DataFrame, params: Dict[str, Any]) -> IndicatorResult:
+    """
+    Calculate Stochastic RSI indicator values.
+
+    Stochastic RSI formula:
+    1. Calculate RSI
+    2. StochRSI = (RSI - RSI_min) / (RSI_max - RSI_min) over lookback period
+    3. %K = SMA of StochRSI over K period
+    4. %D = SMA of %K over D period
+
+    Args:
+        candles: DataFrame with columns [timestamp, open, high, low, close, volume]
+        params: Dictionary with keys:
+            - period (int): RSI period (default: 14)
+            - k (int): %K smoothing period (default: 3)
+            - d (int): %D smoothing period (default: 3)
+
+    Returns:
+        IndicatorResult containing:
+            - stoch_rsi: Raw Stochastic RSI value (0-1)
+            - k: %K line value (0-1)
+            - d: %D line value (0-1)
+            - crossover: Current state ('bullish' | 'bearish' | 'neutral')
+
+    Raises:
+        ValueError: If insufficient candle data or invalid parameters
+    """
+    rsi_period = params.get('period', 14)
+    k_period = params.get('k', 3)
+    d_period = params.get('d', 3)
+
+    series = compute_series(candles, params)
+    stoch_rsi = series['stoch_rsi']
+    k_line = series['k']
+    d_line = series['d']
 
     # Get current values
     current_stoch_rsi = stoch_rsi.iloc[-1]

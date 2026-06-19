@@ -22,6 +22,7 @@ As a signal, high ATR can indicate:
 import logging
 from typing import Any, Dict
 
+import numpy as np
 import pandas as pd
 
 from indicators.types import IndicatorResult, IndicatorSignal, validate_candles
@@ -30,9 +31,13 @@ from indicators.utils import normalize_percentile, safe_divide
 logger = logging.getLogger(__name__)
 
 
-def compute(candles: pd.DataFrame, params: Dict[str, Any]) -> IndicatorResult:
+def compute_series(candles: pd.DataFrame, params: Dict[str, Any]) -> pd.DataFrame:
     """
-    Calculate ATR indicator values.
+    Calculate ATR raw values for every bar (vectorized).
+
+    This is the single source of truth for ATR raw values: ``compute()`` (live, scalar)
+    slices the last row, and ``signal_series()`` (vectorbt backtest) consumes the full
+    series, so both paths can never drift from each other.
 
     Args:
         candles: DataFrame with columns [timestamp, open, high, low, close, volume]
@@ -40,10 +45,8 @@ def compute(candles: pd.DataFrame, params: Dict[str, Any]) -> IndicatorResult:
             - period (int): ATR period (default: 14)
 
     Returns:
-        IndicatorResult containing:
-            - atr: Current ATR value
-            - atr_percent: ATR as percentage of current price
-            - trend: ATR trend ('rising' | 'falling' | 'stable')
+        DataFrame indexed like ``candles`` with columns ``close``, ``atr``, ``atr_percent``
+        (NaN for the warm-up bars before ATR has enough history).
 
     Raises:
         ValueError: If insufficient candle data or invalid parameters
@@ -76,6 +79,89 @@ def compute(candles: pd.DataFrame, params: Dict[str, Any]) -> IndicatorResult:
 
     # Calculate ATR using Wilder's smoothing (EMA with alpha = 1/period)
     atr = true_range.ewm(alpha=1/period, adjust=False).mean()
+
+    # Vectorized equivalent of safe_divide(current_atr, current_price, 0.0) * 100
+    atr_percent = (atr / close.replace(0, np.nan) * 100).fillna(0.0)
+
+    return pd.DataFrame(
+        {'close': close, 'atr': atr, 'atr_percent': atr_percent},
+        index=candles.index,
+    )
+
+
+def signal_series(candles: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
+    """
+    Calculate the normalized ATR signal for every bar (vectorized equivalent of
+    ``to_signal()``), including the volatility-percentile base signal and the
+    rising/falling trend adjustment.
+
+    Args:
+        candles: DataFrame with columns [timestamp, open, high, low, close, volume]
+        params: Same as ``compute_series()``
+
+    Returns:
+        Series indexed like ``candles`` with signal values in [-1, 1] (0.0 during warm-up).
+    """
+    series = compute_series(candles, params)
+    atr = series['atr']
+
+    # Rolling percentile rank over a trailing 100-bar window, matching compute()'s
+    # `(recent_atr_history < current_atr).sum() / len(recent_atr_history)` exactly:
+    # counts how many of the past 100 values are strictly LESS than the current value.
+    # min_periods=100 matches the scalar's `if len(atr) >= 100` gate (no partial windows).
+    percentile_rank = atr.rolling(100, min_periods=100).apply(
+        lambda x: (x.iloc[-1] > x).sum() / len(x), raw=False
+    )
+
+    # Base signal from percentile_rank (NaN -> 0.0 fallback, matching to_signal()'s
+    # "no percentile data" branch).
+    signal = pd.Series(0.0, index=atr.index)
+    low_vol = percentile_rank < 0.3
+    high_vol = percentile_rank > 0.7
+    signal = signal.where(~low_vol.fillna(False), -0.3 * (0.3 - percentile_rank) / 0.3)
+    signal = signal.where(~high_vol.fillna(False), 0.3 * (percentile_rank - 0.7) / 0.3)
+
+    # Trend detection: rising if at least 4 of the last 4 diffs are positive, falling if
+    # at least 4 are negative, else stable (no adjustment). Matches compute()'s
+    # `recent_atr.diff().dropna()` over `atr.tail(5)` (4 diffs), applied per-bar.
+    diffs = atr.diff()
+    rising = (diffs > 0).rolling(4, min_periods=4).sum() >= 4
+    falling = (diffs < 0).rolling(4, min_periods=4).sum() >= 4
+
+    signal = signal.where(~rising, (signal * 1.1).clip(upper=0.3))
+    signal = signal.where(~falling, (signal * 1.1).clip(lower=-0.3))
+
+    # Insufficient data (warm-up, atr is NaN) -> neutral, matching to_signal()'s
+    # `if atr is None: return 0.0` check.
+    signal = signal.where(atr.notna(), 0.0)
+
+    return signal
+
+
+def compute(candles: pd.DataFrame, params: Dict[str, Any]) -> IndicatorResult:
+    """
+    Calculate ATR indicator values.
+
+    Args:
+        candles: DataFrame with columns [timestamp, open, high, low, close, volume]
+        params: Dictionary with keys:
+            - period (int): ATR period (default: 14)
+
+    Returns:
+        IndicatorResult containing:
+            - atr: Current ATR value
+            - atr_percent: ATR as percentage of current price
+            - trend: ATR trend ('rising' | 'falling' | 'stable')
+
+    Raises:
+        ValueError: If insufficient candle data or invalid parameters
+    """
+    # Get parameters with defaults
+    period = params.get('period', 14)
+
+    series = compute_series(candles, params)
+    atr = series['atr']
+    close = series['close']
 
     # Get current values
     current_atr = atr.iloc[-1]

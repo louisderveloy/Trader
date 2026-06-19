@@ -10,8 +10,23 @@
       <InfoTooltip :text="tooltip" />
     </div>
 
+    <!-- Select field (when options are provided) -->
+    <select
+        v-if="options"
+        :id="id"
+        :value="modelValue"
+        :disabled="disabled"
+        class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+        @change="emit('update:modelValue', ($event.target as HTMLSelectElement).value)"
+    >
+      <option v-for="option in options" :key="option.value" :value="option.value">
+        {{ option.label }}
+      </option>
+    </select>
+
     <!-- Input field -->
     <input
+        v-else
         :id="id"
         :type="type"
         :value="modelValue"
@@ -44,6 +59,7 @@ interface Props {
   min?: number
   max?: number
   step?: number | string
+  options?: { value: string; label: string }[]
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -51,7 +67,8 @@ const props = withDefaults(defineProps<Props>(), {
   disabled: false,
   min: undefined,
   max: undefined,
-  step: undefined
+  step: undefined,
+  options: undefined
 })
 
 const emit = defineEmits<{
