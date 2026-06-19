@@ -21,9 +21,13 @@ from indicators.utils import calculate_ema, normalize_crossover
 logger = logging.getLogger(__name__)
 
 
-def compute(candles: pd.DataFrame, params: Dict[str, Any]) -> IndicatorResult:
+def compute_series(candles: pd.DataFrame, params: Dict[str, Any]) -> pd.DataFrame:
     """
-    Calculate EMA indicator values.
+    Calculate EMA fast/slow values for every bar (vectorized).
+
+    This is the single source of truth for EMA raw values: ``compute()`` (live, scalar)
+    slices the last row, and ``signal_series()`` (vectorbt backtest) consumes the full
+    series, so both paths can never drift from each other.
 
     Args:
         candles: DataFrame with columns [timestamp, open, high, low, close, volume]
@@ -32,13 +36,11 @@ def compute(candles: pd.DataFrame, params: Dict[str, Any]) -> IndicatorResult:
             - slow_period (int): Slow EMA period (default: 200)
 
     Returns:
-        IndicatorResult containing:
-            - ema_fast: Fast EMA values
-            - ema_slow: Slow EMA values
-            - crossover: Current crossover state ('bullish' | 'bearish' | 'neutral')
+        DataFrame indexed like ``candles`` with columns ``ema_fast``, ``ema_slow``
+        (NaN for the warm-up bars before each EMA has enough history).
 
     Raises:
-        ValueError: If insufficient candle data for calculation
+        ValueError: If insufficient candle data or invalid parameters
     """
     # Get parameters with defaults
     fast_period = params.get('fast_period', 50)
@@ -61,6 +63,72 @@ def compute(candles: pd.DataFrame, params: Dict[str, Any]) -> IndicatorResult:
     close_prices = candles['close'].astype(float)
     ema_fast = calculate_ema(close_prices, fast_period)
     ema_slow = calculate_ema(close_prices, slow_period)
+
+    return pd.DataFrame({'ema_fast': ema_fast, 'ema_slow': ema_slow}, index=candles.index)
+
+
+def signal_series(candles: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
+    """
+    Calculate the normalized EMA signal for every bar (vectorized equivalent of
+    ``to_signal()``), including the golden/death-cross recency boost.
+
+    Args:
+        candles: DataFrame with columns [timestamp, open, high, low, close, volume]
+        params: Same as ``compute_series()``
+
+    Returns:
+        Series indexed like ``candles`` with signal values in [-1, 1] (0.0 during warm-up).
+    """
+    series = compute_series(candles, params)
+    ema_fast = series['ema_fast']
+    ema_slow = series['ema_slow']
+
+    # Same formula as normalize_crossover(), vectorized: pct diff / 1% threshold, clipped.
+    pct_diff = (ema_fast - ema_slow) / ema_slow.replace(0, np.nan)
+    base_signal = (pct_diff / 0.01).clip(-1.0, 1.0).fillna(0.0)
+
+    # Recent crossover (within last 5 transitions, matching compute()'s range(-5, 0) loop).
+    golden_cross = (ema_fast.shift(1) <= ema_slow.shift(1)) & (ema_fast > ema_slow)
+    death_cross = (ema_fast.shift(1) >= ema_slow.shift(1)) & (ema_fast < ema_slow)
+    recent_golden = golden_cross.rolling(5, min_periods=1).max().astype(bool)
+    recent_death = death_cross.rolling(5, min_periods=1).max().astype(bool)
+
+    boost_golden = recent_golden & (base_signal > 0)
+    boost_death = recent_death & (base_signal < 0)
+    signal = base_signal.where(~boost_golden, (base_signal * 1.2).clip(upper=1.0))
+    signal = signal.where(~boost_death, (signal * 1.2).clip(lower=-1.0))
+
+    # Insufficient data (warm-up) -> neutral, matching to_signal()'s explicit check.
+    signal = signal.where(ema_fast.notna() & ema_slow.notna(), 0.0)
+
+    return signal.clip(-1.0, 1.0)
+
+
+def compute(candles: pd.DataFrame, params: Dict[str, Any]) -> IndicatorResult:
+    """
+    Calculate EMA indicator values.
+
+    Args:
+        candles: DataFrame with columns [timestamp, open, high, low, close, volume]
+        params: Dictionary with keys:
+            - fast_period (int): Fast EMA period (default: 50)
+            - slow_period (int): Slow EMA period (default: 200)
+
+    Returns:
+        IndicatorResult containing:
+            - ema_fast: Fast EMA values
+            - ema_slow: Slow EMA values
+            - crossover: Current crossover state ('bullish' | 'bearish' | 'neutral')
+
+    Raises:
+        ValueError: If insufficient candle data for calculation
+    """
+    fast_period = params.get('fast_period', 50)
+    slow_period = params.get('slow_period', 200)
+
+    series = compute_series(candles, params)
+    ema_fast = series['ema_fast']
+    ema_slow = series['ema_slow']
 
     # Get current values (most recent)
     current_fast = ema_fast.iloc[-1]

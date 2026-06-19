@@ -14,6 +14,7 @@ bearish signals, while oversold conditions suggest bullish signals.
 import logging
 from typing import Any, Dict
 
+import numpy as np
 import pandas as pd
 
 from indicators.types import IndicatorResult, IndicatorSignal, validate_candles
@@ -22,16 +23,13 @@ from indicators.utils import normalize_oscillator, safe_divide
 logger = logging.getLogger(__name__)
 
 
-def compute(candles: pd.DataFrame, params: Dict[str, Any]) -> IndicatorResult:
+def compute_series(candles: pd.DataFrame, params: Dict[str, Any]) -> pd.DataFrame:
     """
-    Calculate RSI indicator values.
+    Calculate RSI (and intermediate avg gain/loss) for every bar (vectorized).
 
-    RSI calculation:
-    1. Calculate price changes (delta = close[i] - close[i-1])
-    2. Separate gains (positive deltas) and losses (negative deltas)
-    3. Calculate average gain and average loss using EMA
-    4. Calculate RS = average gain / average loss
-    5. Calculate RSI = 100 - (100 / (1 + RS))
+    This is the single source of truth for RSI raw values: ``compute()`` (live, scalar)
+    slices the last row, and ``signal_series()`` (vectorbt backtest) consumes the full
+    series, so both paths can never drift from each other.
 
     Args:
         candles: DataFrame with columns [timestamp, open, high, low, close, volume]
@@ -41,10 +39,8 @@ def compute(candles: pd.DataFrame, params: Dict[str, Any]) -> IndicatorResult:
             - oversold (float): Oversold threshold (default: 30)
 
     Returns:
-        IndicatorResult containing:
-            - rsi: Current RSI value (0-100)
-            - zone: Current zone ('overbought' | 'oversold' | 'neutral')
-            - divergence: Optional divergence signal
+        DataFrame indexed like ``candles`` with columns ``rsi``, ``avg_gain``, ``avg_loss``
+        (NaN for the warm-up bars before RSI has enough history).
 
     Raises:
         ValueError: If insufficient candle data or invalid parameters
@@ -84,6 +80,133 @@ def compute(candles: pd.DataFrame, params: Dict[str, Any]) -> IndicatorResult:
     # Calculate RS and RSI
     rs = avg_gain / avg_loss.replace(0, 1e-10)  # Avoid division by zero
     rsi = 100 - (100 / (1 + rs))
+
+    return pd.DataFrame(
+        {'rsi': rsi, 'avg_gain': avg_gain, 'avg_loss': avg_loss}, index=candles.index
+    )
+
+
+def signal_series(candles: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
+    """
+    Calculate the normalized RSI signal for every bar (vectorized equivalent of
+    ``to_signal()``), including the divergence boost.
+
+    Args:
+        candles: DataFrame with columns [timestamp, open, high, low, close, volume]
+        params: Same as ``compute_series()``
+
+    Returns:
+        Series indexed like ``candles`` with signal values in [-1, 1] (0.0 during warm-up).
+    """
+    period = params.get('period', 14)
+    overbought = params.get('overbought', 70.0)
+    oversold = params.get('oversold', 30.0)
+    neutral = 50.0
+
+    series = compute_series(candles, params)
+    rsi = series['rsi']
+
+    # Same formula as normalize_oscillator(), vectorized over the branches.
+    # Branch 1: value <= oversold -> map [0, oversold] to [1.0, 0.5]
+    oversold_branch = ((rsi - 0) / (oversold - 0)) * (0.5 - 1.0) + 1.0
+    # Branch 2: value >= overbought -> map [overbought, 100] to [-0.5, -1.0]
+    overbought_branch = ((rsi - overbought) / (100 - overbought)) * (-1.0 - -0.5) + -0.5
+    # Branch 3a: neutral zone, value <= neutral -> map [oversold, neutral] to [0.5, 0.0]
+    neutral_low_branch = ((rsi - oversold) / (neutral - oversold)) * (0.0 - 0.5) + 0.5
+    # Branch 3b: neutral zone, value > neutral -> map [neutral, overbought] to [0.0, -0.5]
+    neutral_high_branch = ((rsi - neutral) / (overbought - neutral)) * (-0.5 - 0.0) + 0.0
+
+    base_signal = np.select(
+        condlist=[rsi <= oversold, rsi >= overbought, rsi <= neutral],
+        choicelist=[
+            oversold_branch.clip(0.5, 1.0),
+            overbought_branch.clip(-1.0, -0.5),
+            neutral_low_branch.clip(0.0, 0.5),
+        ],
+        default=neutral_high_branch.clip(-0.5, 0.0),
+    )
+    base_signal = pd.Series(base_signal, index=candles.index)
+
+    # Divergence detection, vectorized equivalent of compute()'s rolling-window scan.
+    window = period * 2
+    high = candles['high'].astype(float)
+    low = candles['low'].astype(float)
+
+    # Relative position (0..window-1) of the rolling max/min within each trailing window.
+    high_argmax_rel = high.rolling(window).apply(np.argmax, raw=True)
+    rsi_argmax_rel = rsi.rolling(window).apply(np.argmax, raw=True)
+    low_argmin_rel = low.rolling(window).apply(np.argmin, raw=True)
+    rsi_argmin_rel = rsi.rolling(window).apply(np.argmin, raw=True)
+
+    window_high_max = high.rolling(window).max()
+    window_low_min = low.rolling(window).min()
+
+    enough_data = candles['high'].expanding().count() >= window
+
+    bearish_divergence = (
+        enough_data
+        & (high_argmax_rel > rsi_argmax_rel)
+        & (high >= window_high_max * 0.98)
+    )
+    bullish_divergence_raw = (
+        enough_data
+        & (low_argmin_rel > rsi_argmin_rel)
+        & (low <= window_low_min * 1.02)
+    )
+    # Scalar code is `if bearish ... elif bullish ...` on a single divergence value per
+    # bar: bearish takes precedence when both conditions hold on the same bar.
+    bullish_divergence = bullish_divergence_raw & ~bearish_divergence
+
+    # Boost logic from to_signal(): bullish boosts positive signals, bearish boosts negative.
+    signal = base_signal.where(
+        ~(bullish_divergence & (base_signal > 0)), (base_signal * 1.3).clip(upper=1.0)
+    )
+    signal = signal.where(
+        ~(bearish_divergence & (signal < 0)), (signal * 1.3).clip(lower=-1.0)
+    )
+
+    # Insufficient data (warm-up) -> neutral, matching to_signal()'s explicit check.
+    signal = signal.where(rsi.notna(), 0.0)
+
+    return signal.clip(-1.0, 1.0)
+
+
+def compute(candles: pd.DataFrame, params: Dict[str, Any]) -> IndicatorResult:
+    """
+    Calculate RSI indicator values.
+
+    RSI calculation:
+    1. Calculate price changes (delta = close[i] - close[i-1])
+    2. Separate gains (positive deltas) and losses (negative deltas)
+    3. Calculate average gain and average loss using EMA
+    4. Calculate RS = average gain / average loss
+    5. Calculate RSI = 100 - (100 / (1 + RS))
+
+    Args:
+        candles: DataFrame with columns [timestamp, open, high, low, close, volume]
+        params: Dictionary with keys:
+            - period (int): RSI period (default: 14)
+            - overbought (float): Overbought threshold (default: 70)
+            - oversold (float): Oversold threshold (default: 30)
+
+    Returns:
+        IndicatorResult containing:
+            - rsi: Current RSI value (0-100)
+            - zone: Current zone ('overbought' | 'oversold' | 'neutral')
+            - divergence: Optional divergence signal
+
+    Raises:
+        ValueError: If insufficient candle data or invalid parameters
+    """
+    # Get parameters with defaults
+    period = params.get('period', 14)
+    overbought = params.get('overbought', 70.0)
+    oversold = params.get('oversold', 30.0)
+
+    series = compute_series(candles, params)
+    rsi = series['rsi']
+    avg_gain = series['avg_gain']
+    avg_loss = series['avg_loss']
 
     # Get current RSI value
     current_rsi = rsi.iloc[-1]
