@@ -57,7 +57,7 @@ services:
       # Expose on all interfaces for external Grafana connection
       # SECURITY: Configure firewall (ufw) to allow ONLY Grafana server IP
       # See docs/A6_runbook.md for firewall setup instructions
-      - "89.91.163.180:5432:5432" # grafana.derveloy.eu = 89.91.163.180
+      - "5432:5432" # grafana.derveloy.eu = 89.91.163.180
     networks:
       - trader-network
     healthcheck:
