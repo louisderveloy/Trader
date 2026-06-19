@@ -43,6 +43,8 @@ export interface TradeFilters {
   start_date?: string
   /** ISO 8601 upper bound on trade open time (inclusive). */
   end_date?: string
+  sort_by?: 'result' | 'duration'
+  sort_dir?: 'asc' | 'desc'
   limit?: number
   offset?: number
 }
@@ -61,7 +63,8 @@ export async function getTrades(filters: TradeFilters = {}): Promise<TradeListRe
     ...(filters.min_pnl !== undefined && { min_pnl: filters.min_pnl }),
     ...(filters.max_pnl !== undefined && { max_pnl: filters.max_pnl }),
     ...(filters.start_date && { start_date: filters.start_date }),
-    ...(filters.end_date && { end_date: filters.end_date })
+    ...(filters.end_date && { end_date: filters.end_date }),
+    ...(filters.sort_by && filters.sort_dir && { sort_by: filters.sort_by, sort_dir: filters.sort_dir })
   }
 
   const response = await apiClient.get<TradeListResponse>('/trades', { params })

@@ -24,6 +24,7 @@ from ..models.config import (
     StrategyConfigResponse,
     StrategyConfigUpdate,
     StopLossTakeProfitConfigResponse,
+    StopLossTakeProfitConfigUpdate,
     UserIndicatorResponse,
     UserIndicatorUpdateRequest,
     BinanceConfigResponse,
@@ -109,7 +110,6 @@ async def get_config(
         binance=BinanceConfigResponse(
             symbol=settings.binance_default_symbol,
             timeframe=settings.binance_default_timeframe,
-            testnet=settings.binance_testnet,
             max_slippage_percent=0.2,  # From config
             order_timeout_seconds=settings.cooldown_after_trade_seconds,
         ),
@@ -261,6 +261,77 @@ async def update_risk_config(
         fixed_size_usdt=float(settings.risk_fixed_size_usdt),
         atr_multiplier=settings.risk_atr_multiplier,
         capital_risk_percent=settings.risk_capital_risk_percent,
+    )
+
+
+@router.patch("/stop-loss-take-profit", response_model=StopLossTakeProfitConfigResponse)
+@limiter.limit(lambda: settings.rate_limit_api_write)
+async def update_stop_loss_take_profit_config(
+    request: Request,
+    update_data: StopLossTakeProfitConfigUpdate,
+    user: Principal = Depends(require_admin),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> StopLossTakeProfitConfigResponse:
+    """
+    Update stop-loss/take-profit configuration.
+
+    Requires authentication and CSRF token.
+    Rate limited to 30 requests per minute.
+
+    Args:
+        request: FastAPI request object (for rate limiting and CSRF validation)
+        update_data: Updated stop-loss/take-profit configuration
+        db_pool: Database connection pool
+
+    Returns:
+        Updated stop-loss/take-profit configuration
+    """
+    # Validate CSRF token
+    await validate_csrf_token(request)
+
+    # Prepare updates dict, split by category (mirrors the "stop_loss"/"take_profit"
+    # keys the bot reads via StrategyEngineConfig.from_db()).
+    sl_updates = {}
+    if update_data.sl_mode is not None:
+        settings.sl_mode = update_data.sl_mode.value
+        sl_updates["mode"] = update_data.sl_mode.value
+
+    if update_data.sl_atr_multiplier is not None:
+        settings.sl_atr_multiplier = update_data.sl_atr_multiplier
+        sl_updates["atr_multiplier"] = update_data.sl_atr_multiplier
+
+    if update_data.sl_fixed_percent is not None:
+        settings.sl_fixed_percent = update_data.sl_fixed_percent
+        sl_updates["fixed_percent"] = update_data.sl_fixed_percent
+
+    tp_updates = {}
+    if update_data.tp_mode is not None:
+        settings.tp_mode = update_data.tp_mode.value
+        tp_updates["mode"] = update_data.tp_mode.value
+
+    if update_data.tp_atr_multiplier is not None:
+        settings.tp_atr_multiplier = update_data.tp_atr_multiplier
+        tp_updates["atr_multiplier"] = update_data.tp_atr_multiplier
+
+    if update_data.tp_fixed_percent is not None:
+        settings.tp_fixed_percent = update_data.tp_fixed_percent
+        tp_updates["fixed_percent"] = update_data.tp_fixed_percent
+
+    # Persist to database
+    if sl_updates:
+        await update_config_in_db(db_pool, "stop_loss", sl_updates)
+    if tp_updates:
+        await update_config_in_db(db_pool, "take_profit", tp_updates)
+
+    logger.info("Updated stop-loss/take-profit configuration and persisted to database")
+
+    return StopLossTakeProfitConfigResponse(
+        sl_mode=settings.sl_mode,
+        sl_atr_multiplier=settings.sl_atr_multiplier,
+        sl_fixed_percent=settings.sl_fixed_percent,
+        tp_mode=settings.tp_mode,
+        tp_atr_multiplier=settings.tp_atr_multiplier,
+        tp_fixed_percent=settings.tp_fixed_percent,
     )
 
 

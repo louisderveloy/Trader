@@ -24,6 +24,7 @@ export async function listRuns(filters: RunFilters = {}): Promise<RunListRespons
     ...(filters.status && { status: filters.status }),
     ...(filters.environment && { environment: filters.environment }),
     ...(filters.symbol && { symbol: filters.symbol }),
+    ...(filters.sort_dir && { sort_dir: filters.sort_dir }),
     limit: filters.limit || 20,
     offset: filters.offset || 0,
   }
@@ -80,6 +81,16 @@ export async function stopRun(runId: number): Promise<RunCommandResponse> {
  */
 export async function killRun(runId: number): Promise<RunCommandResponse> {
   const response = await apiClient.post<RunCommandResponse>(`/runs/${runId}/kill`)
+  return response.data
+}
+
+/**
+ * Retry a finished run (completed/failed/cancelled) with its original params
+ */
+export async function retryRun(runId: number, confirmPhrase?: string): Promise<StartRunResponse> {
+  const response = await apiClient.post<StartRunResponse>(`/runs/${runId}/retry`, {
+    confirm_phrase: confirmPhrase,
+  })
   return response.data
 }
 

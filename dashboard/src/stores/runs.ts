@@ -153,6 +153,30 @@ export const useRunsStore = defineStore('runs', () => {
   }
 
   /**
+   * Retry a finished run (completed/failed/cancelled) with its original params.
+   * Returns the new run id, or null on failure.
+   */
+  async function retryRun(runId: number): Promise<number | null> {
+    const toast = useToastStore()
+    try {
+      const res = await runsApi.retryRun(runId)
+      toast.success(`Run #${res.run_id} démarré (relance de #${runId})`)
+      await fetchRuns()
+      await fetchActiveRuns()
+      return res.run_id
+    } catch (err: any) {
+      const detail = err.response?.data?.detail || 'Erreur lors de la relance du run'
+      if (err.response?.status === 403 && detail === 'step_up_required') {
+        toast.success('Ré-authentification requise pour relancer un run live…')
+        useAuthStore().redirectToStepUp('/runs')
+        return null
+      }
+      toast.error(typeof detail === 'string' ? detail : 'Impossible de relancer ce run')
+      return null
+    }
+  }
+
+  /**
    * Fetch the last log lines for a run (snapshot).
    */
   async function fetchLogs(runId: number): Promise<RunLogsResponse | null> {
@@ -224,6 +248,7 @@ export const useRunsStore = defineStore('runs', () => {
     startRun,
     stopRun,
     killRun,
+    retryRun,
     fetchLogs,
     nextPage,
     previousPage,

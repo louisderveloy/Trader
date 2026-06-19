@@ -101,7 +101,7 @@ docker-compose.prod.yml     → production VPS
 - **Timeframe principal** : 15m (ajustable via config).
 - **Ordres** : limite post-only par défaut, fallback market après timeout (30 min par défaut, configurable).
 - **Slippage max** : 0.2% (configurable).
-- **Mode** : testnet d'abord (toggle `BINANCE_TESTNET=true/false` dans `.env`).
+- **Mode** : testnet d'abord (choisi par run, via le flag CLI `--testnet` ou le toggle du dashboard — pas une variable d'env globale).
 
 ---
 
@@ -301,7 +301,7 @@ Navigateur → Traefik (prod) → Vue.js → API (FastAPI avec JWT)
 
 - Accès direct par ports : `localhost:5173` (dashboard), `localhost:8000` (API), `localhost:5432` (PostgreSQL)
 - Pas de Traefik en dev
-- Binance testnet (`BINANCE_TESTNET=true`)
+- Binance testnet par défaut (choisi par run, voir section Mode ci-dessus)
 - `docker-compose.yml`
 - PostgreSQL exposé sur port 5432 pour connexion Grafana externe
 

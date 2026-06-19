@@ -11,6 +11,7 @@ import logging
 import os
 import pathlib
 from datetime import datetime, time, timezone
+from enum import Enum
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -24,6 +25,7 @@ from ..database import get_db_pool
 from ..limiter import limiter
 from ..models.enums import RunStatus, TradeEnvironment
 from ..models.run_control import (
+    RetryRunRequest,
     RunCommandResponse,
     RunLogsResponse,
     RunTypeStart,
@@ -39,6 +41,13 @@ router = APIRouter()
 # Resolve the log directory once; per-run paths are confined under it.
 _LOG_DIR = pathlib.Path(settings.bot_logs_dir).resolve()
 _LOG_MAX_LINE_CHARS = 2000
+
+
+class RunSortDirection(str, Enum):
+    """Allowed sort directions for ``created_at``."""
+
+    asc = "asc"
+    desc = "desc"
 
 
 def _tail_file(path: pathlib.Path, n: int, max_bytes: int = 262_144) -> tuple[list[str], bool]:
@@ -101,6 +110,9 @@ async def list_runs(
     symbol: Annotated[str | None, Query(max_length=20, description="Filter by symbol (max 20 chars)")] = None,
     limit: Annotated[int, Query(ge=1, le=1000, description="Maximum results")] = 100,
     offset: Annotated[int, Query(ge=0, description="Offset for pagination")] = 0,
+    sort_dir: Annotated[
+        RunSortDirection, Query(description="Sort direction for created_at")
+    ] = RunSortDirection.desc,
     principal: Principal = Depends(require_viewer),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> RunListResponse:
@@ -148,7 +160,7 @@ async def list_runs(
             weights_set_id, optuna_study_id
         FROM runs
         {where_clause}
-        ORDER BY created_at DESC
+        ORDER BY created_at {"ASC" if sort_dir == RunSortDirection.asc else "DESC"}
         LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}
     """
 
@@ -402,36 +414,18 @@ def _require_stepup_for_live(request: Request, response: Response, principal: Pr
     clear_stepup_cookie(response)
 
 
-@router.post("/start", response_model=StartRunResponse, status_code=status.HTTP_201_CREATED)
-@limiter.limit(lambda: settings.rate_limit_expensive)
-async def start_run(
-    request: Request,
-    response: Response,
+async def _create_run_and_queue_start(
     payload: StartRunRequest,
-    principal: Principal = Depends(require_admin),
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    principal: Principal,
+    db_pool: asyncpg.Pool,
 ) -> StartRunResponse:
+    """Insert a PENDING run row and queue its ``start`` command.
+
+    Shared by :func:`start_run` and :func:`retry_run` — both end up with a
+    validated :class:`StartRunRequest`, just sourced differently (request body
+    vs. a finished run's stored params).
     """
-    Start a backtest, paper or live run.
-
-    Admin only. Requires a CSRF token. Mainnet live additionally requires the
-    ``confirm_phrase`` safety field (validated in :class:`StartRunRequest`).
-
-    LIVE runs additionally require a fresh OIDC step-up grant (re-authentication)
-    when Authelia is the provider: see :func:`_require_stepup_for_live`. This is
-    on top of the ``confirm_phrase`` mainnet gate.
-
-    Creates a PENDING run row and queues a ``start`` command for the supervisor
-    in a single transaction, so the run is visible before the NOTIFY fires.
-    Parallelism mirrors the CLI: paper and live are single-instance (enforced by
-    a DB unique index + this pre-check); backtests are capped by
-    ``max_concurrent_backtests``.
-    """
-    await validate_csrf_token(request)
-
     rt = payload.run_type
-    if rt == RunTypeStart.LIVE:
-        _require_stepup_for_live(request, response, principal)
     params = payload.to_command_params()
     environment = payload.environment()
 
@@ -494,6 +488,114 @@ async def start_run(
 
     logger.info(f"Queued start: run={run_id} type={rt.value} env={environment} by={principal.username}")
     return StartRunResponse(run_id=run_id, command_id=command_id)
+
+
+@router.post("/start", response_model=StartRunResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit(lambda: settings.rate_limit_expensive)
+async def start_run(
+    request: Request,
+    response: Response,
+    payload: StartRunRequest,
+    principal: Principal = Depends(require_admin),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> StartRunResponse:
+    """
+    Start a backtest, paper or live run.
+
+    Admin only. Requires a CSRF token. Mainnet live additionally requires the
+    ``confirm_phrase`` safety field (validated in :class:`StartRunRequest`).
+
+    LIVE runs additionally require a fresh OIDC step-up grant (re-authentication)
+    when Authelia is the provider: see :func:`_require_stepup_for_live`. This is
+    on top of the ``confirm_phrase`` mainnet gate.
+
+    Creates a PENDING run row and queues a ``start`` command for the supervisor
+    in a single transaction, so the run is visible before the NOTIFY fires.
+    Parallelism mirrors the CLI: paper and live are single-instance (enforced by
+    a DB unique index + this pre-check); backtests are capped by
+    ``max_concurrent_backtests``.
+    """
+    await validate_csrf_token(request)
+
+    if payload.run_type == RunTypeStart.LIVE:
+        _require_stepup_for_live(request, response, principal)
+
+    return await _create_run_and_queue_start(payload, principal, db_pool)
+
+
+@router.post("/{run_id}/retry", response_model=StartRunResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit(lambda: settings.rate_limit_expensive)
+async def retry_run(
+    request: Request,
+    response: Response,
+    run_id: int,
+    payload: RetryRunRequest,
+    principal: Principal = Depends(require_admin),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> StartRunResponse:
+    """
+    Retry a finished run (completed/failed/cancelled) with its original params.
+
+    Admin only, CSRF-protected. Params are re-read from the original run's
+    ``config_snapshot`` (never trusted from the client) and re-validated through
+    :class:`StartRunRequest`, so this goes through the exact same safety gates as
+    a fresh start — including the mainnet step-up/confirm_phrase checks.
+    """
+    await validate_csrf_token(request)
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT run_type, status, config_snapshot FROM runs WHERE id = $1", run_id
+        )
+
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run {run_id} not found")
+
+    if row["status"] not in ("completed", "failed", "cancelled"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Run {run_id} is {row['status']}; can only retry a finished run",
+        )
+
+    if row["run_type"] not in (
+        RunTypeStart.BACKTEST.value,
+        RunTypeStart.PAPER.value,
+        RunTypeStart.LIVE.value,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot retry a '{row['run_type']}' run from here",
+        )
+
+    config_snapshot = row["config_snapshot"]
+    if isinstance(config_snapshot, str):
+        config_snapshot = json.loads(config_snapshot)
+    original_params = (config_snapshot or {}).get("params") or {}
+
+    try:
+        start_payload = StartRunRequest(
+            run_type=RunTypeStart(original_params.get("run_type", row["run_type"])),
+            symbol=original_params.get("symbol"),
+            timeframe=original_params.get("timeframe"),
+            start_date=original_params.get("start_date"),
+            end_date=original_params.get("end_date"),
+            initial_capital=original_params.get("initial_capital"),
+            weights_set_id=original_params.get("weights_set_id"),
+            engine=original_params.get("engine"),
+            save=original_params.get("save", True),
+            testnet=original_params.get("testnet"),
+            confirm_phrase=payload.confirm_phrase,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot retry run {run_id}: {exc}",
+        )
+
+    if start_payload.run_type == RunTypeStart.LIVE:
+        _require_stepup_for_live(request, response, principal)
+
+    return await _create_run_and_queue_start(start_payload, principal, db_pool)
 
 
 @router.post("/{run_id}/stop", response_model=RunCommandResponse)

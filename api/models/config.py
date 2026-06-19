@@ -55,7 +55,6 @@ class BinanceConfigResponse(BaseModel):
 
     symbol: str = Field(..., description="Trading symbol")
     timeframe: str = Field(..., description="Timeframe")
-    testnet: bool = Field(..., description="Use Binance testnet")
     max_slippage_percent: float = Field(..., description="Max slippage %")
     order_timeout_seconds: int = Field(..., description="Order timeout in seconds")
 
@@ -138,6 +137,43 @@ class RiskConfigUpdate(BaseModel):
         ge=0.0,
         le=100.0,
         description="% of capital to risk per trade (0-100)"
+    )
+
+
+class StopLossTakeProfitConfigUpdate(BaseModel):
+    """Request to update stop-loss/take-profit configuration."""
+
+    sl_mode: Optional[StopLossMode] = Field(
+        None,
+        description="Stop-loss mode: atr or fixed"
+    )
+    sl_atr_multiplier: Optional[float] = Field(
+        None,
+        ge=0.5,
+        le=5.0,
+        description="SL ATR multiplier (0.5-5)"
+    )
+    sl_fixed_percent: Optional[float] = Field(
+        None,
+        ge=0.5,
+        le=10.0,
+        description="SL fixed percent (0.5-10)"
+    )
+    tp_mode: Optional[TakeProfitMode] = Field(
+        None,
+        description="Take-profit mode: atr or fixed"
+    )
+    tp_atr_multiplier: Optional[float] = Field(
+        None,
+        ge=0.5,
+        le=5.0,
+        description="TP ATR multiplier (0.5-5)"
+    )
+    tp_fixed_percent: Optional[float] = Field(
+        None,
+        ge=0.5,
+        le=20.0,
+        description="TP fixed percent (0.5-20)"
     )
 
 

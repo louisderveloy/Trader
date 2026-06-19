@@ -120,6 +120,9 @@ class TradingBot:
         # creating a new one (see _create_run_record).
         self.run_id: Optional[int] = run_id
         self.capital = initial_capital
+        # Live only: base-asset balance found already on the account at startup
+        # (see _fetch_live_initial_capital). Should normally be zero.
+        self.existing_position_at_start: Optional[Decimal] = None
         self.position: Optional[Dict[str, Any]] = None  # Current position
         self.weights: Dict[str, float] = {}
         self.weights_set_id: Optional[UUID] = None  # Active weights set ID for score logging
@@ -192,6 +195,11 @@ class TradingBot:
 
             await self._load_config()
             await self._init_exchange()
+            if self.mode == "live":
+                # Capital comes from the real account, never from the caller —
+                # fetched before the run record is created so config_snapshot
+                # captures the actual starting balance.
+                await self._fetch_live_initial_capital()
             await self._init_discord()
             await self._load_weights()
             await self._create_run_record()
@@ -204,19 +212,7 @@ class TradingBot:
             # Start config update listener (non-blocking background task)
             await self._start_config_listener()
 
-            # Log initial balance
-            if self.mode == "live":
-                try:
-                    balance = await self.exchange.get_balance("USDT")
-                    logger.info("=" * 80)
-                    logger.info(f"ACCOUNT BALANCE:")
-                    logger.info(f"  Free: {balance['free']} USDT")
-                    logger.info(f"  Locked: {balance['locked']} USDT")
-                    logger.info(f"  Total: {balance['total']} USDT")
-                    logger.info("=" * 80)
-                except Exception as e:
-                    logger.warning(f"Could not fetch initial balance: {e}")
-            else:
+            if self.mode != "live":
                 logger.info("=" * 80)
                 logger.info(f"SIMULATED CAPITAL: {self.capital} USDT")
                 logger.info("=" * 80)
@@ -363,6 +359,43 @@ class TradingBot:
         await self.exchange.connect()
         logger.info(f"Exchange connection established ({'testnet' if self.testnet else 'mainnet'})")
 
+    async def _fetch_live_initial_capital(self):
+        """Fetch the real starting capital from the exchange account (live only).
+
+        Live runs never accept a user-supplied initial_capital (enforced in
+        StartRunRequest) — it always comes from the account itself. Also checks
+        the base asset for an already-open position: there shouldn't be one, but
+        if there is we log it loudly rather than silently mixing it into P&L.
+        """
+        quote_asset = "USDC" if self.symbol.endswith("USDC") else "USDT"
+        base_asset = self.symbol[:-len(quote_asset)] if self.symbol.endswith(quote_asset) else self.symbol
+
+        try:
+            balance = await self.exchange.get_balance(quote_asset)
+        except Exception as e:
+            raise RuntimeError(f"Cannot start live trading: failed to fetch {quote_asset} balance: {e}") from e
+
+        self.initial_capital = balance["total"]
+        self.capital = self.initial_capital
+        logger.info("=" * 80)
+        logger.info("ACCOUNT BALANCE:")
+        logger.info(f"  Free: {balance['free']} {quote_asset}")
+        logger.info(f"  Locked: {balance['locked']} {quote_asset}")
+        logger.info(f"  Total: {balance['total']} {quote_asset}")
+        logger.info("=" * 80)
+
+        try:
+            position_balance = await self.exchange.get_balance(base_asset)
+            if position_balance["total"] > 0:
+                self.existing_position_at_start = position_balance["total"]
+                logger.warning(
+                    f"Existing {base_asset} balance detected at startup: "
+                    f"{position_balance['total']} {base_asset}. This bot does not "
+                    "adopt pre-existing positions — manage it manually if unintended."
+                )
+        except Exception as e:
+            logger.warning(f"Could not check existing {base_asset} balance: {e}")
+
     async def _init_discord(self):
         """Initialize Discord notifier."""
         webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
@@ -439,6 +472,8 @@ class TradingBot:
             "weights": self.weights,
             "initial_capital": str(self.initial_capital),
         })
+        if self.existing_position_at_start is not None:
+            config_snapshot["existing_position_at_start"] = str(self.existing_position_at_start)
 
         if self.run_id is not None:
             # Adopt a pre-created PENDING run (dashboard supervisor flow): flip it
@@ -1514,10 +1549,20 @@ class TradingBot:
 
     async def _store_candles(self, candles: list):
         """Store candles in database."""
+        # The loop runs every ~1 min and re-fetches the still-forming current
+        # candle. With DO NOTHING the candle was frozen at its first-minute
+        # snapshot (no wick, wrong close → discontinuous candles on the chart).
+        # DO UPDATE refreshes the forming candle each fetch with the exchange's
+        # authoritative running OHLC; the original `open` is preserved. A candle
+        # self-heals to its final OHLC while it stays in the candles[-10:] window.
         query = """
             INSERT INTO candles (time, symbol, timeframe, open, high, low, close, volume)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT (time, symbol, timeframe) DO NOTHING
+            ON CONFLICT (time, symbol, timeframe) DO UPDATE SET
+                high = EXCLUDED.high,
+                low = EXCLUDED.low,
+                close = EXCLUDED.close,
+                volume = EXCLUDED.volume
         """
         async with self.db_pool.acquire() as conn:
             for candle in candles[-10:]:  # Only store last 10 (most likely new)
@@ -1822,6 +1867,7 @@ async def run_trading_loop(
         testnet: bool,
         verbose: bool = False,
         run_id: Optional[int] = None,
+        initial_capital: Decimal = Decimal("1000"),
 ):
     """
     Main entry point for trading loop.
@@ -1833,6 +1879,8 @@ async def run_trading_loop(
         testnet: Use testnet
         verbose: Enable verbose logging
         run_id: Pre-created PENDING run to adopt (dashboard supervisor)
+        initial_capital: Simulated starting capital for paper trading. Ignored for
+            live — live capital is fetched from the exchange account in start().
     """
     load_dotenv()
 
@@ -1875,6 +1923,7 @@ async def run_trading_loop(
         mode=mode,
         testnet=testnet,
         run_id=run_id,
+        initial_capital=initial_capital,
     )
 
     try:

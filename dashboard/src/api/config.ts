@@ -33,7 +33,6 @@ export interface StopLossTakeProfitConfig {
 export interface BinanceConfig {
   symbol: string
   timeframe: string
-  testnet: boolean
   max_slippage_percent: number
   order_timeout_seconds: number
 }
@@ -82,6 +81,16 @@ export async function updateStrategyConfig(config: Partial<StrategyConfig>): Pro
  */
 export async function updateRiskConfig(config: Partial<RiskConfig>): Promise<RiskConfig> {
   const response = await apiClient.patch<RiskConfig>('/config/risk', config)
+  return response.data
+}
+
+/**
+ * Update stop-loss/take-profit configuration
+ */
+export async function updateStopLossTakeProfitConfig(
+  config: Partial<StopLossTakeProfitConfig>
+): Promise<StopLossTakeProfitConfig> {
+  const response = await apiClient.patch<StopLossTakeProfitConfig>('/config/stop-loss-take-profit', config)
   return response.data
 }
 

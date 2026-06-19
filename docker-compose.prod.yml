@@ -42,17 +42,17 @@ services:
       - "-c"
       - "ssl=on"
       - "-c"
-      - "ssl_cert_file=/var/lib/postgresql/data/server.crt"
+      - "ssl_cert_file=/etc/postgresql/certs/server.crt"
       - "-c"
-      - "ssl_key_file=/var/lib/postgresql/data/server.key"
+      - "ssl_key_file=/etc/postgresql/certs/server.key"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       # TLS material — real files are gitignored (db/certificates/*.crt|*.key).
       # On the VPS the key MUST be owned root:root with mode 600/640, or owned by
       # the container postgres user with mode 600, otherwise postgres refuses to
       # start. See the "PostgreSQL TLS setup" note at the bottom of this file.
-      - ./db/certificates/server.crt:/var/lib/postgresql/data/server.crt:ro
-      - ./db/certificates/server.key:/var/lib/postgresql/data/server.key:ro
+      - /etc/trader/postgres/certificates/server.crt:/etc/postgresql/certs/server.crt
+      - /etc/trader/postgres/certificates/server.key:/etc/postgresql/certs/server.key
     ports:
       # Expose on all interfaces for external Grafana connection
       # SECURITY: Configure firewall (ufw) to allow ONLY Grafana server IP
@@ -93,7 +93,20 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik_certs:/letsencrypt
     networks:
-      - trader-network
+      trader-network:
+        # Internal DNS aliases so containers on trader-network resolve the public
+        # hostnames to Traefik itself, instead of the VPS public IP. Without this,
+        # server-to-server calls to a public hostname (notably the API as an OIDC
+        # relying party reaching https://auth.trader.derveloy.eu for discovery/token/
+        # JWKS) leave the bridge network for the host's public IP and hang (most VPS
+        # don't NAT-hairpin), surfacing as "OIDC discovery failed:" (empty connect-
+        # timeout) → 503 at login. Traefik terminates TLS with the valid Let's Encrypt
+        # cert for each host and routes by Host header, so issuer/URL strings stay
+        # identical to the public ones.
+        aliases:
+          - ${DOMAIN_AUTH}
+          - ${DOMAIN_API}
+          - ${DOMAIN_DASHBOARD}
     labels:
       - "traefik.enable=true"
 
@@ -127,9 +140,9 @@ services:
         condition: service_healthy
     volumes:
       # Config + users DB live OUTSIDE the repo on the VPS (never committed).
-      - /etc/authelia/configuration.yml:/config/configuration.yml:ro
-      - /etc/authelia/users_database.yml:/config/users_database.yml:ro
-      - /etc/authelia/oidc.issuer.key:/secrets/oidc.issuer.key:ro
+      - /etc/trader/authelia/configuration.yml:/config/configuration.yml:ro
+      - /etc/trader/authelia/users_database.yml:/config/users_database.yml
+      - /etc/trader/authelia/oidc.issuer.key:/secrets/oidc.issuer.key:ro
       - authelia_data:/data
     networks:
       - trader-network

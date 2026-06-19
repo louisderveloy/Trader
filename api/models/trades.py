@@ -6,9 +6,24 @@ Request/response models for trade data.
 
 from datetime import datetime
 from decimal import Decimal
+from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, Field
+
+
+class TradeSortBy(str, Enum):
+    """Sortable trade columns (Issue #13)."""
+
+    RESULT = "result"
+    DURATION = "duration"
+
+
+class TradeSortDir(str, Enum):
+    """Sort direction."""
+
+    ASC = "asc"
+    DESC = "desc"
 
 
 class TradeResponse(BaseModel):

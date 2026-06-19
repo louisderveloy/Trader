@@ -9,13 +9,13 @@ and result persistence.
 import logging
 import os
 import time
-from typing import Optional
 from datetime import datetime, timezone
 from decimal import Decimal
-from uuid import UUID
+from typing import Optional
+
 import asyncpg
-import optuna
 import nest_asyncio
+import optuna
 
 # Apply nest_asyncio patch to allow asyncio.run() from within a running event loop
 # This is required because the CLI wraps cmd_run() in asyncio.run() at the top level,
@@ -66,11 +66,11 @@ class OptimizationRunner:
     """
 
     def __init__(
-        self,
-        config: OptimizationConfig,
-        db_pool: asyncpg.Pool,
-        search_space: Optional[WeightsSearchSpace] = None,
-        run_id: Optional[int] = None
+            self,
+            config: OptimizationConfig,
+            db_pool: asyncpg.Pool,
+            search_space: Optional[WeightsSearchSpace] = None,
+            run_id: Optional[int] = None
     ):
         """
         Initialize optimization runner.
@@ -308,7 +308,8 @@ class OptimizationRunner:
                 webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
                 notify_enabled = os.getenv("NOTIFY_OPTIMIZATION_COMPLETE", "true").lower() == "true"
 
-                if webhook_url and not webhook_url.startswith("https://discord.com/api/webhooks/YOUR_WEBHOOK") and notify_enabled:
+                if webhook_url and not webhook_url.startswith(
+                        "https://discord.com/api/webhooks/YOUR_WEBHOOK") and notify_enabled:
                     rate_limit_seconds = int(os.getenv("DISCORD_RATE_LIMIT_PERIOD_SECONDS", "60"))
                     discord_notifier = DiscordNotifier(
                         webhook_url=webhook_url,
@@ -559,10 +560,10 @@ class OptimizationRunner:
 
 
 async def run_optimization(
-    config: OptimizationConfig,
-    db_pool: asyncpg.Pool,
-    search_space: Optional[WeightsSearchSpace] = None,
-    run_id: Optional[int] = None
+        config: OptimizationConfig,
+        db_pool: asyncpg.Pool,
+        search_space: Optional[WeightsSearchSpace] = None,
+        run_id: Optional[int] = None
 ) -> StudyResult:
     """
     Convenience function to run optimization.

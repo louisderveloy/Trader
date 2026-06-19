@@ -107,7 +107,6 @@ Required in `.env`:
 
 ```bash
 # Binance Testnet (development)
-BINANCE_TESTNET=true
 BINANCE_TESTNET_API_KEY=your_testnet_api_key_here
 BINANCE_TESTNET_API_SECRET=your_testnet_secret_here
 

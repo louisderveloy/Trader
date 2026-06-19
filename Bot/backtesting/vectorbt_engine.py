@@ -34,8 +34,11 @@ from .metrics import calculate_metrics, build_equity_curve
 from runs.errors import log_exception, ErrorCategory, ErrorSeverity
 from runs.context import get_current_run_id
 
-# Note: Indicator signals are computed inline (vectorized) for backtesting performance
-# rather than using the real-time indicator modules which return single values.
+from indicators import ema, macd, rsi, stoch_rsi, bollinger, atr, obv
+
+# Indicator signals are computed via each indicator module's vectorized signal_series(),
+# the same single source of truth the live/paper trading loop uses through compute()/
+# to_signal() — see indicators/*.py. This guarantees the backtest can't drift from live.
 
 # Structured logging
 logger = logging.getLogger(__name__)
@@ -243,8 +246,11 @@ class VectorbtBacktester(BacktesterBase):
         - Individual indicator signals (vectorized for all bars)
         - Weighted score
 
-        Note: This method computes VECTORIZED signals for backtesting,
-        unlike the real-time indicators which return single values.
+        Note: Each indicator's signal is computed via its module's vectorized
+        signal_series() (indicators/<name>.py) — the same single source of truth
+        the live/paper trading loop reads through compute()/to_signal(). This
+        guarantees the backtest can never drift from live for the same candles
+        and params (see GitHub issue #9).
         """
         logger.info("Calculating indicator signals (vectorized)")
 
@@ -270,122 +276,47 @@ class VectorbtBacktester(BacktesterBase):
                 list(weights.keys()),
             )
 
-        close = self.candles_df['close'].astype(float)
-        high = self.candles_df['high'].astype(float)
-        low = self.candles_df['low'].astype(float)
-        volume = self.candles_df['volume'].astype(float)
+        # indicators/*.py's validate_candles() requires a 'timestamp' column;
+        # candles_df carries it as the 'time' index instead. Add it without
+        # disturbing the index so every signal_series() result stays aligned
+        # with self.signals_df (also indexed by candles_df.index).
+        candles_for_indicators = self.candles_df.copy()
+        candles_for_indicators['timestamp'] = candles_for_indicators.index
+
+        # Each indicator's own param keys (e.g. macd's 'fast'/'slow'/'signal', not
+        # 'fast_period'/'slow_period') — passing strategy_params straight through
+        # means live and backtest read identical keys, not a second hand-maintained
+        # naming convention.
+        ema_params = self.config.strategy_params.get('ema', {})
+        macd_params = self.config.strategy_params.get('macd', {})
+        rsi_params = self.config.strategy_params.get('rsi', {})
+        stoch_params = self.config.strategy_params.get('stoch_rsi', {})
+        bb_params = self.config.strategy_params.get('bollinger', {})
+        atr_params = self.config.strategy_params.get('atr', {})
+        obv_params = self.config.strategy_params.get('obv', {})
 
         # ===== EMA: Fast vs Slow crossover signal =====
-        ema_params = self.config.strategy_params.get('ema', {})
-        ema_fast_period = ema_params.get('fast_period', 50)
-        ema_slow_period = ema_params.get('slow_period', 200)
-
-        ema_fast = close.ewm(span=ema_fast_period, adjust=False).mean()
-        ema_slow = close.ewm(span=ema_slow_period, adjust=False).mean()
-
-        # Signal: percentage difference normalized to [-1, 1]
-        ema_pct_diff = (ema_fast - ema_slow) / ema_slow
-        self.signals_df['ema_signal'] = np.clip(ema_pct_diff / 0.01, -1.0, 1.0)
+        self.signals_df['ema_signal'] = ema.signal_series(candles_for_indicators, ema_params)
 
         # ===== MACD: Histogram sign and magnitude =====
-        macd_params = self.config.strategy_params.get('macd', {})
-        macd_fast = macd_params.get('fast_period', 12)
-        macd_slow = macd_params.get('slow_period', 26)
-        macd_signal_period = macd_params.get('signal_period', 9)
-
-        macd_line = close.ewm(span=macd_fast, adjust=False).mean() - close.ewm(span=macd_slow, adjust=False).mean()
-        macd_signal_line = macd_line.ewm(span=macd_signal_period, adjust=False).mean()
-        macd_histogram = macd_line - macd_signal_line
-
-        # Normalize histogram to signal (using percentile-based normalization)
-        hist_std = macd_histogram.rolling(window=100, min_periods=20).std()
-        hist_std = hist_std.replace(0, np.nan).fillna(macd_histogram.std())
-        self.signals_df['macd_signal'] = np.clip(macd_histogram / (2 * hist_std), -1.0, 1.0)
+        self.signals_df['macd_signal'] = macd.signal_series(candles_for_indicators, macd_params)
 
         # ===== RSI: Contrarian overbought/oversold =====
-        rsi_params = self.config.strategy_params.get('rsi', {})
-        rsi_period = rsi_params.get('period', 14)
-        rsi_overbought = rsi_params.get('overbought', 70)
-        rsi_oversold = rsi_params.get('oversold', 30)
-
-        delta = close.diff()
-        gain = delta.where(delta > 0, 0.0)
-        loss = (-delta).where(delta < 0, 0.0)
-
-        avg_gain = gain.ewm(alpha=1/rsi_period, adjust=False).mean()
-        avg_loss = loss.ewm(alpha=1/rsi_period, adjust=False).mean()
-
-        rs = avg_gain / avg_loss.replace(0, np.nan)
-        rsi_values = 100 - (100 / (1 + rs))
-        rsi_values = rsi_values.fillna(50)
-
-        # Contrarian: oversold = buy (+1), overbought = sell (-1)
-        rsi_signal = pd.Series(0.0, index=rsi_values.index)
-        rsi_signal[rsi_values <= rsi_oversold] = (rsi_oversold - rsi_values[rsi_values <= rsi_oversold]) / rsi_oversold
-        rsi_signal[rsi_values >= rsi_overbought] = -(rsi_values[rsi_values >= rsi_overbought] - rsi_overbought) / (100 - rsi_overbought)
-        self.signals_df['rsi_signal'] = np.clip(rsi_signal, -1.0, 1.0)
+        self.signals_df['rsi_signal'] = rsi.signal_series(candles_for_indicators, rsi_params)
 
         # ===== Stochastic RSI =====
-        stoch_params = self.config.strategy_params.get('stoch_rsi', {})
-        stoch_period = stoch_params.get('period', 14)
-        stoch_k = stoch_params.get('k_period', 3)
-        stoch_d = stoch_params.get('d_period', 3)
-
-        rsi_min = rsi_values.rolling(window=stoch_period).min()
-        rsi_max = rsi_values.rolling(window=stoch_period).max()
-        stoch_rsi_k = ((rsi_values - rsi_min) / (rsi_max - rsi_min).replace(0, np.nan)) * 100
-        stoch_rsi_k = stoch_rsi_k.fillna(50)
-        stoch_rsi_d = stoch_rsi_k.rolling(window=stoch_d).mean()
-
-        # Similar contrarian logic
-        stoch_signal = (50 - stoch_rsi_k) / 50  # Oversold (+1), overbought (-1)
-        self.signals_df['stoch_rsi_signal'] = np.clip(stoch_signal, -1.0, 1.0)
+        self.signals_df['stoch_rsi_signal'] = stoch_rsi.signal_series(candles_for_indicators, stoch_params)
 
         # ===== Bollinger Bands: Position within bands =====
-        bb_params = self.config.strategy_params.get('bollinger', {})
-        bb_period = bb_params.get('period', 20)
-        bb_std_dev = bb_params.get('std_dev', 2.0)
+        self.signals_df['bollinger_signal'] = bollinger.signal_series(candles_for_indicators, bb_params)
 
-        bb_sma = close.rolling(window=bb_period).mean()
-        bb_std = close.rolling(window=bb_period).std()
-        bb_upper = bb_sma + bb_std_dev * bb_std
-        bb_lower = bb_sma - bb_std_dev * bb_std
-
-        # Position: -1 at upper band, +1 at lower band (contrarian)
-        bb_width = bb_upper - bb_lower
-        bb_position = (bb_sma - close) / (bb_width / 2).replace(0, np.nan)
-        bb_position = bb_position.fillna(0)
-        self.signals_df['bollinger_signal'] = np.clip(bb_position, -1.0, 1.0)
-
-        # ===== ATR: Volatility percentile (neutral signal for backtesting) =====
-        atr_params = self.config.strategy_params.get('atr', {})
-        atr_period = atr_params.get('period', 14)
-
-        tr1 = high - low
-        tr2 = (high - close.shift(1)).abs()
-        tr3 = (low - close.shift(1)).abs()
-        true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        atr_values = true_range.ewm(span=atr_period, adjust=False).mean()
+        # ===== ATR: Volatility percentile =====
         # Keep the raw ATR series for ATR-based SL/TP stop sizing (see _compute_stop_arrays)
-        self.signals_df['atr'] = atr_values
-
-        # ATR percentile: high volatility = cautious (neutral to negative)
-        atr_percentile = atr_values.rolling(window=100, min_periods=20).apply(
-            lambda x: (x.iloc[-1] < x).sum() / len(x) if len(x) > 0 else 0.5
-        )
-        # Map: low vol (0%) → +0.3, median (50%) → 0, high vol (100%) → -0.3
-        self.signals_df['atr_signal'] = np.clip((0.5 - atr_percentile.fillna(0.5)) * 0.6, -1.0, 1.0)
+        self.signals_df['atr'] = atr.compute_series(candles_for_indicators, atr_params)['atr']
+        self.signals_df['atr_signal'] = atr.signal_series(candles_for_indicators, atr_params)
 
         # ===== OBV: Volume trend =====
-        obv_values = (np.sign(close.diff()) * volume).fillna(0).cumsum()
-
-        # OBV trend: use EMA crossover
-        obv_fast = obv_values.ewm(span=10, adjust=False).mean()
-        obv_slow = obv_values.ewm(span=30, adjust=False).mean()
-
-        obv_signal = (obv_fast - obv_slow) / obv_slow.abs().replace(0, np.nan)
-        obv_signal = obv_signal.fillna(0)
-        self.signals_df['obv_signal'] = np.clip(obv_signal * 10, -1.0, 1.0)
+        self.signals_df['obv_signal'] = obv.signal_series(candles_for_indicators, obv_params)
 
         # ===== Fear & Greed (simplified - use neutral 0.0 for backtesting) =====
         self.signals_df['fear_greed_signal'] = 0.0

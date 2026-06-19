@@ -8,7 +8,7 @@
       </div>
 
       <!-- Statistics Cards -->
-      <div v-if="!isLoading && trades.length > 0" class="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
+      <div v-if="!isLoading && trades.length > 0" class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
         <div class="bg-white rounded-lg shadow p-4">
           <p class="text-xs text-gray-600 mb-1">Total Trades</p>
           <p class="text-2xl font-bold text-gray-900">{{ stats.totalTrades }}</p>
@@ -146,8 +146,82 @@
       <!-- Error Alert -->
       <ErrorAlert v-if="error" :message="error" @dismiss="error = null" />
 
-      <!-- Trades Table -->
-      <div v-else-if="trades.length > 0" class="bg-white rounded-lg shadow overflow-hidden">
+      <!-- Trades — card list (mobile) -->
+      <div v-else-if="trades.length > 0" class="md:hidden space-y-3">
+        <div
+          v-for="trade in trades"
+          :key="trade.id"
+          :class="[
+            'bg-white rounded-lg shadow p-4',
+            trade.environment === 'live' ? 'ring-1 ring-amber-300 bg-amber-50/30' : ''
+          ]"
+        >
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <svg
+                v-if="trade.environment === 'live'"
+                class="w-4 h-4 text-amber-600 flex-shrink-0"
+                fill="currentColor"
+                viewBox="0 0 20 20"
+              >
+                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+              </svg>
+              <button
+                @click="filterByEnvironment(trade.environment)"
+                :class="[
+                  'px-2 py-1 rounded text-xs font-medium',
+                  getEnvironmentBadgeClass(trade.environment)
+                ]"
+              >
+                {{ formatEnvironment(trade.environment) }}
+              </button>
+              <button
+                @click="filterBySymbol(trade.symbol)"
+                class="font-medium text-gray-900"
+              >
+                {{ trade.symbol }}
+              </button>
+            </div>
+            <span
+              :class="[
+                'px-2 py-1 rounded text-xs font-medium',
+                trade.status === 'open' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'
+              ]"
+            >
+              {{ trade.status === 'open' ? 'OUVERT' : 'FERMÉ' }}
+            </span>
+          </div>
+          <div class="grid grid-cols-2 gap-y-2 text-sm">
+            <div class="text-gray-500">Side</div>
+            <div class="text-right">
+              <span
+                :class="[
+                  'px-2 py-1 rounded text-xs font-medium',
+                  trade.side === 'long' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                ]"
+              >
+                {{ trade.side.toUpperCase() }}
+              </span>
+            </div>
+            <div class="text-gray-500">Entrée</div>
+            <div class="text-right text-gray-700">{{ Number(trade.entry_price).toFixed(2) }}</div>
+            <div class="text-gray-500">Sortie</div>
+            <div class="text-right text-gray-700">
+              {{ trade.exit_price !== null ? Number(trade.exit_price).toFixed(2) : '—' }}
+            </div>
+            <div class="text-gray-500">Résultat</div>
+            <div class="text-right font-semibold" :class="getPnlColor(trade.pnl)">
+              {{ formatResult(trade) }}
+            </div>
+            <div class="text-gray-500">Durée</div>
+            <div class="text-right text-gray-700">{{ formatDuration(trade.duration_seconds) }}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Trades Table (desktop) -->
+      <div v-if="trades.length > 0" class="hidden md:block bg-white rounded-lg shadow overflow-hidden">
+        <div class="overflow-x-auto">
         <table class="w-full text-sm">
           <thead class="bg-gray-100 border-b">
             <tr>
@@ -157,8 +231,28 @@
               <th class="px-4 py-3 text-left font-semibold text-gray-900">Side</th>
               <th class="px-4 py-3 text-right font-semibold text-gray-900">Entrée</th>
               <th class="px-4 py-3 text-right font-semibold text-gray-900">Sortie</th>
-              <th class="px-4 py-3 text-right font-semibold text-gray-900">Résultat</th>
-              <th class="px-4 py-3 text-right font-semibold text-gray-900">Durée</th>
+              <th class="px-4 py-3 text-right font-semibold text-gray-900">
+                <button
+                  type="button"
+                  @click="toggleSort('result')"
+                  class="inline-flex items-center gap-1 hover:text-blue-600 transition-colors"
+                  title="Trier par résultat"
+                >
+                  Résultat
+                  <span class="text-xs w-3 inline-block">{{ sortIcon('result') }}</span>
+                </button>
+              </th>
+              <th class="px-4 py-3 text-right font-semibold text-gray-900">
+                <button
+                  type="button"
+                  @click="toggleSort('duration')"
+                  class="inline-flex items-center gap-1 hover:text-blue-600 transition-colors"
+                  title="Trier par durée"
+                >
+                  Durée
+                  <span class="text-xs w-3 inline-block">{{ sortIcon('duration') }}</span>
+                </button>
+              </th>
             </tr>
           </thead>
           <tbody class="divide-y">
@@ -237,6 +331,7 @@
             </tr>
           </tbody>
         </table>
+        </div>
       </div>
 
       <!-- Empty State -->
@@ -247,22 +342,22 @@
       />
 
       <!-- Pagination -->
-      <div v-if="trades.length > 0" class="flex items-center justify-between mt-6">
-        <p class="text-sm text-gray-600">
+      <div v-if="trades.length > 0" class="flex flex-col sm:flex-row items-center justify-between gap-3 mt-6">
+        <p class="text-sm text-gray-600 text-center sm:text-left">
           Page {{ currentPage }} de {{ totalPages }} ({{ total }} trades)
         </p>
-        <div class="flex gap-2">
+        <div class="flex gap-2 w-full sm:w-auto">
           <button
             @click="handlePreviousPage"
             :disabled="offset === 0"
-            class="px-4 py-2 border border-gray-300 rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+            class="flex-1 sm:flex-none px-4 py-2 border border-gray-300 rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
           >
             Précédent
           </button>
           <button
             @click="handleNextPage"
             :disabled="!hasMore"
-            class="px-4 py-2 border border-gray-300 rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+            class="flex-1 sm:flex-none px-4 py-2 border border-gray-300 rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
           >
             Suivant
           </button>
@@ -421,8 +516,34 @@ function clearAllFilters(): void {
     min_pnl: undefined,
     max_pnl: undefined,
     start_date: undefined,
-    end_date: undefined
+    end_date: undefined,
+    sort_by: undefined,
+    sort_dir: undefined
   })
   tradesStore.fetchTrades()
+}
+
+// Column sort: clicking a header cycles none -> ascending -> descending -> none
+// (issue #13). Selecting a column always replaces the other's sort state, since
+// only one sort is active at a time. No sort falls back to created_at desc.
+function toggleSort(column: 'result' | 'duration'): void {
+  let nextDir: 'asc' | 'desc' | undefined
+  if (filters.value.sort_by !== column) {
+    nextDir = 'asc'
+  } else if (filters.value.sort_dir === 'asc') {
+    nextDir = 'desc'
+  } else {
+    nextDir = undefined
+  }
+  tradesStore.setFilters({
+    sort_by: nextDir ? column : undefined,
+    sort_dir: nextDir
+  })
+  tradesStore.fetchTrades()
+}
+
+function sortIcon(column: 'result' | 'duration'): string {
+  if (filters.value.sort_by !== column) return ''
+  return filters.value.sort_dir === 'asc' ? '▲' : '▼'
 }
 </script>

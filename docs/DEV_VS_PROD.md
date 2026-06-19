@@ -62,13 +62,10 @@ GF_SERVER_ROOT_URL=http://localhost:3000
 
 # Development flags
 ENVIRONMENT=dev
-DEBUG=true
-HOT_RELOAD=true
 API_RELOAD=true
 API_WORKERS=1
 
-# Binance testnet
-BINANCE_TESTNET=true
+# Binance testnet (testnet vs mainnet is chosen per run, not via env var)
 BINANCE_TESTNET_API_KEY=your_testnet_key
 BINANCE_TESTNET_API_SECRET=your_testnet_secret
 ```
@@ -178,13 +175,10 @@ VITE_GRAFANA_BASE_URL=https://grafana.yourdomain.com
 
 # Production flags
 ENVIRONMENT=prod
-DEBUG=false
-HOT_RELOAD=false
 API_RELOAD=false
 API_WORKERS=4
 
 # Binance mainnet
-BINANCE_TESTNET=false
 BINANCE_MAINNET_API_KEY=your_mainnet_key
 BINANCE_MAINNET_API_SECRET=your_mainnet_secret
 
@@ -242,7 +236,6 @@ services:
 # 1. On VPS, configure .env for production
 nano .env
 # - Set ENVIRONMENT=prod
-# - Set BINANCE_TESTNET=false
 # - Configure domains
 # - Change all passwords!
 
@@ -289,8 +282,7 @@ When ready to deploy to production:
    # Change environment
    ENVIRONMENT=prod
 
-   # Switch to mainnet
-   BINANCE_TESTNET=false
+   # Switch to mainnet (per-run choice now, no global env toggle)
    BINANCE_MAINNET_API_KEY=...
    BINANCE_MAINNET_API_SECRET=...
 
@@ -311,8 +303,6 @@ When ready to deploy to production:
    ADMIN_PASSWORD=$(openssl rand -base64 16)
 
    # Production settings
-   DEBUG=false
-   HOT_RELOAD=false
    API_RELOAD=false
    API_WORKERS=4
    ```

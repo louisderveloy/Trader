@@ -117,8 +117,38 @@
         message="Aucun log ne correspond aux filtres sélectionnés."
       />
 
-      <!-- Logs Table -->
-      <div v-else class="bg-white rounded-lg shadow overflow-hidden">
+      <!-- Logs — card list (mobile) -->
+      <div v-else class="md:hidden space-y-3">
+        <div
+          v-for="log in logs"
+          :key="log.id"
+          class="bg-white rounded-lg shadow p-4"
+        >
+          <div class="flex items-center justify-between mb-2">
+            <span
+              :class="[
+                'px-2 py-1 rounded text-xs font-semibold',
+                log.level === 'INFO'
+                  ? 'bg-green-100 text-green-800'
+                  : log.level === 'WARNING'
+                  ? 'bg-yellow-100 text-yellow-800'
+                  : log.level === 'ERROR'
+                  ? 'bg-orange-100 text-orange-800'
+                  : 'bg-red-100 text-red-800'
+              ]"
+            >
+              {{ log.level }}
+            </span>
+            <span class="text-xs text-gray-500 whitespace-nowrap">{{ formatDateTime(log.timestamp) }}</span>
+          </div>
+          <p class="font-mono text-xs text-gray-700 mb-1">{{ log.logger }}</p>
+          <p class="text-sm text-gray-900 break-words">{{ log.message }}</p>
+        </div>
+      </div>
+
+      <!-- Logs Table (desktop) -->
+      <div v-if="logs.length > 0" class="hidden md:block bg-white rounded-lg shadow overflow-hidden">
+        <div class="overflow-x-auto">
         <table class="w-full text-sm">
           <thead class="bg-gray-100 border-b">
             <tr>
@@ -171,30 +201,33 @@
             </tr>
           </tbody>
         </table>
+        </div>
       </div>
 
       <!-- Pagination -->
-      <div v-if="logs.length > 0" class="flex items-center justify-center space-x-4">
-        <button
-          @click="handlePreviousPage"
-          :disabled="offset === 0"
-          class="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          Précédent
-        </button>
-
-        <span class="text-sm text-gray-700">
+      <div v-if="logs.length > 0" class="flex flex-col sm:flex-row items-center justify-center gap-3 sm:space-x-4">
+        <span class="text-sm text-gray-700 order-first sm:order-none">
           Page {{ currentPage }} / {{ totalPages }}
           <span class="text-gray-500">({{ total }} logs)</span>
         </span>
 
-        <button
-          @click="handleNextPage"
-          :disabled="!hasMore"
-          class="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          Suivant
-        </button>
+        <div class="flex gap-2 w-full sm:w-auto">
+          <button
+            @click="handlePreviousPage"
+            :disabled="offset === 0"
+            class="flex-1 sm:flex-none px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Précédent
+          </button>
+
+          <button
+            @click="handleNextPage"
+            :disabled="!hasMore"
+            class="flex-1 sm:flex-none px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Suivant
+          </button>
+        </div>
       </div>
     </div>
   </AppLayout>
