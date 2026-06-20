@@ -352,3 +352,24 @@ real config (currently defaults) — folded into #26.
 
 **Test env:** run in bot container. Bash path-mangles `/app`; prefix `MSYS_NO_PATHCONV=1` and use
 `docker compose run --rm --entrypoint python bot -m pytest /tests/...`. pytest addopts forces `--cov=bot`.
+
+---
+
+## [PROGRESS] Security-review implementation (branch `feature/security-review`, started 2026-06-20)
+
+Implementing `.agent/security-review.md` findings **one by one**, asking skip/implement per finding,
+plan→advisor→implement→**commit between each**. Commits use `--no-gpg-sign` (1Password agent fails;
+user-authorised — see [[commit-no-gpg-sign]]).
+
+**Done (committed):** #1 PyJWT swap (CVE-2022-29217) · #3 study_name allowlist (regex corrected to
+forbid leading dash; API+supervisor) · #6 marked already-done by AO-7 (prod cookies Strict, no code) ·
+#7 non-root containers (bot=gosu self-heal, api/dashboard=USER; nginx-unprivileged :8080) · #9 timescaledb
+pinned by digest · #10 uvicorn `--reload` opt-in (single worker kept — in-mem slowapi store) · #11
+user-indicator symbol allowlist + latent BTCUSDT→BTCUSDC bug fix (front+API).
+**Skipped by user:** #2 (DB bind), #4 (admin creds), #5 (CSRF secret), #8 (docker-socket-proxy).
+**Remaining:** #12 JWT TTL/revocation · #13 Discord webhook logging · #14 lastRoute/README · #15 rate-limit
+X-Forwarded-For · #16 CSP unsafe-inline · #17-23 low/info · CI pip-audit/npm-audit.
+
+**Env gotchas this session:** Docker G: host-mount is broken (build images + `docker cp` to test, see
+[[docker-g-mount-broken]]); bot dir tracked as `Bot/` capital-B — stage with exact case ([[bot-dir-case]]).
+API tests: build `trader-api-test`, `docker run -u root -e ENVIRONMENT=dev ... pytest api/tests`.
