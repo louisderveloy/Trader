@@ -10,9 +10,10 @@ WORKDIR /app
 # non-root USER is sufficient (no privilege-drop shim needed).
 RUN groupadd --system app && useradd --system --gid app --home-dir /app app
 
-# Install dependencies
-COPY requirements.txt .
-RUN python -m pip install --no-cache-dir -r requirements.txt
+# Install dependencies from the pinned lock for reproducible builds
+# (security review #21). requirements.txt is kept as the human-edited intent.
+COPY requirements.txt requirements.lock ./
+RUN python -m pip install --no-cache-dir -r requirements.lock
 
 # Copy application code
 COPY . /app/api/
