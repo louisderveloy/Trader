@@ -166,6 +166,10 @@ class TradingBot:
         logger.info("=" * 80)
 
         try:
+            # Fail fast on missing Binance credentials BEFORE taking the instance
+            # lock or creating any run record (security review #20).
+            self._validate_credentials()
+
             # Initialize components
             await self._init_database()
 
@@ -342,14 +346,27 @@ class TradingBot:
             logger.error("Please create a configuration first using: python -m main config create")
             raise
 
-    async def _init_exchange(self):
-        """Initialize exchange connection."""
+    def _validate_credentials(self) -> tuple[str, str]:
+        """Return the selected Binance API key/secret, raising if either is missing.
+
+        Called BEFORE acquiring the instance lock / creating a run record
+        (security review #20) so a missing credential fails fast with a clear
+        message instead of taking the lock, leaving a half-created run, and
+        surfacing later as an obscure SDK error on ``None`` credentials.
+        """
         env_prefix = "BINANCE_TESTNET" if self.testnet else "BINANCE_MAINNET"
         api_key = os.getenv(f"{env_prefix}_API_KEY")
         api_secret = os.getenv(f"{env_prefix}_API_SECRET")
-
         if not api_key or not api_secret:
-            raise ValueError(f"Missing {env_prefix}_API_KEY and/or {env_prefix}_API_SECRET")
+            raise ValueError(
+                f"Missing {env_prefix}_API_KEY and/or {env_prefix}_API_SECRET — "
+                "set them before starting live/paper trading."
+            )
+        return api_key, api_secret
+
+    async def _init_exchange(self):
+        """Initialize exchange connection."""
+        api_key, api_secret = self._validate_credentials()
 
         self.exchange = BinanceExchange(
             api_key=api_key,
