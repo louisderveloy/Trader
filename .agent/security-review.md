@@ -63,7 +63,7 @@ librairie JWT abandonnée.
 
 ### 🟠 Élevés (semaine 1-2)
 
-- [ ] **#3** Allowlist regex `[A-Za-z0-9_\- ]{1,100}` sur `study_name` (API + superviseur) — `api/models/run_control.py:236,283`, `bot/runs/supervisor.py:151-154,220`
+- [x] **#3** Allowlist regex sur `study_name` (API + superviseur) — `api/models/run_control.py`, `bot/runs/supervisor.py`. _Fait : regex corrigée `^[A-Za-z0-9_][A-Za-z0-9_\- ]{0,99}$` (1er char non-tiret — la regex initiale de la review autorisait `--n-trials` ⇒ ne rejetait rien) ; byte-identique dans les 2 fichiers ; tests `test_run_supervisor_validation` + `api/tests/test_run_control_validation`. Menace réelle = crash du run (argv token unique, pas d'injection shell), durcissement défense-en-profondeur._
 - [ ] **#4** Valider en prod l'absence de mot de passe admin faible (`admin/admin`) + exiger `ADMIN_PASSWORD_HASH` ; durcir le rate limit login (5→3/min) — `api/config.py:75,297`
 - [ ] **#5** Valider `CSRF_SECRET_KEY` en prod (≥32 chars, pas de pattern "generate") — `api/config.py:85-89,265-299`
 - [ ] **#6** Cookie `SameSite=Strict` au lieu de `Lax` (+ `domain=.derveloy.eu` en prod) — `api/auth/routes.py:77,151`

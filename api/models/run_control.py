@@ -8,6 +8,7 @@ allowlist *before* it reaches the database command channel or the supervisor
 ISO, symbol upper-cased) so raw client strings never flow into an argv array.
 """
 
+import re
 import secrets
 from datetime import date
 from enum import Enum
@@ -24,6 +25,12 @@ ALLOWED_TIMEFRAMES = {
     "1m", "3m", "5m", "15m", "30m",
     "1h", "2h", "4h", "6h", "8h", "12h", "1d",
 }
+
+# study_name becomes a `--study-name <value>` argv token for the optimization
+# subprocess. The first char is constrained to alphanumeric/underscore (no leading
+# dash/space) so it can never be reinterpreted as a flag by the child argparse;
+# the rest may include '-' and spaces. Kept byte-identical to bot/runs/supervisor.py.
+_STUDY_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_\- ]{0,99}$")
 
 # Phrase the operator must type to start a real-money (mainnet) live run.
 MAINNET_CONFIRM_PHRASE = "I UNDERSTAND"
@@ -259,6 +266,19 @@ class StartOptimizationRequest(BaseModel):
     sampler: Optional[SamplerStart] = Field(default=None, description="Optuna sampler")
     pruner: Optional[PrunerStart] = Field(default=None, description="Optuna pruner")
     multithread: bool = Field(default=False, description="Use all CPU cores (sets n_jobs=-1)")
+
+    @field_validator("study_name")
+    @classmethod
+    def _validate_study_name(cls, v: str) -> str:
+        # Becomes the `--study-name` argv token for the optimization subprocess.
+        # Allowlist a safe character set so a value can never be reinterpreted as
+        # a flag by the child argparse (defence-in-depth; re-checked in supervisor).
+        v = v.strip()
+        if not _STUDY_NAME_RE.fullmatch(v):
+            raise ValueError(
+                "study_name may only contain letters, digits, spaces, '_' and '-'"
+            )
+        return v
 
     @field_validator("symbol")
     @classmethod
