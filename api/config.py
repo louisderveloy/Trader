@@ -59,8 +59,11 @@ class Settings(BaseSettings):
     # api/auth/jwt.py (encode + decode) to close CVE-2022-29217; this field is kept
     # only for backward-compat of existing .env files and is intentionally unused.
     jwt_algorithm: str = Field(default="HS256", description="JWT algorithm (unused; HS256 hardcoded)")
+    # 120 min (down from 1440/24h) bounds the stolen-cookie exposure window;
+    # there is no server-side revocation yet, so logout can't invalidate a token
+    # before it expires (security review #12). Refresh/revocation = follow-up.
     jwt_access_token_expire_minutes: int = Field(
-        default=1440, description="JWT access token expiration (minutes)"
+        default=120, description="JWT access token expiration (minutes)"
     )
 
     # ==========================================
