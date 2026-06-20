@@ -15,6 +15,8 @@ from typing import Any, Optional
 import asyncpg
 import httpx
 
+from utils.log_redaction import redact
+
 logger = logging.getLogger(__name__)
 
 
@@ -126,13 +128,17 @@ class DiscordNotifier:
 
             if response.status_code not in (200, 204):
                 status = "failed"
-                error_message = f"HTTP {response.status_code}: {response.text}"
+                # Keep the Discord response body (useful for debugging), but run it
+                # through redact() so no secret shape can ever slip into the log.
+                error_message = redact(f"HTTP {response.status_code}: {response.text}")
                 logger.error(f"Discord notification failed: {error_message}")
 
         except Exception as e:
             status = "failed"
-            error_message = str(e)
-            logger.error(f"Discord notification error: {e}")
+            # httpx exceptions embed the request URL — which contains the webhook
+            # token — in their string form. redact() masks it (security review #13).
+            error_message = redact(str(e))
+            logger.error(f"Discord notification error: {error_message}")
 
         self._last_notification_time = datetime.now(timezone.utc)
 
@@ -214,6 +220,7 @@ class DiscordNotifier:
         message = (
             f"**Trade Closed**\n"
             f">>> {pnl_emoji} **{pnl_sign}{pnl:.2f}** $ **({pnl_sign}{pnl_pct:.2f}%)**\n"
+            f"ℹ️ Reason: {reason}"
             f"👉 Entry: **{entry_price:.2f}** $\n"
             f"👈 Exit: **{exit_price:.2f}** $\n"
             f"🔗 {symbol}"
