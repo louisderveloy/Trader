@@ -361,14 +361,22 @@ Implementing `.agent/security-review.md` findings **one by one**, asking skip/im
 plan→advisor→implement→**commit between each**. Commits use `--no-gpg-sign` (1Password agent fails;
 user-authorised — see [[commit-no-gpg-sign]]).
 
-**Done (committed):** #1 PyJWT swap (CVE-2022-29217) · #3 study_name allowlist (regex corrected to
-forbid leading dash; API+supervisor) · #6 marked already-done by AO-7 (prod cookies Strict, no code) ·
+**Done (committed) — all numbered findings + CI processed:** #1 PyJWT (CVE-2022-29217) · #3 study_name
+allowlist (regex forbids leading dash; API+supervisor) · #6 already-done by AO-7 (prod cookies Strict) ·
 #7 non-root containers (bot=gosu self-heal, api/dashboard=USER; nginx-unprivileged :8080) · #9 timescaledb
-pinned by digest · #10 uvicorn `--reload` opt-in (single worker kept — in-mem slowapi store) · #11
-user-indicator symbol allowlist + latent BTCUSDT→BTCUSDC bug fix (front+API).
-**Skipped by user:** #2 (DB bind), #4 (admin creds), #5 (CSRF secret), #8 (docker-socket-proxy).
-**Remaining:** #12 JWT TTL/revocation · #13 Discord webhook logging · #14 lastRoute/README · #15 rate-limit
-X-Forwarded-For · #16 CSP unsafe-inline · #17-23 low/info · CI pip-audit/npm-audit.
+pinned by digest · #10 uvicorn `--reload` opt-in (single worker — in-mem slowapi) · #11 user-indicator
+symbol allowlist + latent BTCUSDT→BTCUSDC fix · #12 JWT TTL 1440→120min (TTL-only; refresh/revocation
+deferred) · #13 Discord webhook redaction · #14 lastRoute guard + README · #15 rate-limit real client IP
+(rightmost XFF, Context7-verified) · #17 expired-vs-forged token logging · #19 POSTGRES_PASSWORD required
+(no default) · #20 Binance creds validated pre-lock · #21 deps pinned by lock files (prod closures) · #22
+HSTS via X-Forwarded-Proto (not $scheme) · #23 optuna-dashboard removed · CI pip-audit + npm audit gates
+(fixed form-data HIGH 4.0.5→4.0.6).
+**Skipped by user:** #2 (DB bind), #4 (admin creds), #5 (CSRF secret), #8 (docker-socket-proxy), #16 (CSP unsafe-inline), #18 (dev bind-mount doc).
+**Remaining (Authelia section, not yet addressed):** AO-11 (prod TTL 240 — now superseded by #12's
+global 120), AO-RISK (verify auth_time refresh on deployed Authelia — needs deployment), AO-FOLLOWUP
+(migrate authlib.jose→joserfc). All numbered findings #1-#23 done/skipped.
+**Lock regen (important):** prod images install FROM the lock, so regenerate locks via a clean resolver
+image off requirements.txt (NOT by freezing the prod image — circular). Commands in each lock header.
 
 **Env gotchas this session:** Docker G: host-mount is broken (build images + `docker cp` to test, see
 [[docker-g-mount-broken]]); bot dir tracked as `Bot/` capital-B — stage with exact case ([[bot-dir-case]]).
