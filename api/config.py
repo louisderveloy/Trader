@@ -164,7 +164,9 @@ class Settings(BaseSettings):
     # ==========================================
     api_host: str = Field(default="0.0.0.0", description="API host")
     api_port: int = Field(default=8000, description="API port")
-    api_reload: bool = Field(default=True, description="Auto-reload on code changes")
+    # Default OFF (security review #10): the auto-reloader is a dev-only file
+    # watcher (extra CPU, exposes code paths). Opt in with API_RELOAD=true.
+    api_reload: bool = Field(default=False, description="Auto-reload on code changes (dev only)")
     api_workers: int = Field(default=1, description="Number of workers")
 
     # ==========================================

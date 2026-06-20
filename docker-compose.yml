@@ -102,6 +102,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-trader}:${POSTGRES_PASSWORD:-dev_password}@postgres:5432/${POSTGRES_DB:-trader_bot}
       API_HOST: 0.0.0.0
       API_PORT: 8000
+      API_RELOAD: "true"  # dev hot-reload (default off; see security review #10)
     volumes:
       - ./api:/app/api
       # Read-only access to per-run bot logs for GET /runs/{id}/logs.

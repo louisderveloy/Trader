@@ -26,5 +26,7 @@ USER app
 # Expose API port
 EXPOSE 8000
 
-# Start FastAPI with uvicorn
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Start FastAPI via the launcher in api/main.py, which reads host/port/reload
+# from settings. Reload is OFF by default and opt-in via API_RELOAD=true
+# (security review #10) — no auto-reloader in prod or on a bare `docker run`.
+CMD ["python", "-m", "api.main"]
