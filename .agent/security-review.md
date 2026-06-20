@@ -87,7 +87,7 @@ librairie JWT abandonnée.
 
 ### 🔵 Faibles
 
-- [ ] **#17** Distinguer dans les logs token expiré vs forgé (`ExpiredSignatureError`) — `api/auth/jwt.py:91-95`
+- [x] **#17** Distinguer token expiré vs forgé dans les logs — `api/auth/jwt.py`. _Fait : `decode_access_token` catch `jwt.ExpiredSignatureError` → `logger.debug` (bénin) vs autre `jwt.PyJWTError` → `logger.warning` (forge/tampering possible, nom de l'exception loggé). Tests log-level dans `api/tests/test_jwt.py` (expiré=debug sans warning ; wrong-secret=warning). 7 tests jwt OK._
 - [ ] **#18** Documenter le risque du bind-mount source RW en dev (OK en prod) — `docker-compose.yml:67`
 - [ ] **#19** Default DB password `""` + validation non-vide dans tous les envs — `api/config.py:40`
 - [ ] **#20** Valider la présence des clés Binance au démarrage (avant lock instance) — `bot/scripts/trading.py`, `bot/exchanges/binance.py`

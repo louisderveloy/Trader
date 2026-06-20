@@ -8,6 +8,9 @@ rejects tokens missing the required ``exp``/``sub`` claims.
 Run with the API deps installed; not collected by the bot ``tests/`` suite.
 """
 
+import logging
+import time
+
 import jwt  # PyJWT
 import pytest
 
@@ -52,3 +55,26 @@ def test_token_signed_with_wrong_secret_rejected() -> None:
         {"sub": "louis", "exp": 9999999999}, "wrong-secret", algorithm="HS256"
     )
     assert decode_access_token(bad) is None
+
+
+def test_expired_token_logged_as_debug(caplog) -> None:
+    """An expired (but otherwise valid) token is benign -> debug, not warning."""
+    expired = jwt.encode(
+        {"sub": "louis", "exp": int(time.time()) - 10},
+        settings.jwt_secret_key,
+        algorithm="HS256",
+    )
+    with caplog.at_level(logging.DEBUG, logger="api.auth.jwt"):
+        assert decode_access_token(expired) is None
+    assert any(r.levelno == logging.DEBUG and "expired" in r.message.lower() for r in caplog.records)
+    assert not any(r.levelno >= logging.WARNING for r in caplog.records)
+
+
+def test_forged_token_logged_as_warning(caplog) -> None:
+    """A wrong-secret (forged) token is a possible attack -> warning."""
+    forged = jwt.encode(
+        {"sub": "louis", "exp": 9999999999}, "wrong-secret", algorithm="HS256"
+    )
+    with caplog.at_level(logging.DEBUG, logger="api.auth.jwt"):
+        assert decode_access_token(forged) is None
+    assert any(r.levelno == logging.WARNING and "forgery" in r.message.lower() for r in caplog.records)
