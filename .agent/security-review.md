@@ -95,7 +95,7 @@ librairie JWT abandonnée.
 
 ### ⚪ Info / hygiène
 
-- [ ] **#22** HSTS conditionné sur `$scheme = https` dans nginx — `dashboard/nginx.conf:31,52,65`
+- [x] **#22** HSTS conditionné sur HTTPS dans nginx — `dashboard/nginx.conf`. _Fait via `map $http_x_forwarded_proto $hsts_header` (valeur vide ⇒ header omis), appliqué aux 3 `add_header HSTS`. **Correction vs la review** : `$scheme` serait toujours `http` (Traefik termine le TLS et forward en HTTP sur 8080) ⇒ aurait supprimé HSTS entièrement ; le bon signal est `X-Forwarded-Proto`. Vérifié : `nginx -t` OK ; HSTS absent en http nu, présent avec `X-Forwarded-Proto=https`._
 - [ ] **#23** Déplacer `optuna-dashboard` en dépendance dev (ou retirer) — `bot/requirements.txt:26`
 - [ ] **CI** Ajouter `pip-audit` (bot) + `npm audit` (dashboard), échec du pipeline sur HIGH/CRITICAL
 
