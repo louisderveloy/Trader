@@ -89,7 +89,7 @@ librairie JWT abandonnée.
 
 - [x] **#17** Distinguer token expiré vs forgé dans les logs — `api/auth/jwt.py`. _Fait : `decode_access_token` catch `jwt.ExpiredSignatureError` → `logger.debug` (bénin) vs autre `jwt.PyJWTError` → `logger.warning` (forge/tampering possible, nom de l'exception loggé). Tests log-level dans `api/tests/test_jwt.py` (expiré=debug sans warning ; wrong-secret=warning). 7 tests jwt OK._
 - [ ] **#18** Documenter le risque du bind-mount source RW en dev (OK en prod) — `docker-compose.yml:67`
-- [ ] **#19** Default DB password `""` + validation non-vide dans tous les envs — `api/config.py:40`
+- [x] **#19** Default DB password vide + validation non-vide tous envs — `api/config.py`. _Fait : `postgres_password` default `"password"`→`""` ; check non-vide en tête de `validate_production_secrets` (avant le bloc prod, tous envs). Champ load-bearing (vérifié : `api/database.py:51` passe `settings.postgres_password` à `asyncpg.create_pool`). CI `api-test` + runs de test posent `POSTGRES_PASSWORD` (le `Settings()` module-level tourne à l'import). Vérifié : import sans le var → fail-fast clair ; tests `Settings(postgres_password="")`→ValueError. 61 tests API OK._
 - [ ] **#20** Valider la présence des clés Binance au démarrage (avant lock instance) — `bot/scripts/trading.py`, `bot/exchanges/binance.py`
 - [ ] **#21** (Info) Pinner les dépendances (`pip freeze` → `requirements-pinned.txt`) — `api/requirements.txt`, `bot/requirements.txt`
 

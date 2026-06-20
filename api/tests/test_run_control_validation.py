@@ -11,7 +11,23 @@ Run with the API deps installed; not collected by the bot ``tests/`` suite.
 import pytest
 from pydantic import ValidationError
 
+from api.config import Settings
 from api.models.run_control import StartOptimizationRequest
+
+
+# Minimal kwargs for a valid dev Settings (mirrors the OIDC test fixture).
+_SETTINGS_OK = {"environment": "dev", "postgres_password": "x" * 20}
+
+
+def test_empty_postgres_password_rejected() -> None:
+    # security review #19: no default, must fail fast in every environment.
+    with pytest.raises(ValidationError):
+        Settings(**{**_SETTINGS_OK, "postgres_password": ""})
+
+
+def test_postgres_password_present_passes() -> None:
+    s = Settings(**_SETTINGS_OK)
+    assert s.postgres_password == "x" * 20
 
 
 @pytest.mark.parametrize("bad", ["--n-trials 99999", "-h", "--help", "bad;name", "name$(x)"])

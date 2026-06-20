@@ -37,7 +37,11 @@ class Settings(BaseSettings):
     postgres_port: int = Field(default=5432, description="PostgreSQL port")
     postgres_db: str = Field(default="trader_bot", description="PostgreSQL database name")
     postgres_user: str = Field(default="trader", description="PostgreSQL user")
-    postgres_password: str = Field(default="password", description="PostgreSQL password")
+    # No default (security review #19): an empty/missing password must fail fast
+    # in every environment, not silently fall back to a usable-looking literal.
+    # This field is load-bearing — api/database.py passes it straight to
+    # asyncpg.create_pool(password=...).
+    postgres_password: str = Field(default="", description="PostgreSQL password (required)")
 
     @computed_field
     @property
@@ -326,6 +330,15 @@ class Settings(BaseSettings):
         Raises:
             ValueError: If any secret is weak or auth is misconfigured in production
         """
+        # All environments: the DB password is required. asyncpg authenticates
+        # with it, so an empty value is never valid (security review #19). Checked
+        # before the prod-only block so the error is clear rather than "len < 16".
+        if not self.postgres_password:
+            raise ValueError(
+                "POSTGRES_PASSWORD must be set (no default). "
+                "Set it in your environment / .env file."
+            )
+
         if self.environment == "prod":
             weak_patterns = [
                 "change_me", "admin", "password", "secret",

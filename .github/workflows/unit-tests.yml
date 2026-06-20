@@ -50,6 +50,9 @@ jobs:
       - name: Run API auth tests
         env:
           ENVIRONMENT: dev
+          # config.py requires POSTGRES_PASSWORD in all envs (security review #19);
+          # the module-level Settings() runs at import. Tests don't hit a real DB.
+          POSTGRES_PASSWORD: test_password
         run: python -m pytest api/tests -q
 
   secrets-scan:
