@@ -27,7 +27,7 @@ Dashboard Vue.js pour le bot de trading crypto (Phase 9 - Wave 1 MVP).
 - ✅ Runs (RunCard, RunStatusBadge)
 
 ### Stores (Pinia)
-- ✅ Auth - JWT token (localStorage), login/logout
+- ✅ Auth - JWT session en cookie httpOnly (jamais lisible par JS), login/logout
 - ✅ Runs - Liste des runs, polling actifs
 - ✅ UI - État sidebar (mobile)
 
