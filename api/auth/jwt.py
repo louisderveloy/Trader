@@ -8,7 +8,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from jose import JWTError, jwt
+import jwt  # PyJWT
 from passlib.context import CryptContext
 
 from ..config import settings
@@ -69,10 +69,8 @@ def create_access_token(
 
     to_encode.update({"exp": expire})
 
-    # Encode JWT
-    encoded_jwt = jwt.encode(
-        to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm
-    )
+    # Encode JWT. Algorithm hardcoded to HS256 (symmetric); never read from input.
+    encoded_jwt = jwt.encode(to_encode, settings.jwt_secret_key, algorithm="HS256")
 
     return encoded_jwt
 
@@ -88,11 +86,17 @@ def decode_access_token(token: str) -> Optional[dict[str, str]]:
         Decoded token payload if valid, None otherwise
     """
     try:
+        # algorithms is a hardcoded literal — never derived from the token header —
+        # which closes the CVE-2022-29217 algorithm-confusion class entirely.
+        # require exp+sub rejects stripped/forged tokens missing core claims.
         payload = jwt.decode(
-            token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
+            token,
+            settings.jwt_secret_key,
+            algorithms=["HS256"],
+            options={"require": ["exp", "sub"]},
         )
         return payload
-    except JWTError:
+    except jwt.PyJWTError:
         return None
 
 

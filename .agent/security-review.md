@@ -58,7 +58,7 @@ librairie JWT abandonnée.
 
 ### 🔴 Critiques (semaine 1)
 
-- [ ] **#1** Remplacer `python-jose` par `PyJWT>=2.8.0` ; coder en dur `algorithms=["HS256"]` et `options={"require":["exp","sub"]}` — `api/requirements.txt:14`, `api/auth/jwt.py:73-95`
+- [x] **#1** Remplacer `python-jose` par `PyJWT>=2.8.0` ; coder en dur `algorithms=["HS256"]` et `options={"require":["exp","sub"]}` — `api/requirements.txt:14`, `api/auth/jwt.py:73-95`. _Fait : PyJWT swap, HS256 littéral encode+decode, require exp/sub ; `jwt_algorithm` config marqué unused ; régression `api/tests/test_jwt.py` (alg=none/no-sub/no-exp/wrong-secret rejetés). 37 tests API passent._
 - [ ] **#2** Binder PostgreSQL sur `127.0.0.1:5432:5432` (tunnel SSH/VPN pour Grafana externe) + mot de passe Grafana readonly non vide validé — `docker-compose.prod.yml:41`
 
 ### 🟠 Élevés (semaine 1-2)

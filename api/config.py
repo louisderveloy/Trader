@@ -55,7 +55,10 @@ class Settings(BaseSettings):
         default="change_me_in_production_generate_with_openssl_rand_hex_32",
         description="JWT secret key",
     )
-    jwt_algorithm: str = Field(default="HS256", description="JWT algorithm")
+    # NOTE: not load-bearing. The HS256 algorithm is hardcoded as a literal in
+    # api/auth/jwt.py (encode + decode) to close CVE-2022-29217; this field is kept
+    # only for backward-compat of existing .env files and is intentionally unused.
+    jwt_algorithm: str = Field(default="HS256", description="JWT algorithm (unused; HS256 hardcoded)")
     jwt_access_token_expire_minutes: int = Field(
         default=1440, description="JWT access token expiration (minutes)"
     )
