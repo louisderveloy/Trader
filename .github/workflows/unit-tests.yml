@@ -68,3 +68,36 @@ jobs:
         uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dependency-audit:
+    name: Dependency vulnerability audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      # pip-audit gates on any known PyPI advisory (no severity tiers there);
+      # audits the pinned PROD closures, not the loose requirements.txt
+      # (security review #21/CI). Both locks are clean as of this commit.
+      - name: Audit Python deps (pip-audit on prod locks)
+        run: |
+          pip install pip-audit
+          pip-audit -r api/requirements.lock
+          pip-audit -r bot/requirements.lock
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Prod deps only (--omit=dev): vite/esbuild dev-tooling advisories are not
+      # shipped to the nginx image and would otherwise block the pipeline on a
+      # breaking vite major. Fails on high+critical in the production bundle.
+      - name: Audit dashboard deps (npm audit, prod, high+critical)
+        working-directory: dashboard
+        run: |
+          npm ci
+          npm audit --omit=dev --audit-level=high
