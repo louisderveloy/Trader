@@ -97,7 +97,7 @@ export async function updateStopLossTakeProfitConfig(
 /**
  * Get user indicator for a symbol
  */
-export async function getUserIndicator(symbol: string = 'BTCUSDT'): Promise<UserIndicator> {
+export async function getUserIndicator(symbol: string = 'BTCUSDC'): Promise<UserIndicator> {
   const response = await apiClient.get<UserIndicator>('/config/user-indicator', {
     params: { symbol }
   })

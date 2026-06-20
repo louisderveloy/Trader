@@ -81,7 +81,7 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
-  async function fetchUserIndicator(symbol: string = 'BTCUSDT'): Promise<void> {
+  async function fetchUserIndicator(symbol: string = 'BTCUSDC'): Promise<void> {
     isLoading.value = true
     error.value = null
     try {
