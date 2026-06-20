@@ -104,9 +104,16 @@ router.beforeEach(async (to) => {
   }
 
   if (to.name === 'login' && authStore.isAuthenticated) {
-    // Already authenticated, restore last route or go to home
+    // Already authenticated: restore last route or go home. Only accept a
+    // same-origin relative path (security review #14): must start with a single
+    // '/', reject protocol-relative '//host' (open redirect) and '/login'.
     const lastRoute = localStorage.getItem('lastRoute')
-    return lastRoute && lastRoute !== '/login' ? lastRoute : { name: 'home' }
+    const isSafe =
+      !!lastRoute &&
+      lastRoute.startsWith('/') &&
+      !lastRoute.startsWith('//') &&
+      lastRoute !== '/login'
+    return isSafe ? lastRoute : { name: 'home' }
   }
 
   // Allow navigation

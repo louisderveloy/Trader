@@ -205,6 +205,22 @@ def test_optimization_requires_study_name():
         _validate_start_params(_optimize_params(study_name="  "))
 
 
+def test_optimization_flag_like_study_name_rejected():
+    # Argument-injection / crash attempt: a study_name argparse could read as a
+    # flag (leading dash, rejected after strip) or an illegal character. The
+    # allowlist (security review #3) rejects both. Note: leading whitespace is
+    # stripped first, so " name" normalises to a valid value.
+    for bad in ("--n-trials 99999", "-h", "--help", "bad;name", "name$(x)"):
+        with pytest.raises(CommandValidationError):
+            _validate_start_params(_optimize_params(study_name=bad))
+
+
+def test_optimization_normal_study_names_accepted():
+    for ok in ("btc_test", "my-study-2026", "study 1"):
+        clean = _validate_start_params(_optimize_params(study_name=ok))
+        assert clean["study_name"] == ok
+
+
 def test_optimization_bad_objective_rejected():
     with pytest.raises(CommandValidationError):
         _validate_start_params(_optimize_params(objective="max_money"))

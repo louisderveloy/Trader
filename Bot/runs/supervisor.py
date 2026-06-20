@@ -59,6 +59,12 @@ _ALLOWED_TIMEFRAMES = {
 _ALLOWED_ENGINES = {"vectorbt", "event_driven"}
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _UUID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
+# study_name becomes an argv token (`--study-name <value>`). Even though we use
+# create_subprocess_exec (no shell), a value starting with `-`/`--` could be
+# reinterpreted as a flag by the child argparse (or crash the run). The first
+# char is constrained to alphanumeric/underscore (no leading dash/space); the
+# rest may include '-' and spaces. Kept byte-identical to api/models/run_control.py.
+_STUDY_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_\- ]{0,99}$")
 _RUN_TYPES = {"backtest", "paper", "live", "optimization"}
 
 # Optimization-specific allowlists (mirror the optimize CLI choices).
@@ -158,6 +164,8 @@ def _validate_start_params(params: dict[str, Any]) -> dict[str, Any]:
         study_name = str(params.get("study_name", "")).strip()
         if not study_name:
             raise CommandValidationError("optimization requires a non-empty study_name")
+        if not _STUDY_NAME_RE.fullmatch(study_name):
+            raise CommandValidationError(f"invalid study_name: {study_name!r}")
         clean["study_name"] = study_name
 
         # Dates are optional for optimization (the runner falls back to all data).

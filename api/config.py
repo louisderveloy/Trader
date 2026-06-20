@@ -37,7 +37,11 @@ class Settings(BaseSettings):
     postgres_port: int = Field(default=5432, description="PostgreSQL port")
     postgres_db: str = Field(default="trader_bot", description="PostgreSQL database name")
     postgres_user: str = Field(default="trader", description="PostgreSQL user")
-    postgres_password: str = Field(default="password", description="PostgreSQL password")
+    # No default (security review #19): an empty/missing password must fail fast
+    # in every environment, not silently fall back to a usable-looking literal.
+    # This field is load-bearing — api/database.py passes it straight to
+    # asyncpg.create_pool(password=...).
+    postgres_password: str = Field(default="", description="PostgreSQL password (required)")
 
     @computed_field
     @property
@@ -55,9 +59,15 @@ class Settings(BaseSettings):
         default="change_me_in_production_generate_with_openssl_rand_hex_32",
         description="JWT secret key",
     )
-    jwt_algorithm: str = Field(default="HS256", description="JWT algorithm")
+    # NOTE: not load-bearing. The HS256 algorithm is hardcoded as a literal in
+    # api/auth/jwt.py (encode + decode) to close CVE-2022-29217; this field is kept
+    # only for backward-compat of existing .env files and is intentionally unused.
+    jwt_algorithm: str = Field(default="HS256", description="JWT algorithm (unused; HS256 hardcoded)")
+    # 120 min (down from 1440/24h) bounds the stolen-cookie exposure window;
+    # there is no server-side revocation yet, so logout can't invalidate a token
+    # before it expires (security review #12). Refresh/revocation = follow-up.
     jwt_access_token_expire_minutes: int = Field(
-        default=1440, description="JWT access token expiration (minutes)"
+        default=120, description="JWT access token expiration (minutes)"
     )
 
     # ==========================================
@@ -161,7 +171,9 @@ class Settings(BaseSettings):
     # ==========================================
     api_host: str = Field(default="0.0.0.0", description="API host")
     api_port: int = Field(default=8000, description="API port")
-    api_reload: bool = Field(default=True, description="Auto-reload on code changes")
+    # Default OFF (security review #10): the auto-reloader is a dev-only file
+    # watcher (extra CPU, exposes code paths). Opt in with API_RELOAD=true.
+    api_reload: bool = Field(default=False, description="Auto-reload on code changes (dev only)")
     api_workers: int = Field(default=1, description="Number of workers")
 
     # ==========================================
@@ -318,6 +330,15 @@ class Settings(BaseSettings):
         Raises:
             ValueError: If any secret is weak or auth is misconfigured in production
         """
+        # All environments: the DB password is required. asyncpg authenticates
+        # with it, so an empty value is never valid (security review #19). Checked
+        # before the prod-only block so the error is clear rather than "len < 16".
+        if not self.postgres_password:
+            raise ValueError(
+                "POSTGRES_PASSWORD must be set (no default). "
+                "Set it in your environment / .env file."
+            )
+
         if self.environment == "prod":
             weak_patterns = [
                 "change_me", "admin", "password", "secret",

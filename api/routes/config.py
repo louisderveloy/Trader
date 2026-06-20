@@ -35,6 +35,25 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def valid_symbol(
+    symbol: Annotated[str, Query(description="Trading symbol")] = settings.binance_default_symbol,
+) -> str:
+    """Validate the ``symbol`` query param against the configured allowlist.
+
+    Mirrors the run-control models (security review #11): normalise to upper-case
+    and reject anything not in ``AVAILABLE_SYMBOLS`` so the ``user_indicator``
+    table can't be polluted with fictitious symbols. The default is the
+    configured trading symbol (USDC only), which is always in the allowlist.
+    """
+    normalized = symbol.strip().upper()
+    if normalized not in settings.available_symbols_list:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"symbol must be one of {settings.available_symbols_list}",
+        )
+    return normalized
+
+
 @router.get("", response_model=ConfigResponse)
 @limiter.limit(lambda: settings.rate_limit_api_read)
 async def get_config(
@@ -339,7 +358,7 @@ async def update_stop_loss_take_profit_config(
 @limiter.limit(lambda: settings.rate_limit_api_read)
 async def get_user_indicator(
     request: Request,
-    symbol: Annotated[str, Query(description="Trading symbol")] = "BTCUSDT",
+    symbol: str = Depends(valid_symbol),
     user: Principal = Depends(require_viewer),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> UserIndicatorResponse:
@@ -391,7 +410,7 @@ async def get_user_indicator(
 @limiter.limit(lambda: settings.rate_limit_api_write)
 async def update_user_indicator(
     request: Request,
-    symbol: Annotated[str, Query(description="Trading symbol")] = "BTCUSDT",
+    symbol: str = Depends(valid_symbol),
     update_data: UserIndicatorUpdateRequest = None,
     user: Principal = Depends(require_admin),
     db_pool: asyncpg.Pool = Depends(get_db_pool),

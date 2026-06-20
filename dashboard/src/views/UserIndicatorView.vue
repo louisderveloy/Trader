@@ -28,11 +28,11 @@
               id="symbol"
               class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
             >
-              <option value="BTCUSDT">BTC/USDT</option>
+              <option value="BTCUSDC">BTC/USDC</option>
               <!-- More symbols can be added later for multi-pair support -->
             </select>
             <p class="mt-1 text-sm text-gray-500">
-              Sélectionnez la paire de trading (BTC/USDT en v1)
+              Sélectionnez la paire de trading (BTC/USDC en v1)
             </p>
           </div>
 
@@ -220,7 +220,7 @@ const userIndicator = computed(() => configStore.userIndicator)
 const isSaving = ref(false)
 const error = ref<string | null>(null)
 
-const selectedSymbol = ref('BTCUSDT')
+const selectedSymbol = ref('BTCUSDC')
 const showSignalTooltip = ref(false)
 const showExpirationTooltip = ref(false)
 
