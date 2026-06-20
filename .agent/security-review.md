@@ -76,7 +76,7 @@ librairie JWT abandonnée.
 
 ### 🟡 Moyens (mois 1)
 
-- [ ] **#9** Pinner les images Docker (digest/version exacte, plus de `latest-pg16`) — `docker-compose.yml:27`, `docker-compose.prod.yml:27`
+- [x] **#9** Pinner les images Docker — `docker-compose.yml:27`, `docker-compose.prod.yml:27`. _Fait : `timescale/timescaledb` pinné **par digest** `@sha256:51ac20ec…` (= image en service, TimescaleDB 2.27.2 / PG 16.14). Découverte : `latest-pg16` ≠ `2.27.2-pg16` dans le registry (le tag flottant a déjà bougé depuis le pull d'il y a 2 sem.) ⇒ pin sur le digest des bytes réellement déployés/testés, pas sur un tag de version. Validé : compose parse, digest résolvable. `traefik:v3.7` / `authelia:4.39` laissés en pin mineur (acceptable) ; images `ghcr.io/.../trader-*:latest` gérées par la CD (`pull_policy: always`), hors scope._
 - [ ] **#10** Retirer `--reload` du CMD du Dockerfile API (opt-in via env) — `api/Dockerfile:22`
 - [ ] **#11** Allowlist `symbol` (`AVAILABLE_SYMBOLS`) sur `/config/user-indicator` — `api/routes/config.py:271,323`
 - [ ] **#12** Réduire la durée de vie JWT à 60 min + mécanisme de refresh/révocation (token version en DB) — `api/config.py:60`, `api/auth/jwt.py:63-76`
