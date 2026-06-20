@@ -28,7 +28,10 @@
       "mcp__grafana-mcp__search_dashboards",
       "mcp__grafana-mcp__list_datasources",
       "mcp__grafana-mcp__update_dashboard",
-      "mcp__grafana-mcp__grafana_api_request"
+      "mcp__grafana-mcp__grafana_api_request",
+      "mcp__codebase-memory-mcp__list_projects",
+      "mcp__codebase-memory-mcp__index_repository",
+      "mcp__codebase-memory-mcp__get_architecture"
     ]
   },
   "skillOverrides": {
