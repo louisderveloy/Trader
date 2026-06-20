@@ -96,7 +96,7 @@ librairie JWT abandonnée.
 ### ⚪ Info / hygiène
 
 - [x] **#22** HSTS conditionné sur HTTPS dans nginx — `dashboard/nginx.conf`. _Fait via `map $http_x_forwarded_proto $hsts_header` (valeur vide ⇒ header omis), appliqué aux 3 `add_header HSTS`. **Correction vs la review** : `$scheme` serait toujours `http` (Traefik termine le TLS et forward en HTTP sur 8080) ⇒ aurait supprimé HSTS entièrement ; le bon signal est `X-Forwarded-Proto`. Vérifié : `nginx -t` OK ; HSTS absent en http nu, présent avec `X-Forwarded-Proto=https`._
-- [ ] **#23** Déplacer `optuna-dashboard` en dépendance dev (ou retirer) — `bot/requirements.txt:26`
+- [x] **#23** `optuna-dashboard` retiré — `bot/requirements.txt`. _Fait (choix user : suppression pure, pas utilisé) : retiré de `requirements.txt` + lock régénéré (drop `optuna-dashboard` **et** sa transitive `bottle` ; `optuna` conservé). Aucun code n'importe `optuna_dashboard`. **Bug #21 corrigé au passage** : les images prod installant depuis le lock, régénérer par `pip freeze` de l'image était circulaire (ne voyait pas les edits de requirements.txt) → locks désormais régénérés via une image résolveur propre depuis `requirements.txt` (méthode documentée dans les headers des 2 locks). Vérifié en rebuild depuis les locks : api 61, bot 477 passed/10 skipped._
 - [ ] **CI** Ajouter `pip-audit` (bot) + `npm audit` (dashboard), échec du pipeline sur HIGH/CRITICAL
 
 ---
