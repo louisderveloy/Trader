@@ -233,7 +233,8 @@ services:
       - "traefik.http.routers.dashboard.entrypoints=websecure"
       - "traefik.http.routers.dashboard.tls=true"
       - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
-      - "traefik.http.services.dashboard.loadbalancer.server.port=80"
+      # 8080: dashboard nginx runs unprivileged (security review #7).
+      - "traefik.http.services.dashboard.loadbalancer.server.port=8080"
 
   # ==========================================
   # NOTE: Grafana has been moved to external hosting

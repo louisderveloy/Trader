@@ -67,7 +67,11 @@ librairie JWT abandonnée.
 - [ ] **#4** Valider en prod l'absence de mot de passe admin faible (`admin/admin`) + exiger `ADMIN_PASSWORD_HASH` ; durcir le rate limit login (5→3/min) — `api/config.py:75,297`
 - [ ] **#5** Valider `CSRF_SECRET_KEY` en prod (≥32 chars, pas de pattern "generate") — `api/config.py:85-89,265-299`
 - [x] **#6** Cookie `SameSite=Strict` en prod — **déjà résolu par AO-7** (refactor cookies). Le policy cookie vit dans `api/auth/cookies.py:33` (`_samesite() = "strict" if prod else "lax"`), pas dans `routes.py` (refs obsolètes). Prod = Strict confirmé : `docker-compose.prod.yml:170,198` posent `ENVIRONMENT: prod` (match exact `config.py:324`). Domaine plus étroit qu'`.derveloy.eu` (session host-only, CSRF `.trader.derveloy.eu`). Lax conservé en dev (non exposé, cookies non-Secure) et sur le cookie txn OIDC (nécessaire pour la nav top-level depuis Authelia). Aucun changement de code.
-- [ ] **#7** Ajouter un user non-root (`USER app`) dans les 3 Dockerfiles — `bot/Dockerfile`, `api/Dockerfile`, `dashboard/Dockerfile`
+- [x] **#7** User non-root dans les images prod — `bot/Dockerfile`, `api/Dockerfile`, `dashboard/Dockerfile.prod`. _Fait & vérifié au runtime via `docker run` (mount G: HS) :_
+  - _**api** → `USER app` (uid 999) ; lit `bot_logs` en RO, bind 8000 non-privilégié. 47 tests API OK._
+  - _**bot** → drop root→app auto-réparant via `gosu` dans `entrypoint.sh` (PID1 root chown le volume `bot_logs` qui peut préexister root-owned, puis re-exec en `app`). Évite tout chown manuel au déploiement (pas de downtime du bot live). `PYTHONDONTWRITEBYTECODE=1` (alembic importe `/db/migrations` depuis un mount host). **Hypothèse déploiement : `./db` doit être world-readable pour que `app` lance alembic.**_
+  - _**dashboard** → base `nginxinc/nginx-unprivileged:alpine` (uid 101 `nginx`), `listen 8080`, HEALTHCHECK + label Traefik `loadbalancer.server.port` → 8080. `/health` → 200 vérifié._
+  - _Dashboard **dev** (`dashboard/Dockerfile`, vite) laissé en root : local uniquement, hors scope._
 - [ ] **#8** Insérer un `docker-socket-proxy` entre Traefik et le daemon Docker — `docker-compose.prod.yml:74`
 
 ### 🟡 Moyens (mois 1)
