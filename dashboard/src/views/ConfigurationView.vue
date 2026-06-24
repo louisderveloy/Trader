@@ -79,21 +79,21 @@
             <ConfigField
                 id="position_size_mode"
                 label="Mode de dimensionnement"
-                tooltip="Fixe : la taille est identique à chaque transaction. Confiance : la taille est proportionnelle à la force du signal calculé. Indicateur de volatilité (moyenne de l'amplitude de prix sur plusieurs bougies) : la taille est calculée à partir du niveau de volatilité récent du marché et du pourcentage de capital que vous acceptez de risquer."
+                tooltip="Fixe : un pourcentage fixe du capital total à chaque transaction. Confiance : la taille est proportionnelle à la force du signal calculé. Indicateur de volatilité (moyenne de l'amplitude de prix sur plusieurs bougies) : la taille est calculée à partir du niveau de volatilité récent du marché et du pourcentage de capital que vous acceptez de risquer."
                 :model-value="formData.risk.position_size_mode"
                 :options="positionSizeModeOptions"
                 @update:model-value="updateRiskField('position_size_mode', $event)"
             />
             <ConfigField
-                id="fixed_size_usdt"
-                label="Taille fixe (USDT)"
-                tooltip="Montant en USDT investi à chaque transaction lorsque le mode de dimensionnement Fixe est sélectionné. Ce paramètre est ignoré dans les modes Confiance ou Indicateur de volatilité."
-                :model-value="formData.risk.fixed_size_usdt"
+                id="fixed_size_percent"
+                label="Taille fixe (% du capital)"
+                tooltip="Pourcentage du capital total investi à chaque transaction lorsque le mode de dimensionnement Fixe est sélectionné. Par exemple, 10% signifie que chaque position utilise 10% du solde disponible. Ce paramètre est ignoré dans les modes Confiance ou Indicateur de volatilité."
+                :model-value="formData.risk.fixed_size_percent"
                 type="number"
-                :min="10"
-                :max="10000"
-                :step="10"
-                @update:model-value="updateRiskField('fixed_size_usdt', $event)"
+                :min="1"
+                :max="100"
+                :step="1"
+                @update:model-value="updateRiskField('fixed_size_percent', $event)"
             />
             <ConfigField
                 id="atr_multiplier"
@@ -262,7 +262,7 @@ const formData = ref({
     max_trades_per_day: 5,
     max_exposure_percent: 30,
     position_size_mode: 'confidence',
-    fixed_size_usdt: 100,
+    fixed_size_percent: 10,
     atr_multiplier: 2,
     capital_risk_percent: 1
   },

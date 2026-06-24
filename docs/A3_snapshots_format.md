@@ -23,7 +23,7 @@ Capturé au démarrage de chaque run. Contient toute la configuration active.
     "max_trades_per_day": 5,
     "max_exposure_percent": 30.0,
     "position_size_mode": "confidence",
-    "fixed_size_usdt": 100.0,
+    "fixed_size_percent": 10.0,
     "atr_multiplier": 2.0,
     "capital_risk_percent": 1.0
   },

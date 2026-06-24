@@ -42,7 +42,7 @@ class RiskConfig:
     max_trades_per_day: int = 5  # Maximum trades allowed per day
     max_exposure_percent: float = 30.0  # Maximum % of capital exposed simultaneously
     position_size_mode: PositionSizeMode = PositionSizeMode.CONFIDENCE  # Position sizing mode
-    fixed_size_usdt: float = 100.0  # Fixed size in USDT (FIXED mode only)
+    fixed_size_percent: float = 10.0  # Fixed size as % of total capital (FIXED mode only)
     atr_multiplier: float = 2.0  # ATR multiplier for sizing (RISK_ATR mode only)
     capital_risk_percent: float = 1.0  # % capital to risk per trade (RISK_ATR mode only)
 
@@ -54,8 +54,10 @@ class RiskConfig:
             raise ValueError(
                 f"max_exposure_percent must be in (0, 100], got {self.max_exposure_percent}"
             )
-        if self.fixed_size_usdt <= 0:
-            raise ValueError(f"fixed_size_usdt must be > 0, got {self.fixed_size_usdt}")
+        if not 0.0 < self.fixed_size_percent <= 100.0:
+            raise ValueError(
+                f"fixed_size_percent must be in (0, 100], got {self.fixed_size_percent}"
+            )
         if self.atr_multiplier <= 0:
             raise ValueError(f"atr_multiplier must be > 0, got {self.atr_multiplier}")
         if not 0.0 < self.capital_risk_percent <= 100.0:
@@ -151,7 +153,7 @@ class StrategyEngineConfig:
             max_trades_per_day=int(os.getenv("RISK_MAX_TRADES_PER_DAY", "5")),
             max_exposure_percent=float(os.getenv("RISK_MAX_EXPOSURE_PERCENT", "30.0")),
             position_size_mode=PositionSizeMode(position_size_mode_str),
-            fixed_size_usdt=float(os.getenv("RISK_FIXED_SIZE_USDT", "100.0")),
+            fixed_size_percent=float(os.getenv("RISK_FIXED_SIZE_PERCENT", "10.0")),
             atr_multiplier=float(os.getenv("RISK_ATR_MULTIPLIER", "2.0")),
             capital_risk_percent=float(os.getenv("RISK_CAPITAL_RISK_PERCENT", "1.0"))
         )
@@ -236,7 +238,7 @@ class StrategyEngineConfig:
             max_trades_per_day=int(risk_data.get("max_trades_per_day", 5)),
             max_exposure_percent=float(risk_data.get("max_exposure_percent", 30.0)),
             position_size_mode=PositionSizeMode(position_size_mode_str),
-            fixed_size_usdt=float(risk_data.get("fixed_size_usdt", 100.0)),
+            fixed_size_percent=float(risk_data.get("fixed_size_percent", 10.0)),
             atr_multiplier=float(risk_data.get("atr_multiplier", 2.0)),
             capital_risk_percent=float(risk_data.get("capital_risk_percent", 1.0))
         )
@@ -292,7 +294,7 @@ class StrategyEngineConfig:
                 "max_trades_per_day": self.risk.max_trades_per_day,
                 "max_exposure_percent": self.risk.max_exposure_percent,
                 "position_size_mode": self.risk.position_size_mode.value,
-                "fixed_size_usdt": self.risk.fixed_size_usdt,
+                "fixed_size_percent": self.risk.fixed_size_percent,
                 "atr_multiplier": self.risk.atr_multiplier,
                 "capital_risk_percent": self.risk.capital_risk_percent
             },

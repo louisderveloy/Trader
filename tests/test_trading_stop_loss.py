@@ -56,7 +56,7 @@ def _make_config():
     return StrategyEngineConfig(
         strategy=StrategyConfig(entry_threshold=0.6, exit_threshold=-0.3, confirmation_candles=1),
         risk=RiskConfig(max_trades_per_day=5, max_exposure_percent=100.0,
-                        position_size_mode=PositionSizeMode.FIXED, fixed_size_usdt=1000.0),
+                        position_size_mode=PositionSizeMode.FIXED, fixed_size_percent=10.0),
         stop_loss=StopLossConfig(mode=StopLossMode.ATR, atr_multiplier=2.0),
         take_profit=TakeProfitConfig(mode=TakeProfitMode.ATR, atr_multiplier=3.0),
         cooldown=CooldownConfig(after_trade_seconds=0),

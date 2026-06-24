@@ -59,6 +59,12 @@
   `runs LEFT JOIN optuna_studies` so running/failed studies are visible.
 
 ### Trading safety & correctness
+- **Fixed sizing is % of capital, not absolute USDT (2026-06-24).** Renamed `fixed_size_usdt` →
+  `fixed_size_percent` end-to-end (bot `RiskConfig`+`sizing._calculate_fixed_size` now returns
+  `total_capital × pct/100`, API settings `risk_fixed_size_percent`, env `RISK_FIXED_SIZE_PERCENT`,
+  Pydantic + dataclass validation `0 < pct ≤ 100`, snapshot key, TS `RiskConfig`, ConfigurationView field,
+  docs). Default 10.0. Breaking change to config snapshot format — acceptable pre-paper (no persisted runs
+  to migrate); old DB rows without the key fall back to default. 70 strategy tests pass.
 - **Single-instance enforcement** via PG advisory locks (`bot/utils/instance_lock.py`): paper=1827364950,
   live=1923847563 (testnet+mainnet share the live lock). Crash-safe (released on connection close).
 - **Hot config reload** via LISTEN/NOTIFY (migration 008 `notify_config_updated`): all running instances

@@ -22,8 +22,8 @@ Liste exhaustive des paramètres configurables via le dashboard Vue.js. Chaque p
 |-----------|------|--------|------------|
 | `RISK_MAX_TRADES_PER_DAY` | int | 5 | Nombre maximum de trades par jour. Protection contre le surtrading. |
 | `RISK_MAX_EXPOSURE_PERCENT` | float | 30.0 | Pourcentage maximum du capital exposé simultanément. |
-| `RISK_POSITION_SIZE_MODE` | enum | confidence | Mode de sizing : 'fixed' (montant fixe), 'confidence' (proportionnel au score), 'risk_atr' (basé sur ATR et % de capital à risquer). |
-| `RISK_FIXED_SIZE_USDT` | float | 100.0 | Montant fixe en USDT par trade (mode 'fixed' uniquement). |
+| `RISK_POSITION_SIZE_MODE` | enum | confidence | Mode de sizing : 'fixed' (% fixe du capital), 'confidence' (proportionnel au score), 'risk_atr' (basé sur ATR et % de capital à risquer). |
+| `RISK_FIXED_SIZE_PERCENT` | float | 10.0 | Pourcentage du capital total par trade (mode 'fixed' uniquement). |
 | `RISK_ATR_MULTIPLIER` | float | 2.0 | Multiplicateur ATR pour le calcul du sizing (mode 'risk_atr' uniquement). |
 | `RISK_CAPITAL_RISK_PERCENT` | float | 1.0 | Pourcentage du capital à risquer par trade (mode 'risk_atr' uniquement). |
 

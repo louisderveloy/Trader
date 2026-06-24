@@ -19,10 +19,10 @@ from strategy.config import RiskConfig
 # --- calculate_position_size tests ---
 
 def test_calculate_position_size_fixed():
-    """Test position sizing with FIXED mode"""
+    """Test position sizing with FIXED mode (% of total capital)"""
     config = RiskConfig(
         position_size_mode=PositionSizeMode.FIXED,
-        fixed_size_usdt=100.0
+        fixed_size_percent=10.0
     )
 
     size = calculate_position_size(
@@ -33,7 +33,8 @@ def test_calculate_position_size_fixed():
         total_capital=Decimal("10000")
     )
 
-    assert size == Decimal("100.0")
+    # 10% of 10,000 USDT capital = 1,000 USDT
+    assert size == Decimal("1000.0")
 
 
 def test_calculate_position_size_confidence():

@@ -141,7 +141,7 @@ async def get_config(
             max_trades_per_day=settings.risk_max_trades_per_day,
             max_exposure_percent=settings.risk_max_exposure_percent,
             position_size_mode=settings.risk_position_size_mode,
-            fixed_size_usdt=float(settings.risk_fixed_size_usdt),
+            fixed_size_percent=float(settings.risk_fixed_size_percent),
             atr_multiplier=settings.risk_atr_multiplier,
             capital_risk_percent=settings.risk_capital_risk_percent,
         ),
@@ -255,9 +255,9 @@ async def update_risk_config(
         settings.risk_position_size_mode = update_data.position_size_mode.value
         updates["position_size_mode"] = update_data.position_size_mode.value
 
-    if update_data.fixed_size_usdt is not None:
-        settings.risk_fixed_size_usdt = update_data.fixed_size_usdt
-        updates["fixed_size_usdt"] = update_data.fixed_size_usdt
+    if update_data.fixed_size_percent is not None:
+        settings.risk_fixed_size_percent = update_data.fixed_size_percent
+        updates["fixed_size_percent"] = update_data.fixed_size_percent
 
     if update_data.atr_multiplier is not None:
         settings.risk_atr_multiplier = update_data.atr_multiplier
@@ -277,7 +277,7 @@ async def update_risk_config(
         max_trades_per_day=settings.risk_max_trades_per_day,
         max_exposure_percent=settings.risk_max_exposure_percent,
         position_size_mode=settings.risk_position_size_mode,
-        fixed_size_usdt=float(settings.risk_fixed_size_usdt),
+        fixed_size_percent=float(settings.risk_fixed_size_percent),
         atr_multiplier=settings.risk_atr_multiplier,
         capital_risk_percent=settings.risk_capital_risk_percent,
     )

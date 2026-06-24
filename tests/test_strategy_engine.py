@@ -57,7 +57,7 @@ def strategy_config():
             max_trades_per_day=5,
             max_exposure_percent=30.0,
             position_size_mode=PositionSizeMode.FIXED,
-            fixed_size_usdt=1000.0
+            fixed_size_percent=10.0
         ),
         stop_loss=StopLossConfig(
             mode=StopLossMode.ATR,
@@ -199,7 +199,7 @@ def test_update_config_propagates_to_engine_and_risk_manager(strategy_engine, we
             max_trades_per_day=99,
             max_exposure_percent=80.0,
             position_size_mode=PositionSizeMode.FIXED,
-            fixed_size_usdt=250.0,
+            fixed_size_percent=10.0,
         ),
         stop_loss=StopLossConfig(mode=StopLossMode.ATR, atr_multiplier=2.0),
         take_profit=TakeProfitConfig(mode=TakeProfitMode.ATR, atr_multiplier=3.0),

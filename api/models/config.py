@@ -34,7 +34,7 @@ class RiskConfigResponse(BaseModel):
     max_trades_per_day: int = Field(..., description="Max trades per day")
     max_exposure_percent: float = Field(..., description="Max exposure as % of capital")
     position_size_mode: str = Field(..., description="Position sizing: fixed, confidence, risk_atr")
-    fixed_size_usdt: float = Field(..., description="Fixed position size in USDT")
+    fixed_size_percent: float = Field(..., description="Fixed position size as % of total capital")
     atr_multiplier: float = Field(..., description="ATR multiplier for sizing")
     capital_risk_percent: float = Field(..., description="% of capital to risk per trade")
 
@@ -121,10 +121,11 @@ class RiskConfigUpdate(BaseModel):
         None,
         description="Position sizing mode: fixed, confidence, or risk_atr"
     )
-    fixed_size_usdt: Optional[float] = Field(
+    fixed_size_percent: Optional[float] = Field(
         None,
-        ge=0.0,
-        description="Fixed position size in USDT (must be >= 0)"
+        gt=0.0,
+        le=100.0,
+        description="Fixed position size as % of total capital (0-100)"
     )
     atr_multiplier: Optional[float] = Field(
         None,

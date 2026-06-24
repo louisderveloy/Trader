@@ -16,7 +16,7 @@ export interface RiskConfig {
   max_trades_per_day: number
   max_exposure_percent: number
   position_size_mode: 'fixed' | 'confidence' | 'risk_atr'
-  fixed_size_usdt: number
+  fixed_size_percent: number
   atr_multiplier: number
   capital_risk_percent: number
 }

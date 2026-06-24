@@ -250,8 +250,8 @@ class Settings(BaseSettings):
     risk_position_size_mode: str = Field(
         default="confidence", description="Position sizing mode: fixed, confidence, risk_atr"
     )
-    risk_fixed_size_usdt: float = Field(
-        default=100.0, description="Fixed position size in USDT"
+    risk_fixed_size_percent: float = Field(
+        default=10.0, description="Fixed position size as % of total capital"
     )
     risk_atr_multiplier: float = Field(
         default=2.0, description="ATR multiplier for risk sizing"
