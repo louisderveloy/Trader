@@ -5,11 +5,13 @@ import {
   RiskConfig,
   StrategyConfig,
   StopLossTakeProfitConfig,
+  CooldownConfig,
   UserIndicator,
   getConfig,
   updateRiskConfig,
   updateStrategyConfig,
   updateStopLossTakeProfitConfig,
+  updateCooldownConfig,
   getUserIndicator,
   updateUserIndicator
 } from '@/api/config'
@@ -25,6 +27,7 @@ export const useConfigStore = defineStore('config', () => {
   const strategy = computed(() => config.value?.strategy)
   const risk = computed(() => config.value?.risk)
   const stopLossTakeProfit = computed(() => config.value?.stop_loss_take_profit)
+  const cooldown = computed(() => config.value?.cooldown)
   const indicators = computed(() => config.value?.indicators)
   const binance = computed(() => config.value?.binance)
 
@@ -81,6 +84,19 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
+  async function updateCooldown(updates: Partial<CooldownConfig>): Promise<void> {
+    error.value = null
+    try {
+      const updated = await updateCooldownConfig(updates)
+      if (config.value) {
+        config.value.cooldown = updated
+      }
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'Failed to update cooldown configuration'
+      throw err
+    }
+  }
+
   async function fetchUserIndicator(symbol: string = 'BTCUSDC'): Promise<void> {
     isLoading.value = true
     error.value = null
@@ -121,6 +137,7 @@ export const useConfigStore = defineStore('config', () => {
     strategy,
     risk,
     stopLossTakeProfit,
+    cooldown,
     indicators,
     binance,
 
@@ -129,6 +146,7 @@ export const useConfigStore = defineStore('config', () => {
     updateStrategy,
     updateRisk,
     updateStopLossTakeProfit,
+    updateCooldown,
     fetchUserIndicator,
     updateIndicator
   }

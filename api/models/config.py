@@ -50,6 +50,14 @@ class StopLossTakeProfitConfigResponse(BaseModel):
     tp_fixed_percent: float = Field(..., description="TP fixed percent")
 
 
+class CooldownConfigResponse(BaseModel):
+    """Cooldown configuration response."""
+
+    after_trade_seconds: int = Field(
+        ..., description="Cooldown period (seconds) after closing a trade before re-entry"
+    )
+
+
 class BinanceConfigResponse(BaseModel):
     """Binance configuration response."""
 
@@ -68,6 +76,7 @@ class ConfigResponse(BaseModel):
     stop_loss_take_profit: StopLossTakeProfitConfigResponse = Field(
         ..., description="Stop-loss/take-profit settings"
     )
+    cooldown: CooldownConfigResponse = Field(..., description="Cooldown settings")
     indicators: dict[str, IndicatorConfigResponse] = Field(
         ..., description="All indicator configurations"
     )
@@ -175,6 +184,17 @@ class StopLossTakeProfitConfigUpdate(BaseModel):
         ge=0.5,
         le=20.0,
         description="TP fixed percent (0.5-20)"
+    )
+
+
+class CooldownConfigUpdate(BaseModel):
+    """Request to update cooldown configuration."""
+
+    after_trade_seconds: Optional[int] = Field(
+        None,
+        ge=0,
+        le=86400,
+        description="Cooldown after closing a trade, in seconds (0-86400; 0 = no cooldown)",
     )
 
 

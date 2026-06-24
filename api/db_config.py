@@ -174,4 +174,9 @@ async def apply_db_config_to_settings(db_pool: asyncpg.Pool, settings_obj: "Sett
     if "fixed_percent" in tp_config:
         settings_obj.tp_fixed_percent = float(tp_config["fixed_percent"])
 
+    # Apply cooldown config
+    cooldown_config = config_dict.get("cooldown", {})
+    if "after_trade_seconds" in cooldown_config:
+        settings_obj.cooldown_after_trade_seconds = int(cooldown_config["after_trade_seconds"])
+
     logger.info("Applied persisted configuration from database")

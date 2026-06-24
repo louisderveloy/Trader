@@ -215,6 +215,16 @@
   so failures were undiagnosable from the logs.
 
 ### Strategy engine (live-loop, branch `feature/stop-loss`)
+- **Cooldown is now a dashboard-editable config (2026-06-24).** Was env-only-and-dead: `COOLDOWN_AFTER_TRADE_SECONDS`
+  was read solely by the unused `StrategyEngineConfig.from_env()`; the live bot reads `cooldown.after_trade_seconds`
+  from the DB `config` table (`from_db`). Removed the var from `.env.example` and wired cooldown end-to-end like the
+  other config sections: `CooldownConfigResponse`/`CooldownConfigUpdate` models, `GET /config` returns it,
+  new `PATCH /config/cooldown`, `apply_db_config_to_settings` applies it; dashboard `CooldownConfig` type + store
+  `updateCooldown` + a Cooldown section in ConfigurationView (seconds, 0-86400, step 60). Hot-reload is automatic —
+  writing to `config` fires the `config_updated` trigger → bot `_reload_config` → `from_db` → `engine.update_config`
+  refreshes `risk_manager.cooldown_config`. NOTE (pre-existing, untouched): `routes/config.py` still maps
+  `BinanceConfigResponse.order_timeout_seconds = settings.cooldown_after_trade_seconds` — cooldown edits now also move
+  that mislabeled field; real fix is a separate `binance_order_timeout_seconds` setting.
 - **"No position despite score over threshold" was the post-trade COOLDOWN, not a bug** (2026-06-24).
   Run 286 opened+closed a trade 16:40→16:43; `cooldown_after_trade_seconds=3600` blocks all entries for 1h
   (decision logged `skip — Entry blocked by risk management: In cooldown period (Xs remaining)`). The score

@@ -30,6 +30,10 @@ export interface StopLossTakeProfitConfig {
   tp_fixed_percent: number
 }
 
+export interface CooldownConfig {
+  after_trade_seconds: number
+}
+
 export interface BinanceConfig {
   symbol: string
   timeframe: string
@@ -49,6 +53,7 @@ export interface Config {
   strategy: StrategyConfig
   risk: RiskConfig
   stop_loss_take_profit: StopLossTakeProfitConfig
+  cooldown: CooldownConfig
   indicators: Record<string, IndicatorConfig>
 }
 
@@ -91,6 +96,16 @@ export async function updateStopLossTakeProfitConfig(
   config: Partial<StopLossTakeProfitConfig>
 ): Promise<StopLossTakeProfitConfig> {
   const response = await apiClient.patch<StopLossTakeProfitConfig>('/config/stop-loss-take-profit', config)
+  return response.data
+}
+
+/**
+ * Update cooldown configuration
+ */
+export async function updateCooldownConfig(
+  config: Partial<CooldownConfig>
+): Promise<CooldownConfig> {
+  const response = await apiClient.patch<CooldownConfig>('/config/cooldown', config)
   return response.data
 }
 

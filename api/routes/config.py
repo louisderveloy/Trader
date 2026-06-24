@@ -18,6 +18,8 @@ from ..db_config import update_config_in_db
 from ..limiter import limiter
 from ..models.config import (
     ConfigResponse,
+    CooldownConfigResponse,
+    CooldownConfigUpdate,
     IndicatorConfigResponse,
     RiskConfigResponse,
     RiskConfigUpdate,
@@ -152,6 +154,9 @@ async def get_config(
             tp_mode=settings.tp_mode,
             tp_atr_multiplier=settings.tp_atr_multiplier,
             tp_fixed_percent=settings.tp_fixed_percent,
+        ),
+        cooldown=CooldownConfigResponse(
+            after_trade_seconds=settings.cooldown_after_trade_seconds,
         ),
         indicators=indicators,
     )
@@ -351,6 +356,38 @@ async def update_stop_loss_take_profit_config(
         tp_mode=settings.tp_mode,
         tp_atr_multiplier=settings.tp_atr_multiplier,
         tp_fixed_percent=settings.tp_fixed_percent,
+    )
+
+
+@router.patch("/cooldown", response_model=CooldownConfigResponse)
+@limiter.limit(lambda: settings.rate_limit_api_write)
+async def update_cooldown_config(
+    request: Request,
+    update_data: CooldownConfigUpdate,
+    user: Principal = Depends(require_admin),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> CooldownConfigResponse:
+    """
+    Update post-trade cooldown configuration.
+
+    Requires authentication and CSRF token. Persisting to the ``config`` table fires
+    the ``config_updated`` trigger, so a running bot hot-reloads the new cooldown
+    (StrategyEngineConfig.from_db reads ``cooldown.after_trade_seconds``).
+    """
+    await validate_csrf_token(request)
+
+    updates = {}
+    if update_data.after_trade_seconds is not None:
+        settings.cooldown_after_trade_seconds = update_data.after_trade_seconds
+        updates["after_trade_seconds"] = update_data.after_trade_seconds
+
+    if updates:
+        await update_config_in_db(db_pool, "cooldown", updates)
+
+    logger.info("Updated cooldown configuration and persisted to database")
+
+    return CooldownConfigResponse(
+        after_trade_seconds=settings.cooldown_after_trade_seconds,
     )
 
 

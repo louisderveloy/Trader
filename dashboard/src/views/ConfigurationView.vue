@@ -204,6 +204,24 @@
           </div>
         </div>
 
+        <!-- Cooldown Configuration -->
+        <div class="bg-white rounded-lg shadow p-6">
+          <h2 class="text-xl font-bold text-gray-900 mb-4">Cooldown</h2>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <ConfigField
+                id="cooldown_after_trade_seconds"
+                label="Cooldown après trade (secondes)"
+                tooltip="Délai d'attente, en secondes, après la fermeture d'un trade avant que le bot puisse en ouvrir un nouveau. Empêche les ré-entrées trop rapides. Exemple : 3600 = 1 heure. 0 = aucun cooldown. Plage : 0 à 86400 (24h)."
+                :model-value="formData.cooldown.after_trade_seconds"
+                type="number"
+                :min="0"
+                :max="86400"
+                :step="60"
+                @update:model-value="updateCooldownField('after_trade_seconds', $event)"
+            />
+          </div>
+        </div>
+
         <!-- Action Buttons -->
         <div class="flex gap-4 justify-end">
           <button
@@ -273,6 +291,9 @@ const formData = ref({
     tp_mode: 'atr',
     tp_atr_multiplier: 3,
     tp_fixed_percent: 4
+  },
+  cooldown: {
+    after_trade_seconds: 3600
   }
 })
 
@@ -283,6 +304,7 @@ onMounted(async () => {
     formData.value.strategy = {...configStore.config.strategy}
     formData.value.risk = {...configStore.config.risk}
     formData.value.stopLossTakeProfit = {...configStore.config.stop_loss_take_profit}
+    formData.value.cooldown = {...configStore.config.cooldown}
   }
 })
 
@@ -308,11 +330,19 @@ function updateSLTPField(field: string, value: unknown) {
   }
 }
 
+function updateCooldownField(field: string, value: unknown) {
+  formData.value.cooldown = {
+    ...formData.value.cooldown,
+    [field]: value
+  }
+}
+
 function resetForm() {
   if (configStore.config) {
     formData.value.strategy = {...configStore.config.strategy}
     formData.value.risk = {...configStore.config.risk}
     formData.value.stopLossTakeProfit = {...configStore.config.stop_loss_take_profit}
+    formData.value.cooldown = {...configStore.config.cooldown}
   }
 }
 
@@ -331,6 +361,7 @@ async function saveConfiguration() {
     await configStore.updateStrategy(formData.value.strategy)
     await configStore.updateRisk(formData.value.risk)
     await configStore.updateStopLossTakeProfit(formData.value.stopLossTakeProfit)
+    await configStore.updateCooldown(formData.value.cooldown)
 
     // Show success toast
     toastStore.success('Configuration enregistrée avec succès')
