@@ -215,6 +215,48 @@
   so failures were undiagnosable from the logs.
 
 ### Strategy engine (live-loop, branch `feature/stop-loss`)
+- **"No position despite score over threshold" was the post-trade COOLDOWN, not a bug** (2026-06-24).
+  Run 286 opened+closed a trade 16:40→16:43; `cooldown_after_trade_seconds=3600` blocks all entries for 1h
+  (decision logged `skip — Entry blocked by risk management: In cooldown period (Xs remaining)`). The score
+  even confirmed (2/2) before the risk block. **Observability fix:** the per-iteration loop log in
+  `trading.py` now appends `Decision: <type> (<reason>)`. The reason was only persisted to
+  `signals.decision_reason`; the bot log format is `%(message)s` so the logger `extra` dict was dropped and
+  the loop looked idle for no visible reason (same papercut class as the OBV-warning extra-drop). To trade
+  sooner after a close: lower the cooldown and hot-reload.
+- **A degenerate (empty `{}` / all-zero) weights set silently zeroes the score** (2026-06-24, fixed).
+  Surfaced once hot-reload (below) made the engine actually load the active set on activation: the DB has
+  a set `7ea42411` ("test-new-backtest - 2026-06-19") with `weights = {}`, plus 37 prefixed-but-8-key
+  Optuna sets. For an empty/all-zero set `Σ|wᵢ| == 0` → `calculate_weighted_score` returns a flat 0 for
+  every candle → never crosses thresholds → no opens/closes. **Fix:** `load_active_weights` now raises
+  `ValueError` when `Σ|abs(w)| == 0` (empty or all-zero) — fail loud, matching the "no active set"
+  contract; on hot reload the decoupled try/except keeps the previous weights so the bot stays alive.
+  Reject-at-source too: both API activate routes, the CLI `activate_weights_set`, and the manual
+  `create_weights` route now refuse degenerate weights (409/422/ValueError). Regressions
+  `test_load_active_weights_rejects_empty` / `_rejects_all_zero`. Verified vs live DB: plain9/prefixed8/
+  prefixed9 → score 0.5; empty → rejected. (`_weights_are_usable` helper duplicated in the two API route
+  modules since api/ can't import bot/.)
+- **Activating a `weight_`-prefixed weights set silently halted all trading** (2026-06-24, fixed).
+  Symptom: paper run opens/closes normally, then after activating a different active weights-set it never
+  opens nor closes again. Root cause: `engine.load_active_weights` was the ONLY weights consumer that did
+  NOT strip the Optuna `weight_` prefix (`trading._load_weights`, `backtest`, `vectorbt_engine` all strip
+  it). Optuna sets saved before the 2026-06-20 runner fix store keys as `weight_ema` (verified: all
+  weights_sets rows from 06-04→06-11 are prefixed; only the post-06-20 active set is unprefixed). When a
+  prefixed set is loaded by the engine, every `indicator_signals.get("weight_ema")` misses → weighted
+  score ≡ 0 → never crosses entry/exit thresholds → permanent skip. **Fix:** strip `weight_` in
+  `load_active_weights` (mirrors the other consumers). Regression
+  `test_load_active_weights_strips_weight_prefix`.
+- **Weights activation now hot-reloads live (2026-06-24).** Was a second latent bug: the engine caches
+  `_active_weights` after one lazy load and the activate routes fired no NOTIFY (their "bot reads on
+  demand, no NOTIFY needed" comment was false), so activation only took effect on run (re)start. **Fix:**
+  both activate routes (`api/routes/weights.py` `/{id}/activate`, `api/routes/optimizations.py`
+  `/{run_id}/activate-weights`) AND the CLI path (`optimization/db.py:activate_weights_set`) now
+  `pg_notify('config_updated', …)` after commit (no migration — explicit NOTIFY, not a trigger).
+  `_reload_config` in `trading.py` now also calls `engine.load_active_weights()`; config reload and
+  weights reload are split into **independent** try/except blocks so a config-load failure (e.g. a config
+  row that fails validation) can't suppress the weights reload, and vice versa. The bot already LISTENs on
+  `config_updated`; reusing that channel means a config reload also refreshes weights. NOTIFY round-trip
+  verified end-to-end against live PG (payload `{source:weights_activation, weights_set_id}`, exactly one
+  active set after).
 - **Config hot-reload never reached the StrategyEngine → decisions used stale thresholds** (2026-06-17,
   fixed). Symptom: dashboard set entry threshold `0.09 → -0.5`; the loop logged the change and "✓
   Configuration reloaded", yet every decision stayed `skip` "score 0.0xx in neutral zone" with scores

@@ -515,14 +515,24 @@ async def activate_weights_set(
 
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            # Check if weights set exists
-            exists = await conn.fetchval(
-                "SELECT EXISTS(SELECT 1 FROM weights_sets WHERE id = $1)",
+            # Check if weights set exists and fetch its weights for validation.
+            existing = await conn.fetchrow(
+                "SELECT weights FROM weights_sets WHERE id = $1",
                 weights_set_id
             )
 
-            if not exists:
+            if existing is None:
                 raise ValueError(f"Weights set not found: {weights_set_id}")
+
+            # Refuse to activate a degenerate set (empty / all-zero): it would make
+            # the bot's weighted score a flat 0 and silently stop it trading.
+            raw = existing["weights"]
+            parsed = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            if not parsed or sum(abs(float(v)) for v in parsed.values()) == 0.0:
+                raise ValueError(
+                    f"Weights set {weights_set_id} has no usable weights "
+                    f"(empty or all zero); refusing to activate."
+                )
 
             # Deactivate all sets
             await conn.execute("UPDATE weights_sets SET is_active = false")
@@ -532,6 +542,15 @@ async def activate_weights_set(
                 "UPDATE weights_sets SET is_active = true WHERE id = $1",
                 weights_set_id
             )
+
+        # Notify any running bot to hot-reload its active weights (no restart needed).
+        # Fired after commit so the reload re-reads the committed is_active state; the
+        # bot LISTENs on config_updated and refreshes config + engine weights together.
+        # Mirrors the API activate routes.
+        await conn.execute(
+            "SELECT pg_notify('config_updated', $1)",
+            json.dumps({"source": "weights_activation", "weights_set_id": str(weights_set_id)}),
+        )
 
     logger.info(
         "Weights set activated successfully",

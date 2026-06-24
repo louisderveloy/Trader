@@ -258,6 +258,72 @@ async def test_load_active_weights_not_found(strategy_engine, mock_db_pool):
 
 
 @pytest.mark.asyncio
+async def test_load_active_weights_strips_weight_prefix(strategy_engine, mock_db_pool, weights_id):
+    """Optuna stores params as "weight_<ind>"; legacy weights_sets rows carry those
+    prefixed keys and stay activatable. The engine scores by plain indicator name,
+    so load_active_weights must strip the prefix — otherwise every signal lookup
+    misses, the weighted score is identically 0, and the live/paper loop never
+    crosses entry/exit thresholds (no positions ever open or close).
+
+    Regression: hot-activating a prefixed weights set silently halted all trading.
+    """
+    import json
+    mock_conn = AsyncMock()
+    mock_db_pool.acquire.return_value.__aenter__.return_value = mock_conn
+    mock_conn.fetchrow.return_value = {
+        "id": weights_id,
+        "name": "Legacy Optuna Weights",
+        "weights": json.dumps({
+            "weight_ema": 0.4, "weight_macd": 0.3, "weight_user_indicator": 0.3,
+        }),
+        "created_at": datetime.now(timezone.utc),
+    }
+
+    weights = await strategy_engine.load_active_weights()
+
+    # Keys must be unprefixed so they match indicator_signals ("ema", not "weight_ema").
+    assert set(weights.weights.keys()) == {"ema", "macd", "user_indicator"}
+    assert weights.weights["ema"] == 0.4
+
+    # And the score must be non-zero for non-zero signals (the actual symptom).
+    score = strategy_engine.calculate_weighted_score(
+        {"ema": 1.0, "macd": 1.0, "user_indicator": 1.0}
+    )
+    assert score != 0.0
+
+
+@pytest.mark.asyncio
+async def test_load_active_weights_rejects_empty(strategy_engine, mock_db_pool, weights_id):
+    """An empty {} weights set must be rejected, not loaded.
+
+    Σ|wᵢ| == 0 makes calculate_weighted_score return a flat 0 for every candle, so
+    the loop never crosses entry/exit thresholds and silently stops trading.
+    Regression: hot-activating an empty set zeroed the score (no opens/closes).
+    """
+    mock_conn = AsyncMock()
+    mock_db_pool.acquire.return_value.__aenter__.return_value = mock_conn
+    mock_conn.fetchrow.return_value = {
+        "id": weights_id, "name": "Empty Set",
+        "weights": {}, "created_at": datetime.now(timezone.utc),
+    }
+    with pytest.raises(ValueError, match="no usable"):
+        await strategy_engine.load_active_weights()
+
+
+@pytest.mark.asyncio
+async def test_load_active_weights_rejects_all_zero(strategy_engine, mock_db_pool, weights_id):
+    """An all-zero weights set is as degenerate as an empty one (Σ|wᵢ| == 0)."""
+    mock_conn = AsyncMock()
+    mock_db_pool.acquire.return_value.__aenter__.return_value = mock_conn
+    mock_conn.fetchrow.return_value = {
+        "id": weights_id, "name": "Zero Set",
+        "weights": {"ema": 0.0, "macd": 0.0}, "created_at": datetime.now(timezone.utc),
+    }
+    with pytest.raises(ValueError, match="no usable"):
+        await strategy_engine.load_active_weights()
+
+
+@pytest.mark.asyncio
 async def test_load_active_weights_decodes_str_jsonb(strategy_engine, mock_db_pool, weights_id):
     """asyncpg returns JSONB as a str when no codec is set (the bot's pool has none).
 

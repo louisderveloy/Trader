@@ -42,6 +42,20 @@ def _row_to_weights(row: asyncpg.Record) -> WeightsResponse:
     return WeightsResponse(**data)
 
 
+def _weights_are_usable(raw: object) -> bool:
+    """True if the weights dict has at least one non-zero weight.
+
+    An empty {} or all-zero set makes the bot's weighted score a flat 0 for every
+    candle (Σ|wᵢ| == 0), which silently halts trading. Such a set must never be
+    created or activated. Prefix ("weight_") is irrelevant to this check.
+    """
+    weights = json.loads(raw) if isinstance(raw, str) else (raw or {})
+    try:
+        return bool(weights) and sum(abs(float(v)) for v in weights.values()) != 0.0
+    except (TypeError, ValueError):
+        return False
+
+
 @router.get("", response_model=WeightsListResponse)
 async def list_weights(
     limit: Annotated[int, Query(ge=1, le=1000, description="Maximum results")] = 100,
@@ -90,6 +104,12 @@ async def create_weights(
     Create a new (manual) weights set. Requires authentication and a CSRF token.
     """
     await validate_csrf_token(http_request)
+    if not _weights_are_usable(request.weights):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Weights must contain at least one non-zero value "
+                   "(an empty or all-zero set would halt trading).",
+        )
     query = (
         "INSERT INTO weights_sets (name, source, weights, is_active) "
         "VALUES ($1, 'manual', $2, false) "
@@ -124,14 +144,27 @@ async def activate_weights(
     Activate a weights set (deactivates the current one, activates this one).
 
     Requires authentication and a CSRF token. Mirrors the CLI ``optimize activate``
-    command; the bot reads the active set from the DB on demand (no NOTIFY needed).
+    command. After committing, fires a ``config_updated`` NOTIFY so any running bot
+    hot-reloads the new active set live (the engine caches its weights, so without
+    this the change would only take effect on the next run start).
     """
     await validate_csrf_token(http_request)
     async with db_pool.acquire() as conn:
-        if not await conn.fetchval("SELECT 1 FROM weights_sets WHERE id = $1", weights_id):
+        existing = await conn.fetchrow(
+            "SELECT weights FROM weights_sets WHERE id = $1", weights_id
+        )
+        if existing is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Weights set {weights_id} not found",
+            )
+        # Refuse to activate a degenerate set (empty / all-zero) — it would make the
+        # bot's weighted score a flat 0 and silently stop it trading.
+        if not _weights_are_usable(existing["weights"]):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot activate a weights set with no usable weights "
+                       "(empty or all zero).",
             )
 
         async with conn.transaction():
@@ -139,6 +172,13 @@ async def activate_weights(
             await conn.execute(
                 "UPDATE weights_sets SET is_active = true WHERE id = $1", weights_id
             )
+        # Fired after commit so the bot's reload re-reads the committed is_active state.
+        # The bot listens on config_updated and, on reload, refreshes both config and
+        # the engine's active weights.
+        await conn.execute(
+            "SELECT pg_notify('config_updated', $1)",
+            json.dumps({"source": "weights_activation", "weights_set_id": str(weights_id)}),
+        )
         row = await conn.fetchrow(_WEIGHTS_SELECT + " WHERE id = $1", weights_id)
 
     logger.info(f"Activated weights set: {weights_id}")

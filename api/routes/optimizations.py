@@ -35,6 +35,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _weights_are_usable(raw: object) -> bool:
+    """True if the weights dict has at least one non-zero weight.
+
+    An empty {} or all-zero set makes the bot's weighted score a flat 0 for every
+    candle (Σ|wᵢ| == 0), which silently halts trading. Such a set must never be
+    activated. Prefix ("weight_") is irrelevant to this check.
+    """
+    weights = json.loads(raw) if isinstance(raw, str) else (raw or {})
+    try:
+        return bool(weights) and sum(abs(float(v)) for v in weights.values()) != 0.0
+    except (TypeError, ValueError):
+        return False
+
+
 # Columns selected for an optimization (runs row left-joined onto its study).
 _OPTIMIZATION_SELECT = """
     SELECT
@@ -317,9 +331,11 @@ async def activate_optimization_weights(
     Activate the weights set produced by this optimization run.
 
     Admin only, CSRF-protected. Mirrors the CLI ``optimize activate`` command:
-    deactivates every other set and activates this run's set (the bot reads the
-    active set from the DB on demand, so no NOTIFY is needed). Returns the refreshed
-    optimization so the dashboard can update the card in place.
+    deactivates every other set and activates this run's set. After committing, fires
+    a ``config_updated`` NOTIFY so any running bot hot-reloads the new active set live
+    (the engine caches its weights, so otherwise the change would only apply on the
+    next run start). Returns the refreshed optimization so the dashboard can update
+    the card in place.
     """
     await validate_csrf_token(request)
 
@@ -353,11 +369,30 @@ async def activate_optimization_weights(
                 detail="This optimization has not produced a weights set yet",
             )
 
+        # Refuse to activate a degenerate set (empty / all-zero): it would make the
+        # bot's weighted score a flat 0 and silently stop it trading.
+        raw_weights = await conn.fetchval(
+            "SELECT weights FROM weights_sets WHERE id = $1", weights_set_id
+        )
+        if not _weights_are_usable(raw_weights):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot activate a weights set with no usable weights "
+                       "(empty or all zero).",
+            )
+
         async with conn.transaction():
             await conn.execute("UPDATE weights_sets SET is_active = false WHERE is_active = true")
             await conn.execute(
                 "UPDATE weights_sets SET is_active = true WHERE id = $1", weights_set_id
             )
+        # Fired after commit so the bot's reload re-reads the committed is_active state.
+        # The bot listens on config_updated and, on reload, refreshes both config and
+        # the engine's active weights.
+        await conn.execute(
+            "SELECT pg_notify('config_updated', $1)",
+            json.dumps({"source": "weights_activation", "weights_set_id": str(weights_set_id)}),
+        )
 
         row = await conn.fetchrow(_OPTIMIZATION_SELECT + " AND r.id = $1", run_id)
 
