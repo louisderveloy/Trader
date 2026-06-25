@@ -2,7 +2,7 @@
 Position sizing calculations.
 
 This module implements three position sizing modes:
-1. Fixed: Constant USDT amount per trade
+1. Fixed: A fixed percentage of total capital per trade
 2. Confidence: Size proportional to weighted score
 3. Risk-based ATR: Size based on ATR and % capital to risk
 """
@@ -64,7 +64,7 @@ def calculate_position_size(
         raise ValueError(f"total_capital must be > 0, got {total_capital}")
 
     if mode == PositionSizeMode.FIXED:
-        size = _calculate_fixed_size(config)
+        size = _calculate_fixed_size(config, total_capital)
     elif mode == PositionSizeMode.CONFIDENCE:
         size = _calculate_confidence_size(config, weighted_score, total_capital)
     elif mode == PositionSizeMode.RISK_ATR:
@@ -92,17 +92,22 @@ def calculate_position_size(
     return size
 
 
-def _calculate_fixed_size(config: RiskConfig) -> Decimal:
+def _calculate_fixed_size(config: RiskConfig, total_capital: Decimal) -> Decimal:
     """
-    Calculate fixed position size.
+    Calculate fixed position size as a percentage of total capital.
+
+    The position uses a constant share of capital each trade (e.g. 10% of a
+    10,000 USDT balance → 1,000 USDT), so the absolute amount scales with the
+    account instead of being a hard-coded USDT figure.
 
     Args:
         config: Risk configuration
+        total_capital: Total available capital in USDT
 
     Returns:
-        Fixed size in USDT from config
+        Position size in USDT = total_capital × (fixed_size_percent / 100)
     """
-    return Decimal(str(config.fixed_size_usdt))
+    return total_capital * Decimal(str(config.fixed_size_percent / 100.0))
 
 
 def _calculate_confidence_size(

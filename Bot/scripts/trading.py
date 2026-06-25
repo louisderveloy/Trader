@@ -166,6 +166,10 @@ class TradingBot:
         logger.info("=" * 80)
 
         try:
+            # Fail fast on missing Binance credentials BEFORE taking the instance
+            # lock or creating any run record (security review #20).
+            self._validate_credentials()
+
             # Initialize components
             await self._init_database()
 
@@ -342,14 +346,27 @@ class TradingBot:
             logger.error("Please create a configuration first using: python -m main config create")
             raise
 
-    async def _init_exchange(self):
-        """Initialize exchange connection."""
+    def _validate_credentials(self) -> tuple[str, str]:
+        """Return the selected Binance API key/secret, raising if either is missing.
+
+        Called BEFORE acquiring the instance lock / creating a run record
+        (security review #20) so a missing credential fails fast with a clear
+        message instead of taking the lock, leaving a half-created run, and
+        surfacing later as an obscure SDK error on ``None`` credentials.
+        """
         env_prefix = "BINANCE_TESTNET" if self.testnet else "BINANCE_MAINNET"
         api_key = os.getenv(f"{env_prefix}_API_KEY")
         api_secret = os.getenv(f"{env_prefix}_API_SECRET")
-
         if not api_key or not api_secret:
-            raise ValueError(f"Missing {env_prefix}_API_KEY and/or {env_prefix}_API_SECRET")
+            raise ValueError(
+                f"Missing {env_prefix}_API_KEY and/or {env_prefix}_API_SECRET — "
+                "set them before starting live/paper trading."
+            )
+        return api_key, api_secret
+
+    async def _init_exchange(self):
+        """Initialize exchange connection."""
+        api_key, api_secret = self._validate_credentials()
 
         self.exchange = BinanceExchange(
             api_key=api_key,
@@ -685,7 +702,12 @@ class TradingBot:
             f"Price: {current_price:.2f} | Score: {weighted_score:.3f} | "
             f"Position: {'LONG' if self.position else 'NONE'} | "
             f"Pending: {bool(self.pending_order)} | "
-            f"{balance_str}"
+            f"{balance_str} | "
+            # The decision reason (e.g. "Entry blocked by risk management: In cooldown
+            # period (Xs remaining)") is otherwise only persisted to signals.decision_reason
+            # — the bot log format is %(message)s and drops the logger `extra` dict, so
+            # without this the loop looks idle for no visible reason.
+            f"Decision: {decision.decision_type.value} ({decision.decision_reason})"
         )
 
         # In position: SL/TP take precedence over signal exits.
@@ -1789,7 +1811,16 @@ class TradingBot:
             logger.error(f"Error handling config notification: {e}", exc_info=True)
 
     async def _reload_config(self):
-        """Reload configuration from database (hot reload)."""
+        """Reload configuration and active weights from the database (hot reload).
+
+        The two reloads are intentionally INDEPENDENT. ``config_updated`` is fired
+        both on config changes and on weights-set activation, and either source may
+        be the only thing that changed. A failure to load the config (e.g. a config
+        row that fails validation) must not suppress the weights reload, and vice
+        versa — otherwise activating weights right after a bad config save would
+        silently fail to take effect.
+        """
+        # --- Config reload ---
         try:
             logger.info("Reloading configuration from database...")
 
@@ -1830,23 +1861,25 @@ class TradingBot:
             if self.engine is not None:
                 self.engine.update_config(new_config, new_config_id)
 
-            # Reload weights (they might have changed too)
-            await self._load_weights()
-
             logger.info("✓ Configuration reloaded successfully")
-
-            # Send Discord notification about config reload
-            if self.discord_notifier:
-                try:
-                    # Note: This is a custom notification, we may need to add a method for it
-                    # For now, we'll just log it
-                    pass
-                except Exception as e:
-                    logger.error(f"Failed to send config reload notification: {e}")
-
         except Exception as e:
             logger.error(f"Failed to reload configuration: {e}", exc_info=True)
             logger.warning("Bot will continue using previous configuration")
+
+        # --- Active weights reload (independent of the config reload above) ---
+        # The engine caches _active_weights from its first decision and never
+        # re-reads on its own, so a weights-set activation (which fires
+        # config_updated) reaches the live decision path ONLY here. Kept in its own
+        # try/except so a config-load failure above cannot suppress it.
+        try:
+            if self.engine is not None:
+                await self.engine.load_active_weights()
+            # Bot-level copy (used for run-record snapshots / logging, not scoring).
+            await self._load_weights()
+            logger.info("✓ Active weights reloaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to reload active weights: {e}", exc_info=True)
+            logger.warning("Bot will continue using previous weights")
 
     async def _stop_config_listener(self):
         """Stop the config update listener."""

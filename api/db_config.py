@@ -149,8 +149,8 @@ async def apply_db_config_to_settings(db_pool: asyncpg.Pool, settings_obj: "Sett
         settings_obj.risk_max_exposure_percent = float(risk_config["max_exposure_percent"])
     if "position_size_mode" in risk_config:
         settings_obj.risk_position_size_mode = str(risk_config["position_size_mode"])
-    if "fixed_size_usdt" in risk_config:
-        settings_obj.risk_fixed_size_usdt = float(risk_config["fixed_size_usdt"])
+    if "fixed_size_percent" in risk_config:
+        settings_obj.risk_fixed_size_percent = float(risk_config["fixed_size_percent"])
     if "atr_multiplier" in risk_config:
         settings_obj.risk_atr_multiplier = float(risk_config["atr_multiplier"])
     if "capital_risk_percent" in risk_config:
@@ -173,5 +173,10 @@ async def apply_db_config_to_settings(db_pool: asyncpg.Pool, settings_obj: "Sett
         settings_obj.tp_atr_multiplier = float(tp_config["atr_multiplier"])
     if "fixed_percent" in tp_config:
         settings_obj.tp_fixed_percent = float(tp_config["fixed_percent"])
+
+    # Apply cooldown config
+    cooldown_config = config_dict.get("cooldown", {})
+    if "after_trade_seconds" in cooldown_config:
+        settings_obj.cooldown_after_trade_seconds = int(cooldown_config["after_trade_seconds"])
 
     logger.info("Applied persisted configuration from database")

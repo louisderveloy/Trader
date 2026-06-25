@@ -59,6 +59,12 @@
   `runs LEFT JOIN optuna_studies` so running/failed studies are visible.
 
 ### Trading safety & correctness
+- **Fixed sizing is % of capital, not absolute USDT (2026-06-24).** Renamed `fixed_size_usdt` →
+  `fixed_size_percent` end-to-end (bot `RiskConfig`+`sizing._calculate_fixed_size` now returns
+  `total_capital × pct/100`, API settings `risk_fixed_size_percent`, env `RISK_FIXED_SIZE_PERCENT`,
+  Pydantic + dataclass validation `0 < pct ≤ 100`, snapshot key, TS `RiskConfig`, ConfigurationView field,
+  docs). Default 10.0. Breaking change to config snapshot format — acceptable pre-paper (no persisted runs
+  to migrate); old DB rows without the key fall back to default. 70 strategy tests pass.
 - **Single-instance enforcement** via PG advisory locks (`bot/utils/instance_lock.py`): paper=1827364950,
   live=1923847563 (testnet+mainnet share the live lock). Crash-safe (released on connection close).
 - **Hot config reload** via LISTEN/NOTIFY (migration 008 `notify_config_updated`): all running instances
@@ -209,6 +215,58 @@
   so failures were undiagnosable from the logs.
 
 ### Strategy engine (live-loop, branch `feature/stop-loss`)
+- **Cooldown is now a dashboard-editable config (2026-06-24).** Was env-only-and-dead: `COOLDOWN_AFTER_TRADE_SECONDS`
+  was read solely by the unused `StrategyEngineConfig.from_env()`; the live bot reads `cooldown.after_trade_seconds`
+  from the DB `config` table (`from_db`). Removed the var from `.env.example` and wired cooldown end-to-end like the
+  other config sections: `CooldownConfigResponse`/`CooldownConfigUpdate` models, `GET /config` returns it,
+  new `PATCH /config/cooldown`, `apply_db_config_to_settings` applies it; dashboard `CooldownConfig` type + store
+  `updateCooldown` + a Cooldown section in ConfigurationView (seconds, 0-86400, step 60). Hot-reload is automatic —
+  writing to `config` fires the `config_updated` trigger → bot `_reload_config` → `from_db` → `engine.update_config`
+  refreshes `risk_manager.cooldown_config`. NOTE (pre-existing, untouched): `routes/config.py` still maps
+  `BinanceConfigResponse.order_timeout_seconds = settings.cooldown_after_trade_seconds` — cooldown edits now also move
+  that mislabeled field; real fix is a separate `binance_order_timeout_seconds` setting.
+- **"No position despite score over threshold" was the post-trade COOLDOWN, not a bug** (2026-06-24).
+  Run 286 opened+closed a trade 16:40→16:43; `cooldown_after_trade_seconds=3600` blocks all entries for 1h
+  (decision logged `skip — Entry blocked by risk management: In cooldown period (Xs remaining)`). The score
+  even confirmed (2/2) before the risk block. **Observability fix:** the per-iteration loop log in
+  `trading.py` now appends `Decision: <type> (<reason>)`. The reason was only persisted to
+  `signals.decision_reason`; the bot log format is `%(message)s` so the logger `extra` dict was dropped and
+  the loop looked idle for no visible reason (same papercut class as the OBV-warning extra-drop). To trade
+  sooner after a close: lower the cooldown and hot-reload.
+- **A degenerate (empty `{}` / all-zero) weights set silently zeroes the score** (2026-06-24, fixed).
+  Surfaced once hot-reload (below) made the engine actually load the active set on activation: the DB has
+  a set `7ea42411` ("test-new-backtest - 2026-06-19") with `weights = {}`, plus 37 prefixed-but-8-key
+  Optuna sets. For an empty/all-zero set `Σ|wᵢ| == 0` → `calculate_weighted_score` returns a flat 0 for
+  every candle → never crosses thresholds → no opens/closes. **Fix:** `load_active_weights` now raises
+  `ValueError` when `Σ|abs(w)| == 0` (empty or all-zero) — fail loud, matching the "no active set"
+  contract; on hot reload the decoupled try/except keeps the previous weights so the bot stays alive.
+  Reject-at-source too: both API activate routes, the CLI `activate_weights_set`, and the manual
+  `create_weights` route now refuse degenerate weights (409/422/ValueError). Regressions
+  `test_load_active_weights_rejects_empty` / `_rejects_all_zero`. Verified vs live DB: plain9/prefixed8/
+  prefixed9 → score 0.5; empty → rejected. (`_weights_are_usable` helper duplicated in the two API route
+  modules since api/ can't import bot/.)
+- **Activating a `weight_`-prefixed weights set silently halted all trading** (2026-06-24, fixed).
+  Symptom: paper run opens/closes normally, then after activating a different active weights-set it never
+  opens nor closes again. Root cause: `engine.load_active_weights` was the ONLY weights consumer that did
+  NOT strip the Optuna `weight_` prefix (`trading._load_weights`, `backtest`, `vectorbt_engine` all strip
+  it). Optuna sets saved before the 2026-06-20 runner fix store keys as `weight_ema` (verified: all
+  weights_sets rows from 06-04→06-11 are prefixed; only the post-06-20 active set is unprefixed). When a
+  prefixed set is loaded by the engine, every `indicator_signals.get("weight_ema")` misses → weighted
+  score ≡ 0 → never crosses entry/exit thresholds → permanent skip. **Fix:** strip `weight_` in
+  `load_active_weights` (mirrors the other consumers). Regression
+  `test_load_active_weights_strips_weight_prefix`.
+- **Weights activation now hot-reloads live (2026-06-24).** Was a second latent bug: the engine caches
+  `_active_weights` after one lazy load and the activate routes fired no NOTIFY (their "bot reads on
+  demand, no NOTIFY needed" comment was false), so activation only took effect on run (re)start. **Fix:**
+  both activate routes (`api/routes/weights.py` `/{id}/activate`, `api/routes/optimizations.py`
+  `/{run_id}/activate-weights`) AND the CLI path (`optimization/db.py:activate_weights_set`) now
+  `pg_notify('config_updated', …)` after commit (no migration — explicit NOTIFY, not a trigger).
+  `_reload_config` in `trading.py` now also calls `engine.load_active_weights()`; config reload and
+  weights reload are split into **independent** try/except blocks so a config-load failure (e.g. a config
+  row that fails validation) can't suppress the weights reload, and vice versa. The bot already LISTENs on
+  `config_updated`; reusing that channel means a config reload also refreshes weights. NOTIFY round-trip
+  verified end-to-end against live PG (payload `{source:weights_activation, weights_set_id}`, exactly one
+  active set after).
 - **Config hot-reload never reached the StrategyEngine → decisions used stale thresholds** (2026-06-17,
   fixed). Symptom: dashboard set entry threshold `0.09 → -0.5`; the loop logged the change and "✓
   Configuration reloaded", yet every decision stayed `skip` "score 0.0xx in neutral zone" with scores
@@ -352,3 +410,32 @@ real config (currently defaults) — folded into #26.
 
 **Test env:** run in bot container. Bash path-mangles `/app`; prefix `MSYS_NO_PATHCONV=1` and use
 `docker compose run --rm --entrypoint python bot -m pytest /tests/...`. pytest addopts forces `--cov=bot`.
+
+---
+
+## [PROGRESS] Security-review implementation (branch `feature/security-review`, started 2026-06-20)
+
+Implementing `.agent/security-review.md` findings **one by one**, asking skip/implement per finding,
+plan→advisor→implement→**commit between each**. Commits use `--no-gpg-sign` (1Password agent fails;
+user-authorised — see [[commit-no-gpg-sign]]).
+
+**Done (committed) — all numbered findings + CI processed:** #1 PyJWT (CVE-2022-29217) · #3 study_name
+allowlist (regex forbids leading dash; API+supervisor) · #6 already-done by AO-7 (prod cookies Strict) ·
+#7 non-root containers (bot=gosu self-heal, api/dashboard=USER; nginx-unprivileged :8080) · #9 timescaledb
+pinned by digest · #10 uvicorn `--reload` opt-in (single worker — in-mem slowapi) · #11 user-indicator
+symbol allowlist + latent BTCUSDT→BTCUSDC fix · #12 JWT TTL 1440→120min (TTL-only; refresh/revocation
+deferred) · #13 Discord webhook redaction · #14 lastRoute guard + README · #15 rate-limit real client IP
+(rightmost XFF, Context7-verified) · #17 expired-vs-forged token logging · #19 POSTGRES_PASSWORD required
+(no default) · #20 Binance creds validated pre-lock · #21 deps pinned by lock files (prod closures) · #22
+HSTS via X-Forwarded-Proto (not $scheme) · #23 optuna-dashboard removed · CI pip-audit + npm audit gates
+(fixed form-data HIGH 4.0.5→4.0.6).
+**Skipped by user:** #2 (DB bind), #4 (admin creds), #5 (CSRF secret), #8 (docker-socket-proxy), #16 (CSP unsafe-inline), #18 (dev bind-mount doc).
+**Remaining (Authelia section, not yet addressed):** AO-11 (prod TTL 240 — now superseded by #12's
+global 120), AO-RISK (verify auth_time refresh on deployed Authelia — needs deployment), AO-FOLLOWUP
+(migrate authlib.jose→joserfc). All numbered findings #1-#23 done/skipped.
+**Lock regen (important):** prod images install FROM the lock, so regenerate locks via a clean resolver
+image off requirements.txt (NOT by freezing the prod image — circular). Commands in each lock header.
+
+**Env gotchas this session:** Docker G: host-mount is broken (build images + `docker cp` to test, see
+[[docker-g-mount-broken]]); bot dir tracked as `Bot/` capital-B — stage with exact case ([[bot-dir-case]]).
+API tests: build `trader-api-test`, `docker run -u root -e ENVIRONMENT=dev ... pytest api/tests`.

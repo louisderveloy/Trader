@@ -79,21 +79,21 @@
             <ConfigField
                 id="position_size_mode"
                 label="Mode de dimensionnement"
-                tooltip="Fixe : la taille est identique à chaque transaction. Confiance : la taille est proportionnelle à la force du signal calculé. Indicateur de volatilité (moyenne de l'amplitude de prix sur plusieurs bougies) : la taille est calculée à partir du niveau de volatilité récent du marché et du pourcentage de capital que vous acceptez de risquer."
+                tooltip="Fixe : un pourcentage fixe du capital total à chaque transaction. Confiance : la taille est proportionnelle à la force du signal calculé. Indicateur de volatilité (moyenne de l'amplitude de prix sur plusieurs bougies) : la taille est calculée à partir du niveau de volatilité récent du marché et du pourcentage de capital que vous acceptez de risquer."
                 :model-value="formData.risk.position_size_mode"
                 :options="positionSizeModeOptions"
                 @update:model-value="updateRiskField('position_size_mode', $event)"
             />
             <ConfigField
-                id="fixed_size_usdt"
-                label="Taille fixe (USDT)"
-                tooltip="Montant en USDT investi à chaque transaction lorsque le mode de dimensionnement Fixe est sélectionné. Ce paramètre est ignoré dans les modes Confiance ou Indicateur de volatilité."
-                :model-value="formData.risk.fixed_size_usdt"
+                id="fixed_size_percent"
+                label="Taille fixe (% du capital)"
+                tooltip="Pourcentage du capital total investi à chaque transaction lorsque le mode de dimensionnement Fixe est sélectionné. Par exemple, 10% signifie que chaque position utilise 10% du solde disponible. Ce paramètre est ignoré dans les modes Confiance ou Indicateur de volatilité."
+                :model-value="formData.risk.fixed_size_percent"
                 type="number"
-                :min="10"
-                :max="10000"
-                :step="10"
-                @update:model-value="updateRiskField('fixed_size_usdt', $event)"
+                :min="1"
+                :max="100"
+                :step="1"
+                @update:model-value="updateRiskField('fixed_size_percent', $event)"
             />
             <ConfigField
                 id="atr_multiplier"
@@ -204,6 +204,24 @@
           </div>
         </div>
 
+        <!-- Cooldown Configuration -->
+        <div class="bg-white rounded-lg shadow p-6">
+          <h2 class="text-xl font-bold text-gray-900 mb-4">Cooldown</h2>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <ConfigField
+                id="cooldown_after_trade_seconds"
+                label="Cooldown après trade (secondes)"
+                tooltip="Délai d'attente, en secondes, après la fermeture d'un trade avant que le bot puisse en ouvrir un nouveau. Empêche les ré-entrées trop rapides. Exemple : 3600 = 1 heure. 0 = aucun cooldown. Plage : 0 à 86400 (24h)."
+                :model-value="formData.cooldown.after_trade_seconds"
+                type="number"
+                :min="0"
+                :max="86400"
+                :step="60"
+                @update:model-value="updateCooldownField('after_trade_seconds', $event)"
+            />
+          </div>
+        </div>
+
         <!-- Action Buttons -->
         <div class="flex gap-4 justify-end">
           <button
@@ -262,7 +280,7 @@ const formData = ref({
     max_trades_per_day: 5,
     max_exposure_percent: 30,
     position_size_mode: 'confidence',
-    fixed_size_usdt: 100,
+    fixed_size_percent: 10,
     atr_multiplier: 2,
     capital_risk_percent: 1
   },
@@ -273,6 +291,9 @@ const formData = ref({
     tp_mode: 'atr',
     tp_atr_multiplier: 3,
     tp_fixed_percent: 4
+  },
+  cooldown: {
+    after_trade_seconds: 3600
   }
 })
 
@@ -283,6 +304,7 @@ onMounted(async () => {
     formData.value.strategy = {...configStore.config.strategy}
     formData.value.risk = {...configStore.config.risk}
     formData.value.stopLossTakeProfit = {...configStore.config.stop_loss_take_profit}
+    formData.value.cooldown = {...configStore.config.cooldown}
   }
 })
 
@@ -308,11 +330,19 @@ function updateSLTPField(field: string, value: unknown) {
   }
 }
 
+function updateCooldownField(field: string, value: unknown) {
+  formData.value.cooldown = {
+    ...formData.value.cooldown,
+    [field]: value
+  }
+}
+
 function resetForm() {
   if (configStore.config) {
     formData.value.strategy = {...configStore.config.strategy}
     formData.value.risk = {...configStore.config.risk}
     formData.value.stopLossTakeProfit = {...configStore.config.stop_loss_take_profit}
+    formData.value.cooldown = {...configStore.config.cooldown}
   }
 }
 
@@ -331,6 +361,7 @@ async function saveConfiguration() {
     await configStore.updateStrategy(formData.value.strategy)
     await configStore.updateRisk(formData.value.risk)
     await configStore.updateStopLossTakeProfit(formData.value.stopLossTakeProfit)
+    await configStore.updateCooldown(formData.value.cooldown)
 
     // Show success toast
     toastStore.success('Configuration enregistrée avec succès')

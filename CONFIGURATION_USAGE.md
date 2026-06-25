@@ -33,7 +33,7 @@ The configuration JSON contains 5 main categories:
 - `max_trades_per_day` (int, ≥1): Maximum number of trades allowed per day
 - `max_exposure_percent` (float, 0-100): Maximum % of capital exposed simultaneously
 - `position_size_mode` (string): "fixed", "confidence", or "risk_atr"
-- `fixed_size_usdt` (float, >0): Fixed position size in USDT (if mode=fixed)
+- `fixed_size_percent` (float, 0-100): Fixed position size as % of total capital (if mode=fixed)
 - `atr_multiplier` (float, >0): ATR multiplier for sizing (if mode=risk_atr)
 - `capital_risk_percent` (float, 0-100): % capital to risk per trade (if mode=risk_atr)
 
@@ -322,7 +322,7 @@ exit_threshold = config.strategy.exit_threshold
     "max_trades_per_day": 5,
     "max_exposure_percent": 30.0,
     "position_size_mode": "confidence",
-    "fixed_size_usdt": 100.0,
+    "fixed_size_percent": 10.0,
     "atr_multiplier": 2.0,
     "capital_risk_percent": 1.0
   },

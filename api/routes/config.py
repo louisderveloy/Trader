@@ -18,6 +18,8 @@ from ..db_config import update_config_in_db
 from ..limiter import limiter
 from ..models.config import (
     ConfigResponse,
+    CooldownConfigResponse,
+    CooldownConfigUpdate,
     IndicatorConfigResponse,
     RiskConfigResponse,
     RiskConfigUpdate,
@@ -33,6 +35,25 @@ from ..models.config import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def valid_symbol(
+    symbol: Annotated[str, Query(description="Trading symbol")] = settings.binance_default_symbol,
+) -> str:
+    """Validate the ``symbol`` query param against the configured allowlist.
+
+    Mirrors the run-control models (security review #11): normalise to upper-case
+    and reject anything not in ``AVAILABLE_SYMBOLS`` so the ``user_indicator``
+    table can't be polluted with fictitious symbols. The default is the
+    configured trading symbol (USDC only), which is always in the allowlist.
+    """
+    normalized = symbol.strip().upper()
+    if normalized not in settings.available_symbols_list:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"symbol must be one of {settings.available_symbols_list}",
+        )
+    return normalized
 
 
 @router.get("", response_model=ConfigResponse)
@@ -122,7 +143,7 @@ async def get_config(
             max_trades_per_day=settings.risk_max_trades_per_day,
             max_exposure_percent=settings.risk_max_exposure_percent,
             position_size_mode=settings.risk_position_size_mode,
-            fixed_size_usdt=float(settings.risk_fixed_size_usdt),
+            fixed_size_percent=float(settings.risk_fixed_size_percent),
             atr_multiplier=settings.risk_atr_multiplier,
             capital_risk_percent=settings.risk_capital_risk_percent,
         ),
@@ -133,6 +154,9 @@ async def get_config(
             tp_mode=settings.tp_mode,
             tp_atr_multiplier=settings.tp_atr_multiplier,
             tp_fixed_percent=settings.tp_fixed_percent,
+        ),
+        cooldown=CooldownConfigResponse(
+            after_trade_seconds=settings.cooldown_after_trade_seconds,
         ),
         indicators=indicators,
     )
@@ -236,9 +260,9 @@ async def update_risk_config(
         settings.risk_position_size_mode = update_data.position_size_mode.value
         updates["position_size_mode"] = update_data.position_size_mode.value
 
-    if update_data.fixed_size_usdt is not None:
-        settings.risk_fixed_size_usdt = update_data.fixed_size_usdt
-        updates["fixed_size_usdt"] = update_data.fixed_size_usdt
+    if update_data.fixed_size_percent is not None:
+        settings.risk_fixed_size_percent = update_data.fixed_size_percent
+        updates["fixed_size_percent"] = update_data.fixed_size_percent
 
     if update_data.atr_multiplier is not None:
         settings.risk_atr_multiplier = update_data.atr_multiplier
@@ -258,7 +282,7 @@ async def update_risk_config(
         max_trades_per_day=settings.risk_max_trades_per_day,
         max_exposure_percent=settings.risk_max_exposure_percent,
         position_size_mode=settings.risk_position_size_mode,
-        fixed_size_usdt=float(settings.risk_fixed_size_usdt),
+        fixed_size_percent=float(settings.risk_fixed_size_percent),
         atr_multiplier=settings.risk_atr_multiplier,
         capital_risk_percent=settings.risk_capital_risk_percent,
     )
@@ -335,11 +359,43 @@ async def update_stop_loss_take_profit_config(
     )
 
 
+@router.patch("/cooldown", response_model=CooldownConfigResponse)
+@limiter.limit(lambda: settings.rate_limit_api_write)
+async def update_cooldown_config(
+    request: Request,
+    update_data: CooldownConfigUpdate,
+    user: Principal = Depends(require_admin),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> CooldownConfigResponse:
+    """
+    Update post-trade cooldown configuration.
+
+    Requires authentication and CSRF token. Persisting to the ``config`` table fires
+    the ``config_updated`` trigger, so a running bot hot-reloads the new cooldown
+    (StrategyEngineConfig.from_db reads ``cooldown.after_trade_seconds``).
+    """
+    await validate_csrf_token(request)
+
+    updates = {}
+    if update_data.after_trade_seconds is not None:
+        settings.cooldown_after_trade_seconds = update_data.after_trade_seconds
+        updates["after_trade_seconds"] = update_data.after_trade_seconds
+
+    if updates:
+        await update_config_in_db(db_pool, "cooldown", updates)
+
+    logger.info("Updated cooldown configuration and persisted to database")
+
+    return CooldownConfigResponse(
+        after_trade_seconds=settings.cooldown_after_trade_seconds,
+    )
+
+
 @router.get("/user-indicator", response_model=UserIndicatorResponse)
 @limiter.limit(lambda: settings.rate_limit_api_read)
 async def get_user_indicator(
     request: Request,
-    symbol: Annotated[str, Query(description="Trading symbol")] = "BTCUSDT",
+    symbol: str = Depends(valid_symbol),
     user: Principal = Depends(require_viewer),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> UserIndicatorResponse:
@@ -391,7 +447,7 @@ async def get_user_indicator(
 @limiter.limit(lambda: settings.rate_limit_api_write)
 async def update_user_indicator(
     request: Request,
-    symbol: Annotated[str, Query(description="Trading symbol")] = "BTCUSDT",
+    symbol: str = Depends(valid_symbol),
     update_data: UserIndicatorUpdateRequest = None,
     user: Principal = Depends(require_admin),
     db_pool: asyncpg.Pool = Depends(get_db_pool),

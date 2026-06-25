@@ -154,6 +154,33 @@ class StrategyEngine:
             if isinstance(weights, str):
                 weights = json.loads(weights)
 
+            # Optuna registers params under the prefixed name "weight_<ind>", so
+            # weights_sets rows can carry keys like "weight_ema" (all sets saved
+            # before the 2026-06-20 runner fix do; they remain activatable). The
+            # engine scores by plain indicator name ("ema"), so strip the prefix
+            # to match — consistent with every other consumer (trading._load_weights,
+            # backtest, vectorbt_engine). Without this, a prefixed set makes every
+            # indicator_signals.get(<key>) miss → score ≡ 0 → the loop never crosses
+            # entry/exit thresholds and silently skips forever (no opens or closes).
+            weights = {
+                (k[len("weight_"):] if k.startswith("weight_") else k): v
+                for k, v in weights.items()
+            }
+
+            # A weights set with no usable weight — empty {} or all-zero — makes both
+            # Σ(signalᵢ·weightᵢ) and Σ|weightᵢ| zero, so calculate_weighted_score
+            # returns a flat 0 for every candle: the loop never crosses entry/exit
+            # thresholds and silently stops trading. Fail loud instead (matches the
+            # "no active weights set" contract above). On hot reload the caller's
+            # try/except keeps the previous weights, so a running bot stays alive; on
+            # startup the run surfaces a clear error rather than trading on nothing.
+            if not weights or sum(abs(float(w)) for w in weights.values()) == 0.0:
+                raise ValueError(
+                    f"Active weights set {row['id']} ('{row['name']}') has no usable "
+                    f"weights (empty or all zero); refusing to load. Activate a valid "
+                    f"weights set."
+                )
+
             weights_snapshot = WeightsSnapshot(
                 weights_set_id=row["id"],
                 weights_set_name=row["name"],

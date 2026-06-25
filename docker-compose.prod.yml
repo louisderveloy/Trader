@@ -25,7 +25,11 @@ services:
   # PostgreSQL + TimescaleDB
   # ==========================================
   postgres:
-    image: timescale/timescaledb:latest-pg16
+    # Pinned by digest (security review #9). This is the exact image in use:
+    # TimescaleDB 2.27.2 / PostgreSQL 16.14. `latest-pg16` floats (it already
+    # moved to a different digest upstream), so the digest is the real pin; the
+    # tag is only a human-readable hint. To bump: pull the new tag, test, repin.
+    image: timescale/timescaledb:latest-pg16@sha256:51ac20ec295699c05573adf896e2449d8b3a026223a951905d5763687409d7d4
     container_name: trader-postgres
     restart: unless-stopped
     environment:
@@ -57,7 +61,7 @@ services:
       # Expose on all interfaces for external Grafana connection
       # SECURITY: Configure firewall (ufw) to allow ONLY Grafana server IP
       # See docs/A6_runbook.md for firewall setup instructions
-      - "89.91.163.180:5432:5432" # grafana.derveloy.eu = 89.91.163.180
+      - "5432:5432" # grafana.derveloy.eu = 89.91.163.180
     networks:
       - trader-network
     healthcheck:
@@ -233,7 +237,8 @@ services:
       - "traefik.http.routers.dashboard.entrypoints=websecure"
       - "traefik.http.routers.dashboard.tls=true"
       - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
-      - "traefik.http.services.dashboard.loadbalancer.server.port=80"
+      # 8080: dashboard nginx runs unprivileged (security review #7).
+      - "traefik.http.services.dashboard.loadbalancer.server.port=8080"
 
   # ==========================================
   # NOTE: Grafana has been moved to external hosting

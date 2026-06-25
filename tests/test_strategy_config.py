@@ -73,7 +73,7 @@ def test_risk_config_defaults():
     assert config.max_trades_per_day == 5
     assert config.max_exposure_percent == 30.0
     assert config.position_size_mode == PositionSizeMode.CONFIDENCE
-    assert config.fixed_size_usdt == 100.0
+    assert config.fixed_size_percent == 10.0
     assert config.atr_multiplier == 2.0
     assert config.capital_risk_percent == 1.0
 
@@ -84,7 +84,7 @@ def test_risk_config_custom():
         max_trades_per_day=10,
         max_exposure_percent=50.0,
         position_size_mode=PositionSizeMode.FIXED,
-        fixed_size_usdt=200.0
+        fixed_size_percent=20.0
     )
 
     assert config.max_trades_per_day == 10
@@ -105,9 +105,15 @@ def test_risk_config_invalid_max_exposure():
 
 
 def test_risk_config_invalid_fixed_size():
-    """Test RiskConfig with invalid fixed_size_usdt"""
-    with pytest.raises(ValueError, match="fixed_size_usdt must be > 0"):
-        RiskConfig(fixed_size_usdt=-100.0)
+    """Test RiskConfig with invalid fixed_size_percent (<= 0)"""
+    with pytest.raises(ValueError, match="fixed_size_percent must be in \\(0, 100\\]"):
+        RiskConfig(fixed_size_percent=-100.0)
+
+
+def test_risk_config_fixed_size_above_100():
+    """Test RiskConfig rejects fixed_size_percent above 100% of capital"""
+    with pytest.raises(ValueError, match="fixed_size_percent must be in \\(0, 100\\]"):
+        RiskConfig(fixed_size_percent=150.0)
 
 
 def test_risk_config_invalid_atr_multiplier():

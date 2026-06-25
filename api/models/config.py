@@ -34,7 +34,7 @@ class RiskConfigResponse(BaseModel):
     max_trades_per_day: int = Field(..., description="Max trades per day")
     max_exposure_percent: float = Field(..., description="Max exposure as % of capital")
     position_size_mode: str = Field(..., description="Position sizing: fixed, confidence, risk_atr")
-    fixed_size_usdt: float = Field(..., description="Fixed position size in USDT")
+    fixed_size_percent: float = Field(..., description="Fixed position size as % of total capital")
     atr_multiplier: float = Field(..., description="ATR multiplier for sizing")
     capital_risk_percent: float = Field(..., description="% of capital to risk per trade")
 
@@ -48,6 +48,14 @@ class StopLossTakeProfitConfigResponse(BaseModel):
     tp_mode: str = Field(..., description="TP mode: atr, fixed")
     tp_atr_multiplier: float = Field(..., description="TP ATR multiplier")
     tp_fixed_percent: float = Field(..., description="TP fixed percent")
+
+
+class CooldownConfigResponse(BaseModel):
+    """Cooldown configuration response."""
+
+    after_trade_seconds: int = Field(
+        ..., description="Cooldown period (seconds) after closing a trade before re-entry"
+    )
 
 
 class BinanceConfigResponse(BaseModel):
@@ -68,6 +76,7 @@ class ConfigResponse(BaseModel):
     stop_loss_take_profit: StopLossTakeProfitConfigResponse = Field(
         ..., description="Stop-loss/take-profit settings"
     )
+    cooldown: CooldownConfigResponse = Field(..., description="Cooldown settings")
     indicators: dict[str, IndicatorConfigResponse] = Field(
         ..., description="All indicator configurations"
     )
@@ -121,10 +130,11 @@ class RiskConfigUpdate(BaseModel):
         None,
         description="Position sizing mode: fixed, confidence, or risk_atr"
     )
-    fixed_size_usdt: Optional[float] = Field(
+    fixed_size_percent: Optional[float] = Field(
         None,
-        ge=0.0,
-        description="Fixed position size in USDT (must be >= 0)"
+        gt=0.0,
+        le=100.0,
+        description="Fixed position size as % of total capital (0-100)"
     )
     atr_multiplier: Optional[float] = Field(
         None,
@@ -174,6 +184,17 @@ class StopLossTakeProfitConfigUpdate(BaseModel):
         ge=0.5,
         le=20.0,
         description="TP fixed percent (0.5-20)"
+    )
+
+
+class CooldownConfigUpdate(BaseModel):
+    """Request to update cooldown configuration."""
+
+    after_trade_seconds: Optional[int] = Field(
+        None,
+        ge=0,
+        le=86400,
+        description="Cooldown after closing a trade, in seconds (0-86400; 0 = no cooldown)",
     )
 
 

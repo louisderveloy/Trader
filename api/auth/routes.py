@@ -12,7 +12,7 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 from ..config import settings
-from ..limiter import limiter
+from ..limiter import client_ip_key_func, limiter
 from .cookies import clear_session_cookie, set_csrf_cookie, set_session_cookie
 from .dependencies import get_current_user, get_principal
 from .jwt import create_access_token, verify_admin_credentials
@@ -65,8 +65,9 @@ async def login(
 
     # Verify credentials
     if not verify_admin_credentials(credentials.username, credentials.password):
-        # Generic log message (no username to prevent enumeration)
-        logger.warning(f"Failed login attempt from {request.client.host}")
+        # Generic log message (no username to prevent enumeration). Use the real
+        # client IP (not Traefik's) so failed-login logs are actionable (#15).
+        logger.warning(f"Failed login attempt from {client_ip_key_func(request)}")
 
         # Add artificial delay to prevent timing attacks
         # Random delay between 0.1 and 0.3 seconds
@@ -85,7 +86,7 @@ async def login(
     # Set httpOnly session cookie (see api/auth/cookies.py for the policy)
     set_session_cookie(response, access_token)
 
-    logger.info(f"Successful login from {request.client.host}")
+    logger.info(f"Successful login from {client_ip_key_func(request)}")
 
     return LoginResponse(message="Login successful", username=credentials.username)
 

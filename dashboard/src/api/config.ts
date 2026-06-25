@@ -16,7 +16,7 @@ export interface RiskConfig {
   max_trades_per_day: number
   max_exposure_percent: number
   position_size_mode: 'fixed' | 'confidence' | 'risk_atr'
-  fixed_size_usdt: number
+  fixed_size_percent: number
   atr_multiplier: number
   capital_risk_percent: number
 }
@@ -28,6 +28,10 @@ export interface StopLossTakeProfitConfig {
   tp_mode: 'atr' | 'fixed'
   tp_atr_multiplier: number
   tp_fixed_percent: number
+}
+
+export interface CooldownConfig {
+  after_trade_seconds: number
 }
 
 export interface BinanceConfig {
@@ -49,6 +53,7 @@ export interface Config {
   strategy: StrategyConfig
   risk: RiskConfig
   stop_loss_take_profit: StopLossTakeProfitConfig
+  cooldown: CooldownConfig
   indicators: Record<string, IndicatorConfig>
 }
 
@@ -95,9 +100,19 @@ export async function updateStopLossTakeProfitConfig(
 }
 
 /**
+ * Update cooldown configuration
+ */
+export async function updateCooldownConfig(
+  config: Partial<CooldownConfig>
+): Promise<CooldownConfig> {
+  const response = await apiClient.patch<CooldownConfig>('/config/cooldown', config)
+  return response.data
+}
+
+/**
  * Get user indicator for a symbol
  */
-export async function getUserIndicator(symbol: string = 'BTCUSDT'): Promise<UserIndicator> {
+export async function getUserIndicator(symbol: string = 'BTCUSDC'): Promise<UserIndicator> {
   const response = await apiClient.get<UserIndicator>('/config/user-indicator', {
     params: { symbol }
   })

@@ -150,7 +150,7 @@ All configuration is loaded from environment variables:
 - `RISK_MAX_TRADES_PER_DAY` (int, default: 5): Max trades per day
 - `RISK_MAX_EXPOSURE_PERCENT` (float, default: 30.0): Max % capital exposed
 - `RISK_POSITION_SIZE_MODE` (enum, default: "confidence"): Sizing mode
-- `RISK_FIXED_SIZE_USDT` (float, default: 100.0): Fixed size (FIXED mode)
+- `RISK_FIXED_SIZE_PERCENT` (float, default: 10.0): Fixed size as % of total capital (FIXED mode)
 - `RISK_ATR_MULTIPLIER` (float, default: 2.0): ATR multiplier (RISK_ATR mode)
 - `RISK_CAPITAL_RISK_PERCENT` (float, default: 1.0): % capital to risk (RISK_ATR mode)
 

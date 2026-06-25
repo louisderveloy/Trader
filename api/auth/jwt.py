@@ -4,14 +4,17 @@ JWT token utilities.
 Handles JWT token encoding, decoding, and verification.
 """
 
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from jose import JWTError, jwt
+import jwt  # PyJWT
 from passlib.context import CryptContext
 
 from ..config import settings
+
+logger = logging.getLogger(__name__)
 
 # Password hashing context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -69,10 +72,8 @@ def create_access_token(
 
     to_encode.update({"exp": expire})
 
-    # Encode JWT
-    encoded_jwt = jwt.encode(
-        to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm
-    )
+    # Encode JWT. Algorithm hardcoded to HS256 (symmetric); never read from input.
+    encoded_jwt = jwt.encode(to_encode, settings.jwt_secret_key, algorithm="HS256")
 
     return encoded_jwt
 
@@ -88,11 +89,25 @@ def decode_access_token(token: str) -> Optional[dict[str, str]]:
         Decoded token payload if valid, None otherwise
     """
     try:
+        # algorithms is a hardcoded literal — never derived from the token header —
+        # which closes the CVE-2022-29217 algorithm-confusion class entirely.
+        # require exp+sub rejects stripped/forged tokens missing core claims.
         payload = jwt.decode(
-            token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
+            token,
+            settings.jwt_secret_key,
+            algorithms=["HS256"],
+            options={"require": ["exp", "sub"]},
         )
         return payload
-    except JWTError:
+    except jwt.ExpiredSignatureError:
+        # Benign: a token that was valid simply aged out. Not a security event.
+        logger.debug("Rejected expired access token")
+        return None
+    except jwt.PyJWTError as exc:
+        # Bad signature, wrong alg, missing required claims, malformed: none of
+        # these happen to a token we issued and that aged out normally, so treat
+        # as a possible forgery/tampering attempt and surface it (security review #17).
+        logger.warning("Rejected invalid access token (possible forgery): %s", type(exc).__name__)
         return None
 
 

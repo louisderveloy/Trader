@@ -167,10 +167,16 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
 
+    # Import string "api.main:app" (not "main:app"): this module uses relative
+    # imports and is loaded as the `api` package (PYTHONPATH=/app), so the
+    # reloader/worker subprocesses must import it by its package-qualified name.
+    # Single worker on purpose: the slowapi rate-limit store is in-memory, so
+    # multiple workers would split the buckets and weaken brute-force protection.
+    # A shared backend (e.g. Redis) is required before raising worker count.
     uvicorn.run(
-        "main:app",
+        "api.main:app",
         host=settings.api_host,
         port=settings.api_port,
-        reload=settings.api_reload,
+        reload=settings.api_reload,  # opt-in via API_RELOAD (default off)
         log_level=settings.log_level.lower(),
     )
