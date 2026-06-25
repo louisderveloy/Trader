@@ -25,11 +25,14 @@ services:
   # PostgreSQL + TimescaleDB
   # ==========================================
   postgres:
-    # Pinned by digest (security review #9). This is the exact image in use:
-    # TimescaleDB 2.27.2 / PostgreSQL 16.14. `latest-pg16` floats (it already
-    # moved to a different digest upstream), so the digest is the real pin; the
-    # tag is only a human-readable hint. To bump: pull the new tag, test, repin.
-    image: timescale/timescaledb:latest-pg16@sha256:51ac20ec295699c05573adf896e2449d8b3a026223a951905d5763687409d7d4
+    # Pinned by digest (security review #9). MUST match the TimescaleDB version
+    # the prod postgres_data volume was built with: 2.28.0 on PostgreSQL 16.
+    # Postgres records the active extension version in its catalog and refuses
+    # to load an OLDER shared library ($libdir/timescaledb-2.28.0). A previous
+    # pin to a 2.27.2 digest DOWNGRADED prod and broke startup with
+    # "could not access file $libdir/timescaledb-2.28.0". To bump: run
+    # ALTER EXTENSION timescaledb UPDATE inside a newer image, then repin here.
+    image: timescale/timescaledb:2.28.0-pg16@sha256:68faf0bca42125ff98228a8f5a379bcf0ac588d8156f716be8aaf9befd65857f
     container_name: trader-postgres
     restart: unless-stopped
     environment:
