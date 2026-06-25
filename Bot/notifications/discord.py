@@ -14,7 +14,6 @@ from typing import Any, Optional
 
 import asyncpg
 import httpx
-
 from utils.log_redaction import redact
 
 logger = logging.getLogger(__name__)
@@ -220,7 +219,7 @@ class DiscordNotifier:
         message = (
             f"**Trade Closed**\n"
             f">>> {pnl_emoji} **{pnl_sign}{pnl:.2f}** $ **({pnl_sign}{pnl_pct:.2f}%)**\n"
-            f"ℹ️ Reason: {reason}"
+            f"ℹ️ Reason: {reason}\n"
             f"👉 Entry: **{entry_price:.2f}** $\n"
             f"👈 Exit: **{exit_price:.2f}** $\n"
             f"🔗 {symbol}"
