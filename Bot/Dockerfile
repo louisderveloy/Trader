@@ -8,6 +8,11 @@ ENV PYTHONUNBUFFERED=1
 # alembic imports migration modules from the host-owned /db mount; don't write
 # .pyc there (the unprivileged 'app' user can't, and it's noise anyway).
 ENV PYTHONDONTWRITEBYTECODE=1
+# vectorbt's numba @njit(cache=True) funcs try to write a compile cache next to
+# their source in root-owned site-packages, which the unprivileged 'app' user
+# can't do; with no appdirs in slim, numba's user-wide cache dir is empty too,
+# so it raises "no locator available" at import. Point it at a writable dir.
+ENV NUMBA_CACHE_DIR=/tmp/numba_cache
 
 WORKDIR /app
 
