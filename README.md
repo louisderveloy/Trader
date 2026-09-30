@@ -1,89 +1,91 @@
-# Trader
+<h1 align="center">
+  <br>
+  <img src="https://raw.githubusercontent.com/FortAwesome/Font-Awesome/6.x/svgs/solid/chart-line.svg" alt="Trader Bot" width="100">
+  <br>
+  Trader
+  <br>
+</h1>
 
-Bot de trading crypto automatisé pour Binance avec backtesting, optimisation et dashboard Vue.js.
+<h4 align="center">A personal student project exploring algorithmic trading and full-stack development.</h4>
 
-## 🔒 Security
+<p align="center">
+  <a href="https://python.org">
+    <img src="https://img.shields.io/badge/Python-3.13-blue.svg" alt="Python 3.13">
+  </a>
+  <a href="https://fastapi.tiangolo.com/">
+    <img src="https://img.shields.io/badge/FastAPI-005571?style=flat&logo=fastapi" alt="FastAPI">
+  </a>
+  <a href="https://vuejs.org/">
+    <img src="https://img.shields.io/badge/Vue.js-35495E?style=flat&logo=vue.js&logoColor=4FC08D" alt="Vue 3">
+  </a>
+  <a href="https://www.postgresql.org/">
+    <img src="https://img.shields.io/badge/PostgreSQL-316192?style=flat&logo=postgresql&logoColor=white" alt="PostgreSQL">
+  </a>
+</p>
 
-This project implements comprehensive security best practices:
-
-### Implemented Security Features
-
-- ✅ **Rate Limiting** - Protects all endpoints from brute force and DoS attacks
-  - Login: 5 attempts/minute
-  - Read endpoints: 60 requests/minute
-  - Write endpoints: 30 requests/minute
-  - Expensive operations (optimizations): 2 requests/hour
-
-- ✅ **httpOnly Cookies** - JWT tokens stored in httpOnly cookies (XSS protection)
-- ✅ **CSRF Protection** - Token-based protection on state-changing operations (planned - see Task 7)
-- ✅ **Input Validation** - Comprehensive Pydantic validation with enums, length, and range checks (planned - see Task 8)
-- ✅ **SQL Injection Protection** - Parameterized queries throughout (no raw SQL)
-- ✅ **Security Headers** - CSP, HSTS, X-Frame-Options, X-Content-Type-Options
-- ✅ **Network Hardening** - PostgreSQL restricted to localhost + firewall rules
-- ✅ **Secret Validation** - Production secrets validated at startup (min 32 chars for JWT, 16 for DB)
-- ✅ **Error Handling** - Generic error messages in production (no information disclosure)
-- ✅ **CORS Restriction** - Explicit allowed methods and headers (no wildcards)
-
-### Current Authentication Status
-
-⚠️ **Testing Phase Only** - The current implementation uses basic username/password authentication. This is **acceptable for the testing phase** only.
-
-**Production Deployment** will migrate to **Authelia** (external authentication provider) which provides:
-- Proper password hashing (bcrypt/argon2)
-- Multi-factor authentication (2FA)
-- Advanced session management
-- SSO capabilities
-
-### Before Production Deployment
-
-**CRITICAL**: Generate strong secrets before deploying to production:
-
-```bash
-# Generate JWT secret (32+ characters)
-openssl rand -hex 32
-
-# Generate database password (16+ characters)
-openssl rand -base64 24
-```
-
-Update `.env` with these secrets. The application will **reject weak secrets** in production mode (`ENVIRONMENT=prod`).
-
-### Firewall Configuration (Production)
-
-Configure firewall to allow **only Grafana server IP** to access PostgreSQL:
-
-```bash
-# Replace <grafana-ip> with actual IP
-sudo ufw allow from <grafana-ip> to any port 5432
-sudo ufw deny 5432
-sudo ufw enable
-```
-
-See `docs/A6_runbook.md` for detailed firewall setup.
-
-### Security Documentation
-
-- **Security Review Report**: `docs/security-report.md`
-- **Operational Runbook**: `docs/A6_runbook.md` (includes security procedures)
-- **Configuration Guide**: `docs/A2_config_params.md`
-
-### Pre-Deployment Security Checklist
-
-Before deploying to production, verify:
-
-- [ ] All secrets generated with `openssl rand -hex 32` or `openssl rand -base64 24`
-- [ ] `.env` file contains strong secrets (validated by startup check)
-- [ ] PostgreSQL firewall configured (`sudo ufw status`)
-- [ ] HTTPS enforced via Traefik
-- [ ] Existing tests passing (`pytest tests/`)
-- [ ] Security report reviewed (`docs/security-report.md`)
-- [ ] Rate limiting enabled (`RATE_LIMIT_ENABLED=true`)
-- [ ] CORS origins restricted to production domain only (no wildcards)
-- [ ] `ENVIRONMENT=prod` in `.env`
-- [ ] Authelia migration completed (future)
+<p align="center">
+  <a href="#about">About</a> •
+  <a href="#architecture">Architecture</a> •
+  <a href="#tech-stack">Tech Stack</a> •
+  <a href="#learning-milestones--challenges">Learning Milestones</a> •
+  <a href="#security-practices">Security Practices</a>
+</p>
 
 ---
 
-## 📦 Project Structure
+## About
 
-See `CLAUDE.md` for complete project documentation.
+**Trader** is a personal student project built for learning and experimentation. It combines a Python-based trading bot with a real-time monitoring dashboard, serving as a sandbox to explore automated trading strategies, full-stack development, and system architecture.
+
+Built with modern async paradigms, Trader was developed to help me practice and understand how to build robust applications.
+
+## Architecture
+
+Trader features a decoupled architecture, which I designed to learn about system stability and component interaction.
+
+Instead of traditional microservice architectures that rely on HTTP APIs or Redis for inter-process communication, I experimented with using **PostgreSQL LISTEN/NOTIFY**. The Python Trading Bot, the REST API, and the Vue Dashboard communicate via the database layer.
+
+This design choice allowed me to explore:
+
+- **Persistence:** Recording messages and state changes naturally in the database.
+- **Infrastructure Simplicity:** Avoiding the need for a separate message broker like Redis or RabbitMQ during my studies.
+
+## Tech Stack
+
+- **Core & Bot:** [Python 3.13](https://www.python.org/)
+- **API Backend:** [FastAPI](https://fastapi.tiangolo.com/)
+- **Frontend Dashboard:** [Vue 3](https://vuejs.org/)
+- **Database:** [PostgreSQL](https://www.postgresql.org/) & [TimescaleDB](https://www.timescale.com/) for time-series market data.
+- **Backtesting & Analytics:** [VectorBT](https://vectorbt.dev/)
+- **Hyperparameter Optimization:** [Optuna](https://optuna.org/)
+
+## Trading Strategies Explored
+
+A major focus of this project has been the iterative design and testing of algorithmic trading strategies. My journey started with traditional technical analysis and is progressively shifting toward Machine Learning.
+
+### 1. Traditional Technical Indicators (Linear Regression)
+
+**The Approach:** Initially, the bot's core strategy relied on a weighted average of standard technical indicators (e.g., MACD, RSI, ATR, VWAP, OBV). I used a linear regression model over historical data (15m timeframe) to determine the optimal weights for these indicators.
+**The Outcome:** While this provided a solid foundation for building the backtesting engine and learning how to use VectorBT, the returns were not consistently profitable enough to beat dynamic market conditions and exchange fees.
+
+### 2. Strict Risk Management
+
+**The Approach:** To mitigate losses from the initial mathematical model, I implemented a strict risk management policy. I hardcoded a `max_drawdown_tolerance` threshold to force the bot to take profits early and cut losses quickly before a deep drawdown could occur.
+**The Outcome:** This improved capital preservation but highlighted the limitations of static indicators in a highly volatile market like Bitcoin.
+
+### 3. Transition to Artificial Intelligence (In Progress)
+
+**The Future:** Recognizing the limits of classical regression, I am currently exploring Deep Learning architectures in a separate R&D repository (`Trader_Artificial_Intelligence`). Once a robust AI model (such as a hybrid CNN/GRU or XGBoost) proves capable of dynamically predicting market regimes, it will eventually replace the legacy indicator-based strategy in this main production engine.
+
+## Security Practices
+
+As part of my learning journey, I implemented several security best practices to understand how to protect APIs and handle user data:
+
+- **Authentication & Authorization:** Practiced secure session management using **HttpOnly JWTs** to mitigate XSS attacks.
+- **Request Integrity:** Implemented **CSRF protection** mechanisms.
+- **API Protection:** Added **Rate Limiting** to understand how to mitigate brute-force attacks.
+- **Database Security:** Used **parameterized SQL queries** (via async ORMs) to prevent SQL injection vulnerabilities.
+
+---
+
+> _This repository is maintained as a personal student project and a record of my learning journey in software engineering, async Python, and secure systems design._
