@@ -31,7 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Dev: loose requirements-dev.txt (reproducibility not needed for tooling).
 # Prod: pinned requirements.lock for reproducible builds (security review #21).
 RUN if [ "$INSTALL_DEV" = "true" ]; then \
-        python -m pip install --no-cache-dir -r requirements-dev.txt; \
+        python -m pip install --no-cache-dir -r requirements.lock -r requirements-dev.txt; \
     else \
         python -m pip install --no-cache-dir -r requirements.lock; \
     fi
