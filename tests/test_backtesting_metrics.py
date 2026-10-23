@@ -28,7 +28,7 @@ class TestCalculateReturns:
     def test_simple_returns(self):
         """Test calculating returns from equity curve."""
         equity_curve = pd.DataFrame({
-            'timestamp': pd.date_range('2024-01-01', periods=5, freq='1H'),
+            'timestamp': pd.date_range('2024-01-01', periods=5, freq='1h'),
             'capital': [10000, 10100, 10050, 10200, 10150]
         })
 
@@ -50,7 +50,7 @@ class TestCalculateReturns:
     def test_no_capital_column(self):
         """Test with missing capital column."""
         equity_curve = pd.DataFrame({
-            'timestamp': pd.date_range('2024-01-01', periods=5, freq='1H'),
+            'timestamp': pd.date_range('2024-01-01', periods=5, freq='1h'),
             'value': [10000, 10100, 10050, 10200, 10150]
         })
 
@@ -203,7 +203,7 @@ class TestBuildEquityCurve:
         """Test building equity curve with no trades."""
         initial_capital = Decimal("10000")
         candles = pd.DataFrame({
-            'timestamp': pd.date_range('2024-01-01', periods=5, freq='1H'),
+            'timestamp': pd.date_range('2024-01-01', periods=5, freq='1h'),
             'close': [42000, 42100, 42050, 42200, 42150]
         })
 
@@ -217,7 +217,7 @@ class TestBuildEquityCurve:
         """Test building equity curve with trades."""
         initial_capital = Decimal("10000")
         candles = pd.DataFrame({
-            'timestamp': pd.date_range('2024-01-01', periods=5, freq='1H'),
+            'timestamp': pd.date_range('2024-01-01', periods=5, freq='1h'),
             'close': [42000, 42100, 42050, 42200, 42150]
         })
 
