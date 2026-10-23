@@ -11,6 +11,7 @@ from strategy.config import (
     StopLossConfig,
     TakeProfitConfig,
     CooldownConfig,
+    TradingEngineConfig,
     StrategyEngineConfig
 )
 from strategy.types import PositionSizeMode, StopLossMode, TakeProfitMode
@@ -311,8 +312,68 @@ def test_strategy_engine_config_to_snapshot():
 
     snapshot = config.to_snapshot()
 
+    assert snapshot["trading_engine"]["engine_type"] == "indicators"
     assert snapshot["strategy"]["entry_threshold"] == 0.7
     assert snapshot["risk"]["max_trades_per_day"] == 10
     assert snapshot["stop_loss"]["mode"] == "fixed"
     assert snapshot["take_profit"]["mode"] == "fixed"
     assert snapshot["cooldown"]["after_trade_seconds"] == 1800
+
+
+# --- TradingEngineConfig tests ---
+
+def test_trading_engine_config_defaults():
+    """Test TradingEngineConfig default values"""
+    engine_cfg = TradingEngineConfig()
+    assert engine_cfg.engine_type == "indicators"
+    assert engine_cfg.onnx_model_path == "/models/feature_extractor.onnx"
+    assert engine_cfg.xgboost_model_path == "/models/xgboost_trading_model.json"
+
+
+def test_trading_engine_config_custom_valid():
+    """Test TradingEngineConfig with predictive_model type"""
+    engine_cfg = TradingEngineConfig(
+        engine_type="predictive_model",
+        onnx_model_path="/custom/path.onnx",
+        xgboost_model_path="/custom/path.json",
+    )
+    assert engine_cfg.engine_type == "predictive_model"
+    assert engine_cfg.onnx_model_path == "/custom/path.onnx"
+
+
+def test_trading_engine_config_invalid():
+    """Test TradingEngineConfig with unsupported type raises ValueError"""
+    with pytest.raises(ValueError, match="engine_type must be one of"):
+        TradingEngineConfig(engine_type="neural_network")
+
+
+# --- StrategyConfig predictive_model validation tests ---
+
+def test_strategy_config_predictive_model_valid():
+    """Test StrategyConfig allows exit_threshold > entry_threshold for predictive_model"""
+    cfg = StrategyConfig(
+        entry_threshold=0.845,
+        exit_threshold=0.880,
+        confirmation_candles=1,
+        engine_type="predictive_model",
+    )
+    assert cfg.entry_threshold == 0.845
+    assert cfg.exit_threshold == 0.880
+    assert cfg.engine_type == "predictive_model"
+
+
+def test_strategy_config_predictive_model_invalid_entry():
+    """Test StrategyConfig rejects entry_threshold out of [0, 1] for predictive_model"""
+    with pytest.raises(ValueError, match="entry_threshold must be in \\[0, 1\\]"):
+        StrategyConfig(entry_threshold=-0.1, engine_type="predictive_model")
+    with pytest.raises(ValueError, match="entry_threshold must be in \\[0, 1\\]"):
+        StrategyConfig(entry_threshold=1.1, engine_type="predictive_model")
+
+
+def test_strategy_config_predictive_model_invalid_exit():
+    """Test StrategyConfig rejects exit_threshold out of [0, 1] for predictive_model"""
+    with pytest.raises(ValueError, match="exit_threshold must be in \\[0, 1\\]"):
+        StrategyConfig(exit_threshold=-0.1, engine_type="predictive_model")
+    with pytest.raises(ValueError, match="exit_threshold must be in \\[0, 1\\]"):
+        StrategyConfig(exit_threshold=1.5, engine_type="predictive_model")
+

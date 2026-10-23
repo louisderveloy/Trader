@@ -18,6 +18,10 @@ ccxt>=4.4.0  # Multi-exchange abstraction (includes Binance support)
 pandas>=2.2.0
 numpy>=2.1.0
 
+# Machine Learning & AI Inference (Lightweight)
+onnxruntime>=1.20.0
+xgboost>=2.1.0
+
 # Backtesting
 vectorbt>=0.26.0
 backtrader>=1.9.78.123

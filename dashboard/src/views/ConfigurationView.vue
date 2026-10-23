@@ -12,11 +12,71 @@
 
       <!-- Configuration Content -->
       <div v-else-if="config" class="space-y-8">
+        <!-- Trading Engine Selection -->
+        <div class="bg-white rounded-lg shadow p-6">
+          <div class="mb-4">
+            <h2 class="text-xl font-bold text-gray-900">Moteur de Trading</h2>
+            <p class="text-sm text-gray-600 mt-1">Choisissez le moteur décisionnel utilisé pour exécuter la stratégie</p>
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <!-- Scoring Multi-Indicateurs -->
+            <div
+                @click="setTradingEngine('indicators')"
+                class="relative flex flex-col p-4 border rounded-lg cursor-pointer transition-all"
+                :class="formData.trading_engine.engine_type === 'indicators' ? 'border-blue-600 bg-blue-50/40 ring-2 ring-blue-500' : 'border-gray-200 bg-white hover:border-gray-300'"
+            >
+              <div class="flex items-center justify-between mb-2">
+                <span class="font-semibold text-gray-900">Scoring Multi-Indicateurs</span>
+                <input
+                    type="radio"
+                    name="engine_type"
+                    value="indicators"
+                    :checked="formData.trading_engine.engine_type === 'indicators'"
+                    class="h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+                />
+              </div>
+              <p class="text-xs text-gray-600 leading-relaxed">
+                Moteur algorithmique classique combinant plusieurs indicateurs techniques (EMA, MACD, RSI, etc.) pondérés selon les résultats d'optimisation Optuna.
+              </p>
+            </div>
+
+            <!-- Modèle Prédictif -->
+            <div
+                @click="setTradingEngine('predictive_model')"
+                class="relative flex flex-col p-4 border rounded-lg cursor-pointer transition-all"
+                :class="formData.trading_engine.engine_type === 'predictive_model' ? 'border-blue-600 bg-blue-50/40 ring-2 ring-blue-500' : 'border-gray-200 bg-white hover:border-gray-300'"
+            >
+              <div class="flex items-center justify-between mb-2">
+                <span class="font-semibold text-gray-900">Modèle Prédictif</span>
+                <input
+                    type="radio"
+                    name="engine_type"
+                    value="predictive_model"
+                    :checked="formData.trading_engine.engine_type === 'predictive_model'"
+                    class="h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+                />
+              </div>
+              <p class="text-xs text-gray-600 leading-relaxed">
+                Moteur autonome basé sur un modèle prédictif évaluant directement les probabilités de hausse, baisse ou maintien à partir des séquences de marché récentes.
+              </p>
+            </div>
+          </div>
+        </div>
+
         <!-- Strategy Configuration -->
         <div class="bg-white rounded-lg shadow p-6">
-          <h2 class="text-xl font-bold text-gray-900 mb-4">Stratégie</h2>
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-xl font-bold text-gray-900">Stratégie</h2>
+            <span v-if="isPredictive" class="text-xs font-medium px-2.5 py-1 bg-purple-100 text-purple-800 rounded-full">
+              Mode Modèle Prédictif (Probabilités)
+            </span>
+            <span v-else class="text-xs font-medium px-2.5 py-1 bg-blue-100 text-blue-800 rounded-full">
+              Mode Multi-Indicateurs (Score)
+            </span>
+          </div>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <ConfigField
+                v-if="!isPredictive"
                 id="entry_threshold"
                 label="Seuil d'entrée"
                 tooltip="Score pondéré minimum pour déclencher une entrée. Plage: -1 à 1. Valeurs plus élevées = signaux plus rares et plus forts."
@@ -28,6 +88,20 @@
                 @update:model-value="updateStrategyField('entry_threshold', $event)"
             />
             <ConfigField
+                v-else
+                id="entry_threshold_pred"
+                label="Seuil d'entrée (Probabilité Achat)"
+                tooltip="Probabilité minimale calculée par le modèle prédictif pour déclencher un achat. Plage: 0.0 à 1.0 (ex: 0.845 = 84.5%)."
+                :model-value="formData.strategy.entry_threshold"
+                type="number"
+                :min="0"
+                :max="1"
+                :step="0.005"
+                @update:model-value="updateStrategyField('entry_threshold', $event)"
+            />
+
+            <ConfigField
+                v-if="!isPredictive"
                 id="exit_threshold"
                 label="Seuil de sortie"
                 tooltip="Score pondéré pour déclencher une sortie. Plage: -1 à 1. Négatif = attendre inversion du signal."
@@ -39,6 +113,20 @@
                 @update:model-value="updateStrategyField('exit_threshold', $event)"
             />
             <ConfigField
+                v-else
+                id="exit_threshold_pred"
+                label="Seuil de sortie (Probabilité Vente)"
+                tooltip="Probabilité minimale calculée par le modèle prédictif pour déclencher la fermeture de position. Plage: 0.0 à 1.0 (ex: 0.880 = 88.0%)."
+                :model-value="formData.strategy.exit_threshold"
+                type="number"
+                :min="0"
+                :max="1"
+                :step="0.005"
+                @update:model-value="updateStrategyField('exit_threshold', $event)"
+            />
+
+            <ConfigField
+                v-if="!isPredictive"
                 id="confirmation_candles"
                 label="Bougies de confirmation"
                 tooltip="Nombre de bougies pour confirmer un signal avant d'agir. Prévient le repainting. Plus élevé = plus conservateur."
@@ -58,7 +146,7 @@
             <ConfigField
                 id="max_trades_per_day"
                 label="Max trades par jour"
-                tooltip="Nombre maximum de transactions (ordres) par jour. Limites l'exposition et la surexécution."
+                tooltip="Nombre maximum de transactions (ordres) par jour. Limite l'exposition et la surexécution."
                 :model-value="formData.risk.max_trades_per_day"
                 type="number"
                 :min="1"
@@ -79,7 +167,7 @@
             <ConfigField
                 id="position_size_mode"
                 label="Mode de dimensionnement"
-                tooltip="Fixe : un pourcentage fixe du capital total à chaque transaction. Confiance : la taille est proportionnelle à la force du signal calculé. Indicateur de volatilité (moyenne de l'amplitude de prix sur plusieurs bougies) : la taille est calculée à partir du niveau de volatilité récent du marché et du pourcentage de capital que vous acceptez de risquer."
+                tooltip="Fixe : un pourcentage fixe du capital total à chaque transaction. Confiance : la taille est proportionnelle à la force du signal calculé. Indicateur de volatilité : la taille est calculée à partir du niveau de volatilité récent du marché et du pourcentage de capital que vous acceptez de risquer."
                 :model-value="formData.risk.position_size_mode"
                 :options="positionSizeModeOptions"
                 @update:model-value="updateRiskField('position_size_mode', $event)"
@@ -87,7 +175,7 @@
             <ConfigField
                 id="fixed_size_percent"
                 label="Taille fixe (% du capital)"
-                tooltip="Pourcentage du capital total investi à chaque transaction lorsque le mode de dimensionnement Fixe est sélectionné. Par exemple, 10% signifie que chaque position utilise 10% du solde disponible. Ce paramètre est ignoré dans les modes Confiance ou Indicateur de volatilité."
+                tooltip="Pourcentage du capital total investi à chaque transaction lorsque le mode de dimensionnement Fixe est sélectionné. Par exemple, 10% signifie que chaque position utilise 10% du solde disponible."
                 :model-value="formData.risk.fixed_size_percent"
                 type="number"
                 :min="1"
@@ -98,7 +186,7 @@
             <ConfigField
                 id="atr_multiplier"
                 label="Multiplicateur de volatilité"
-                tooltip="Facteur multiplicateur appliqué à l'indicateur de volatilité (moyenne de l'amplitude de prix récente) pour calculer la taille de la position lorsque le mode de dimensionnement par volatilité est sélectionné. Plus ce facteur est élevé, plus les positions ouvertes seront grandes."
+                tooltip="Facteur multiplicateur appliqué à l'indicateur de volatilité pour calculer la taille de la position lorsque le mode de dimensionnement par volatilité est sélectionné."
                 :model-value="formData.risk.atr_multiplier"
                 type="number"
                 :min="0.5"
@@ -109,7 +197,7 @@
             <ConfigField
                 id="capital_risk_percent"
                 label="% capital à risquer"
-                tooltip="Pourcentage du capital total que vous acceptez de perdre sur une seule transaction lorsque le mode de dimensionnement par volatilité est sélectionné. Par exemple, 1% signifie que le seuil de protection (stop-loss) est positionné de façon à ce qu'au maximum 1% du solde soit perdu si ce seuil est atteint."
+                tooltip="Pourcentage du capital total que vous acceptez de perdre sur une seule transaction lorsque le mode de dimensionnement par volatilité est sélectionné."
                 :model-value="formData.risk.capital_risk_percent"
                 type="number"
                 :min="0.1"
@@ -123,25 +211,18 @@
         <!-- Stop-Loss & Take-Profit Configuration -->
         <div class="bg-white rounded-lg shadow p-6">
           <h2 class="text-xl font-bold text-gray-900 mb-4">Stop-Loss & Take-Profit</h2>
-          <p class="text-sm text-gray-600 mb-6 leading-relaxed">
+          <div v-if="isPredictive" class="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-900 leading-relaxed">
+            ℹ️ <strong>Mode Fixe actif :</strong> Pour le Modèle Prédictif, le Stop-Loss et le Take-Profit sont toujours calculés en pourcentage fixe du prix d'entrée lors de l'ouverture de position.
+          </div>
+          <p v-else class="text-sm text-gray-600 mb-6 leading-relaxed">
             Le seuil de protection (stop-loss) ferme automatiquement une position perdante pour limiter la perte,
             et le seuil de prise de bénéfice (take-profit) ferme automatiquement une position gagnante pour
             sécuriser le gain. Deux façons de calculer ces deux seuils sont disponibles :
             un <strong>pourcentage fixe</strong> ou un calcul basé sur la <strong>volatilité du marché</strong>.
-            Un pourcentage fixe place toujours le seuil à la même distance du prix d'entrée (par exemple 2% en
-            dessous pour la protection), quelles que soient les conditions de marché : simple et prévisible, mais
-            ce seuil peut être trop serré pendant une période agitée (déclenchement prématuré) ou trop large
-            pendant une période calme (perte plus importante que nécessaire avant la fermeture). Le calcul basé
-            sur la volatilité du marché utilise un indicateur qui mesure l'amplitude moyenne des mouvements de
-            prix sur les dernières bougies (plus cette amplitude est grande, plus le marché bouge fort) :
-            le seuil est alors placé à une distance proportionnelle à cette amplitude récente, multipliée par
-            le facteur choisi ci-dessous. Concrètement, ce calcul adapte automatiquement la distance du seuil aux
-            conditions réelles du marché : il s'éloigne du prix d'entrée quand le marché est agité (pour éviter
-            une fermeture prématurée sur du simple bruit) et se rapproche quand le marché est calme (pour ne pas
-            laisser une perte ou un gain non protégé s'accumuler inutilement).
           </p>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <ConfigField
+                v-if="!isPredictive"
                 id="sl_mode"
                 label="Mode Stop-Loss"
                 tooltip="Détermine comment est calculée la distance du seuil de protection par rapport au prix d'entrée. Indicateur de volatilité : seuil basé sur l'amplitude moyenne récente des mouvements de prix. Fixe : pourcentage fixe du prix d'entrée, identique quelles que soient les conditions de marché."
@@ -150,9 +231,10 @@
                 @update:model-value="updateSLTPField('sl_mode', $event)"
             />
             <ConfigField
+                v-if="!isPredictive && formData.stopLossTakeProfit.sl_mode === 'atr'"
                 id="sl_atr_multiplier"
                 label="Multiplicateur SL Indicateur de volatilité"
-                tooltip="Facteur multiplicateur appliqué à l'indicateur de volatilité pour positionner le seuil de protection lorsque le mode basé sur la volatilité est sélectionné. Par exemple, une valeur de 2,0 place le seuil de protection à une distance égale à deux fois l'amplitude moyenne récente des mouvements de prix, en dessous du prix d'entrée."
+                tooltip="Facteur multiplicateur appliqué à l'indicateur de volatilité pour positionner le seuil de protection lorsque le mode basé sur la volatilité est sélectionné."
                 :model-value="formData.stopLossTakeProfit.sl_atr_multiplier"
                 type="number"
                 :min="0.5"
@@ -161,17 +243,19 @@
                 @update:model-value="updateSLTPField('sl_atr_multiplier', $event)"
             />
             <ConfigField
+                v-if="isPredictive || formData.stopLossTakeProfit.sl_mode === 'fixed'"
                 id="sl_fixed_percent"
                 label="SL fixe (%)"
-                tooltip="Pourcentage fixe en dessous du prix d'entrée auquel le seuil de protection est placé lorsque le mode fixe est sélectionné. Par exemple, 2% signifie que la position se ferme automatiquement si le prix descend à 2% sous le prix d'entrée."
+                tooltip="Pourcentage fixe en dessous du prix d'entrée auquel le seuil de protection est placé. Par exemple, 7.9% signifie que la position se ferme automatiquement si le prix descend de 7.9% sous le prix d'entrée."
                 :model-value="formData.stopLossTakeProfit.sl_fixed_percent"
                 type="number"
-                :min="0.5"
-                :max="10"
-                :step="0.5"
+                :min="0.1"
+                :max="20"
+                :step="0.1"
                 @update:model-value="updateSLTPField('sl_fixed_percent', $event)"
             />
             <ConfigField
+                v-if="!isPredictive"
                 id="tp_mode"
                 label="Mode Take-Profit"
                 tooltip="Détermine comment est calculée la distance du seuil de prise de bénéfice par rapport au prix d'entrée. Indicateur de volatilité : seuil basé sur l'amplitude moyenne récente des mouvements de prix. Fixe : pourcentage fixe du prix d'entrée, identique quelles que soient les conditions de marché."
@@ -180,9 +264,10 @@
                 @update:model-value="updateSLTPField('tp_mode', $event)"
             />
             <ConfigField
+                v-if="!isPredictive && formData.stopLossTakeProfit.tp_mode === 'atr'"
                 id="tp_atr_multiplier"
                 label="Multiplicateur TP Indicateur de volatilité"
-                tooltip="Facteur multiplicateur appliqué à l'indicateur de volatilité pour positionner le seuil de prise de bénéfice lorsque le mode basé sur la volatilité est sélectionné. Par exemple, une valeur de 3,0 place le seuil de prise de bénéfice à une distance égale à trois fois l'amplitude moyenne récente des mouvements de prix, au-dessus du prix d'entrée."
+                tooltip="Facteur multiplicateur appliqué à l'indicateur de volatilité pour positionner le seuil de prise de bénéfice lorsque le mode basé sur la volatilité est sélectionné."
                 :model-value="formData.stopLossTakeProfit.tp_atr_multiplier"
                 type="number"
                 :min="0.5"
@@ -191,14 +276,15 @@
                 @update:model-value="updateSLTPField('tp_atr_multiplier', $event)"
             />
             <ConfigField
+                v-if="isPredictive || formData.stopLossTakeProfit.tp_mode === 'fixed'"
                 id="tp_fixed_percent"
                 label="TP fixe (%)"
-                tooltip="Pourcentage fixe au-dessus du prix d'entrée auquel le seuil de prise de bénéfice est placé lorsque le mode fixe est sélectionné. Par exemple, 4% signifie que la position se ferme automatiquement si le prix monte à 4% au-dessus du prix d'entrée."
+                tooltip="Pourcentage fixe au-dessus du prix d'entrée auquel le seuil de prise de bénéfice est placé. Par exemple, 1.1% signifie que la position se ferme automatiquement si le prix monte de 1.1% au-dessus du prix d'entrée."
                 :model-value="formData.stopLossTakeProfit.tp_fixed_percent"
                 type="number"
-                :min="0.5"
+                :min="0.1"
                 :max="20"
-                :step="0.5"
+                :step="0.1"
                 @update:model-value="updateSLTPField('tp_fixed_percent', $event)"
             />
           </div>
@@ -271,6 +357,9 @@ const positionSizeModeOptions = [
 
 // Form state
 const formData = ref({
+  trading_engine: {
+    engine_type: 'indicators' as 'indicators' | 'predictive_model'
+  },
   strategy: {
     entry_threshold: 0.6,
     exit_threshold: -0.3,
@@ -297,10 +386,37 @@ const formData = ref({
   }
 })
 
+const isPredictive = computed(() => formData.value.trading_engine.engine_type === 'predictive_model')
+
+function setTradingEngine(type: 'indicators' | 'predictive_model') {
+  formData.value.trading_engine.engine_type = type
+  if (type === 'predictive_model') {
+    // Default recommended fixed SL/TP for predictive model
+    formData.value.stopLossTakeProfit.sl_mode = 'fixed'
+    formData.value.stopLossTakeProfit.tp_mode = 'fixed'
+    if (formData.value.strategy.entry_threshold < 0) {
+      formData.value.strategy.entry_threshold = 0.845
+    }
+    if (formData.value.strategy.exit_threshold < 0) {
+      formData.value.strategy.exit_threshold = 0.880
+    }
+  } else {
+    if (formData.value.strategy.entry_threshold > 1) {
+      formData.value.strategy.entry_threshold = 0.6
+    }
+    if (formData.value.strategy.exit_threshold > 0) {
+      formData.value.strategy.exit_threshold = -0.3
+    }
+  }
+}
+
 // Lifecycle
 onMounted(async () => {
   await configStore.fetchConfig()
   if (configStore.config) {
+    if (configStore.config.trading_engine) {
+      formData.value.trading_engine = {...configStore.config.trading_engine}
+    }
     formData.value.strategy = {...configStore.config.strategy}
     formData.value.risk = {...configStore.config.risk}
     formData.value.stopLossTakeProfit = {...configStore.config.stop_loss_take_profit}
@@ -339,6 +455,9 @@ function updateCooldownField(field: string, value: unknown) {
 
 function resetForm() {
   if (configStore.config) {
+    if (configStore.config.trading_engine) {
+      formData.value.trading_engine = {...configStore.config.trading_engine}
+    }
     formData.value.strategy = {...configStore.config.strategy}
     formData.value.risk = {...configStore.config.risk}
     formData.value.stopLossTakeProfit = {...configStore.config.stop_loss_take_profit}
@@ -349,15 +468,33 @@ function resetForm() {
 async function saveConfiguration() {
   isSaving.value = true
   try {
-    // Validate that entry_threshold > exit_threshold
-    if (formData.value.strategy.entry_threshold <= formData.value.strategy.exit_threshold) {
-      toastStore.error(
-          `Le seuil d'entrée (${formData.value.strategy.entry_threshold}) doit être supérieur au seuil de sortie (${formData.value.strategy.exit_threshold})`
-      )
-      isSaving.value = false
-      return
+    if (formData.value.trading_engine.engine_type === 'indicators') {
+      // Validate that entry_threshold > exit_threshold
+      if (formData.value.strategy.entry_threshold <= formData.value.strategy.exit_threshold) {
+        toastStore.error(
+            `Le seuil d'entrée (${formData.value.strategy.entry_threshold}) doit être supérieur au seuil de sortie (${formData.value.strategy.exit_threshold})`
+        )
+        isSaving.value = false
+        return
+      }
+    } else {
+      // Validate probabilities in [0, 1]
+      if (formData.value.strategy.entry_threshold < 0 || formData.value.strategy.entry_threshold > 1) {
+        toastStore.error("Le seuil de probabilité d'achat doit être compris entre 0.0 et 1.0")
+        isSaving.value = false
+        return
+      }
+      if (formData.value.strategy.exit_threshold < 0 || formData.value.strategy.exit_threshold > 1) {
+        toastStore.error("Le seuil de probabilité de vente doit être compris entre 0.0 et 1.0")
+        isSaving.value = false
+        return
+      }
+      // Force fixed mode
+      formData.value.stopLossTakeProfit.sl_mode = 'fixed'
+      formData.value.stopLossTakeProfit.tp_mode = 'fixed'
     }
 
+    await configStore.updateTradingEngine(formData.value.trading_engine)
     await configStore.updateStrategy(formData.value.strategy)
     await configStore.updateRisk(formData.value.risk)
     await configStore.updateStopLossTakeProfit(formData.value.stopLossTakeProfit)

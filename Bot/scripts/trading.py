@@ -61,6 +61,7 @@ from runs.errors import log_exception, ErrorCategory, ErrorSeverity
 from indicators import compute_all_indicators
 from strategy.config import StrategyEngineConfig
 from strategy.engine import StrategyEngine
+from strategy.predictive_engine import PredictiveStrategyEngine
 from strategy.types import DecisionType, PositionState
 from notifications.discord import DiscordNotifier
 from utils.instance_lock import InstanceLockManager
@@ -141,7 +142,7 @@ class TradingBot:
         # Strategy engine — owns scoring, anti-repaint confirmation, threshold
         # checks, risk quotas, sizing and SL/TP level computation. The trading
         # loop only executes its decisions and monitors SL/TP price levels.
-        self.engine: Optional[StrategyEngine] = None
+        self.engine: Optional[StrategyEngine | PredictiveStrategyEngine] = None
 
         # Tracking (informational only; the engine's RiskManager is authoritative
         # for the daily-quota / cooldown gating, sourced from the trades table)
@@ -660,10 +661,15 @@ class TradingBot:
             await self._check_pending_order(current_price)
             return
 
-        # Compute all indicator signals via the shared aggregation helper
-        candles_df = self._candles_to_df(candles)
-        indicator_results = compute_all_indicators(candles_df)
-        signals = {name: r.signal.value for name, r in indicator_results.items()}
+        # Compute indicator signals or prepare ML signals
+        is_predictive = self._is_predictive_engine()
+        if is_predictive:
+            indicator_results = None
+            signals = {}
+        else:
+            candles_df = self._candles_to_df(candles)
+            indicator_results = compute_all_indicators(candles_df)
+            signals = {name: r.signal.value for name, r in indicator_results.items()}
 
         # Keep the engine's position view in sync with execution-layer state
         self._sync_engine_position()
@@ -686,6 +692,12 @@ class TradingBot:
             logger.warning(f"Decision computation failed this iteration; skipping. ({e})")
             return
         weighted_score = decision.weighted_score
+
+        # If predictive engine, populate signals from model probabilities for logging
+        if is_predictive and decision.indicators_snapshot:
+            probs = decision.indicators_snapshot.indicators.get("model_probabilities", {})
+            if probs:
+                signals = {f"prob_{k}": float(v) for k, v in probs.items()}
 
         # Get current balance for logging
         if self.mode == "live":
@@ -1157,20 +1169,36 @@ class TradingBot:
             # Clear pending order
             self.pending_order = None
 
-    def _init_engine(self):
-        """Instantiate the StrategyEngine once config, run_id and db_pool are ready.
+    def _is_predictive_engine(self) -> bool:
+        """Check if current active engine is the predictive ML engine."""
+        return isinstance(self.engine, PredictiveStrategyEngine)
 
-        The engine owns weighted scoring, anti-repaint confirmation, entry/exit
-        threshold checks, risk quotas (daily trades / cooldown / exposure, sourced
-        from the trades table), position sizing and SL/TP level computation.
+    def _init_engine(self):
+        """Instantiate the strategy engine once config, run_id and db_pool are ready.
+
+        Dispatches between PredictiveStrategyEngine (hybrid DL + XGBoost) and
+        StrategyEngine (multi-indicators weighted scoring) based on trading_engine.engine_type.
         """
-        self.engine = StrategyEngine(
-            config=self.config,
-            run_id=self.run_id,
-            db_pool=self.db_pool,
-            config_id=self.config_id,
-        )
-        logger.info("Strategy engine wired into trading loop")
+        engine_type = "indicators"
+        if self.config and hasattr(self.config, "trading_engine") and self.config.trading_engine:
+            engine_type = self.config.trading_engine.engine_type
+
+        if engine_type == "predictive_model":
+            self.engine = PredictiveStrategyEngine(
+                config=self.config,
+                run_id=self.run_id,
+                db_pool=self.db_pool,
+                config_id=self.config_id,
+            )
+            logger.info("Predictive strategy engine wired into trading loop")
+        else:
+            self.engine = StrategyEngine(
+                config=self.config,
+                run_id=self.run_id,
+                db_pool=self.db_pool,
+                config_id=self.config_id,
+            )
+            logger.info("Multi-indicators strategy engine wired into trading loop")
 
     async def _get_available_capital(self) -> Decimal:
         """
@@ -1833,6 +1861,18 @@ class TradingBot:
             # Log changes
             if old_config:
                 logger.info("Configuration changes detected:")
+                old_engine = (
+                    old_config.trading_engine.engine_type
+                    if (hasattr(old_config, "trading_engine") and old_config.trading_engine)
+                    else "indicators"
+                )
+                new_engine = (
+                    new_config.trading_engine.engine_type
+                    if (hasattr(new_config, "trading_engine") and new_config.trading_engine)
+                    else "indicators"
+                )
+                if old_engine != new_engine:
+                    logger.info(f"  Trading engine: {old_engine} → {new_engine}")
                 if old_config.strategy.entry_threshold != new_config.strategy.entry_threshold:
                     logger.info(
                         f"  Entry threshold: {old_config.strategy.entry_threshold} → {new_config.strategy.entry_threshold}")
@@ -1849,16 +1889,29 @@ class TradingBot:
                     logger.info(
                         f"  Position size mode: {old_config.risk.position_size_mode.value} → {new_config.risk.position_size_mode.value}")
 
+            # Check if trading engine changed
+            old_engine = (
+                old_config.trading_engine.engine_type
+                if (old_config and hasattr(old_config, "trading_engine") and old_config.trading_engine)
+                else "indicators"
+            )
+            new_engine = (
+                new_config.trading_engine.engine_type
+                if (new_config and hasattr(new_config, "trading_engine") and new_config.trading_engine)
+                else "indicators"
+            )
+
             # Update config
             self.config = new_config
             self.config_id = new_config_id
             logger.info(f"  New config ID: {new_config_id}")
 
-            # Propagate to the strategy engine, otherwise it keeps its
-            # construction-time config and silently ignores the new thresholds,
-            # sizing, stop-loss and risk/cooldown settings (the engine owns the
-            # entry/exit decision, so a stale config here = decisions never change).
-            if self.engine is not None:
+            # Switch engine or propagate new config
+            if old_engine != new_engine or self.engine is None:
+                logger.info(f"Switching active engine to {new_engine}")
+                self._init_engine()
+                self._sync_engine_position()
+            else:
                 self.engine.update_config(new_config, new_config_id)
 
             logger.info("✓ Configuration reloaded successfully")

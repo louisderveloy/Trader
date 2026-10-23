@@ -17,6 +17,7 @@ from ..database import get_db_pool
 from ..db_config import update_config_in_db
 from ..limiter import limiter
 from ..models.config import (
+    BinanceConfigResponse,
     ConfigResponse,
     CooldownConfigResponse,
     CooldownConfigUpdate,
@@ -27,9 +28,10 @@ from ..models.config import (
     StrategyConfigUpdate,
     StopLossTakeProfitConfigResponse,
     StopLossTakeProfitConfigUpdate,
+    TradingEngineConfigResponse,
+    TradingEngineConfigUpdate,
     UserIndicatorResponse,
     UserIndicatorUpdateRequest,
-    BinanceConfigResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -128,6 +130,9 @@ async def get_config(
     }
 
     return ConfigResponse(
+        trading_engine=TradingEngineConfigResponse(
+            engine_type=settings.trading_engine_type,
+        ),
         binance=BinanceConfigResponse(
             symbol=settings.binance_default_symbol,
             timeframe=settings.binance_default_timeframe,
@@ -159,6 +164,41 @@ async def get_config(
             after_trade_seconds=settings.cooldown_after_trade_seconds,
         ),
         indicators=indicators,
+    )
+
+
+@router.patch("/trading-engine", response_model=TradingEngineConfigResponse)
+@limiter.limit(lambda: settings.rate_limit_api_write)
+async def update_trading_engine_config(
+    request: Request,
+    update_data: TradingEngineConfigUpdate,
+    user: Principal = Depends(require_admin),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> TradingEngineConfigResponse:
+    """
+    Update trading engine configuration.
+
+    Requires authentication and CSRF token.
+    Rate limited to 30 requests per minute.
+
+    Args:
+        request: FastAPI request object (for rate limiting and CSRF validation)
+        update_data: Updated trading engine configuration
+        db_pool: Database connection pool
+
+    Returns:
+        Updated trading engine configuration
+    """
+    await validate_csrf_token(request)
+
+    settings.trading_engine_type = update_data.engine_type.value
+    updates = {"engine_type": update_data.engine_type.value}
+
+    await update_config_in_db(db_pool, "trading_engine", updates)
+    logger.info(f"Updated trading engine configuration to {settings.trading_engine_type}")
+
+    return TradingEngineConfigResponse(
+        engine_type=settings.trading_engine_type,
     )
 
 
@@ -201,12 +241,24 @@ async def update_strategy_config(
         settings.strategy_confirmation_candles = update_data.confirmation_candles
         updates["confirmation_candles"] = update_data.confirmation_candles
 
-    # Validate that entry_threshold > exit_threshold
-    if settings.strategy_entry_threshold <= settings.strategy_exit_threshold:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Le seuil d'entrée ({settings.strategy_entry_threshold}) doit être supérieur au seuil de sortie ({settings.strategy_exit_threshold})",
-        )
+    # Validate thresholds depending on active trading engine
+    if settings.trading_engine_type == "indicators":
+        if settings.strategy_entry_threshold <= settings.strategy_exit_threshold:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Le seuil d'entrée ({settings.strategy_entry_threshold}) doit être supérieur au seuil de sortie ({settings.strategy_exit_threshold})",
+            )
+    elif settings.trading_engine_type == "predictive_model":
+        if not (0.0 <= settings.strategy_entry_threshold <= 1.0):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Le seuil d'entrée probabilité ({settings.strategy_entry_threshold}) doit être compris entre 0.0 et 1.0",
+            )
+        if not (0.0 <= settings.strategy_exit_threshold <= 1.0):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Le seuil de sortie probabilité ({settings.strategy_exit_threshold}) doit être compris entre 0.0 et 1.0",
+            )
 
     # Persist to database
     if updates:

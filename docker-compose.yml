@@ -70,6 +70,7 @@ services:
       - ./bot:/app
       - ./db:/db
       - ./tests:/tests  # Mount tests directory for running tests in container
+      - ./models:/models:ro  # Mount models directory for ML/DL trading engines
       - ./volumes/bot_logs:/var/log/trader-bot
     depends_on:
       postgres:

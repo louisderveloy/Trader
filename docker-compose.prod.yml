@@ -179,6 +179,7 @@ services:
     volumes:
       - bot_logs:/var/log/trader-bot
       - ./db:/db # Mount database migrations folder
+      - ./models:/models:ro # Mount models directory for ML/DL trading engines
     depends_on:
       postgres:
         condition: service_healthy
