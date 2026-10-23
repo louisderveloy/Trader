@@ -52,13 +52,13 @@ def _compute_vwap(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.
 def _compute_rsi(close: pd.Series, length: int = 14) -> pd.Series:
     """Wilder's Relative Strength Index."""
     delta = close.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
+    positive = delta.clip(lower=0)
+    negative = (-delta).clip(lower=0)
     alpha = 1.0 / length
-    avg_gain = gain.ewm(alpha=alpha, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=alpha, adjust=False).mean()
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    return (100.0 - (100.0 / (1.0 + rs))).fillna(50.0)
+    pos_avg = positive.ewm(alpha=alpha, adjust=False).mean()
+    neg_avg = negative.ewm(alpha=alpha, adjust=False).mean()
+    denom = pos_avg + neg_avg
+    return (100.0 * pos_avg / denom.replace(0, np.nan)).fillna(50.0)
 
 
 def _compute_atr(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> pd.Series:
@@ -115,10 +115,10 @@ def compute_predictive_features(
     # Ensure datetime index for VWAP calculation
     if "time" in df.columns:
         df["time"] = pd.to_datetime(df["time"])
-        df.set_index("time", inplace=True)
+        df = df.set_index("time")
     elif "timestamp" in df.columns:
         df["timestamp"] = pd.to_datetime(df["timestamp"])
-        df.set_index("timestamp", inplace=True)
+        df = df.set_index("timestamp")
     elif not isinstance(df.index, pd.DatetimeIndex):
         df.index = pd.date_range("2024-01-01", periods=len(df), freq="15min")
 
