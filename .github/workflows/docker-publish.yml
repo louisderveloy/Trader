@@ -31,8 +31,8 @@ jobs:
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ vars.REGISTRY_USERNAME }}
-          password: ${{ secrets.GHCR_TOKEN }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata for Docker
         id: meta
@@ -75,8 +75,8 @@ jobs:
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ vars.REGISTRY_USERNAME }}
-          password: ${{ secrets.GHCR_TOKEN }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata for Docker
         id: meta
@@ -119,8 +119,8 @@ jobs:
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ vars.REGISTRY_USERNAME }}
-          password: ${{ secrets.GHCR_TOKEN }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata for Docker
         id: meta
@@ -155,16 +155,19 @@ jobs:
     runs-on: ubuntu-latest
     needs: [ build-and-push-bot, build-and-push-api, build-and-push-dashboard ]
     if: github.ref == 'refs/heads/main'  # Only deploy on main branch
+    permissions:
+      contents: read
+      packages: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Copy database migrations to VPS
+      - name: Copy deployment files to VPS
         run: |
           echo "${{ secrets.VPS_SSH_KEY }}" > /tmp/ssh_key
           chmod 600 /tmp/ssh_key
           scp -i /tmp/ssh_key -r -o StrictHostKeyChecking=no \
-            ./db ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:${{ secrets.VPS_DEPLOY_PATH }}/
+            ./db ./models ./docker-compose.prod.yml ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:${{ secrets.VPS_DEPLOY_PATH }}/
           rm /tmp/ssh_key
 
       - name: Deploy via SSH
@@ -179,17 +182,11 @@ jobs:
           script: |
             cd ${{ secrets.VPS_DEPLOY_PATH }}
 
-            # Download latest docker-compose.prod.yml from main branch
-            curl -H "Authorization: token $GITHUB_TOKEN" \
-              -o docker-compose.prod.yml \
-              https://raw.githubusercontent.com/${{ github.repository }}/main/docker-compose.prod.yml
-
             # Login to GitHub Container Registry
             echo "$GITHUB_TOKEN" | docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin
 
             # Pull latest images
             docker compose -f docker-compose.prod.yml pull
-
 
             # Restart services with zero-downtime (recreate only changed containers)
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
