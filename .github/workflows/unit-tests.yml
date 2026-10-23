@@ -87,7 +87,7 @@ jobs:
         run: |
           pip install pip-audit
           pip-audit -r api/requirements.lock
-          pip-audit -r bot/requirements.lock
+          pip-audit -r Bot/requirements.lock
 
       - uses: actions/setup-node@v4
         with:
