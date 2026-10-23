@@ -16,7 +16,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +36,58 @@ FEATURE_COLUMNS = [
 DEFAULT_NORM_WINDOW = 200
 DEFAULT_WINDOW_SIZE = 60
 MIN_REQUIRED_CANDLES = DEFAULT_NORM_WINDOW + DEFAULT_WINDOW_SIZE  # 260 candles
+
+
+def _compute_vwap(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series) -> pd.Series:
+    """Volume Weighted Average Price with daily grouping anchor."""
+    tp = (high + low + close) / 3.0
+    wp = tp * volume
+    if isinstance(wp.index, pd.DatetimeIndex):
+        vwap = wp.groupby(wp.index.to_period("D")).cumsum() / volume.groupby(volume.index.to_period("D")).cumsum()
+    else:
+        vwap = wp.cumsum() / volume.cumsum()
+    return vwap
+
+
+def _compute_rsi(close: pd.Series, length: int = 14) -> pd.Series:
+    """Wilder's Relative Strength Index."""
+    delta = close.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    alpha = 1.0 / length
+    avg_gain = gain.ewm(alpha=alpha, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=alpha, adjust=False).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    return (100.0 - (100.0 / (1.0 + rs))).fillna(50.0)
+
+
+def _compute_atr(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> pd.Series:
+    """Wilder's Average True Range."""
+    tr1 = high - low
+    tr2 = (high - close.shift(1)).abs()
+    tr3 = (low - close.shift(1)).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    return tr.ewm(alpha=1.0 / length, adjust=False).mean()
+
+
+def _compute_obv(close: pd.Series, volume: pd.Series) -> pd.Series:
+    """On-Balance Volume."""
+    direction = np.sign(close.diff()).fillna(0)
+    if len(direction) > 0:
+        direction.iloc[0] = 1.0
+    return (direction * volume).cumsum()
+
+
+def _compute_macd(
+    close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9
+) -> Tuple[pd.Series, pd.Series]:
+    """Moving Average Convergence Divergence line and histogram."""
+    ema_fast = close.ewm(span=fast, adjust=False).mean()
+    ema_slow = close.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    macd_hist = macd_line - signal_line
+    return macd_line, macd_hist
 
 
 def compute_predictive_features(
@@ -71,11 +122,11 @@ def compute_predictive_features(
     elif not isinstance(df.index, pd.DatetimeIndex):
         df.index = pd.date_range("2024-01-01", periods=len(df), freq="15min")
 
-    # 1. Base technical indicators
-    df["vwap"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"])
-    df["rsi"] = ta.rsi(df["close"], length=14)
-    df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
-    df["obv"] = ta.obv(df["close"], df["volume"])
+    # 1. Base technical indicators (pure pandas/numpy vectorization)
+    df["vwap"] = _compute_vwap(df["high"], df["low"], df["close"], df["volume"])
+    df["rsi"] = _compute_rsi(df["close"], length=14)
+    df["atr"] = _compute_atr(df["high"], df["low"], df["close"], length=14)
+    df["obv"] = _compute_obv(df["close"], df["volume"])
 
     # Backfill initial NaN values from indicator warm-up
     df = df.bfill()
@@ -90,13 +141,9 @@ def compute_predictive_features(
     df["obv_norm"] = df["obv"] / df["obv"].rolling(window=norm_window, min_periods=1).mean()
 
     # MACD calculated on already normalized close price to maintain scale
-    macd = ta.macd(df["close_norm"], fast=12, slow=26, signal=9)
-    if macd is not None and len(macd.columns) >= 2:
-        df["macd_norm"] = macd.iloc[:, 0]
-        df["macd_hist_norm"] = macd.iloc[:, 1]
-    else:
-        df["macd_norm"] = 0.0
-        df["macd_hist_norm"] = 0.0
+    macd_line, macd_hist = _compute_macd(df["close_norm"], fast=12, slow=26, signal=9)
+    df["macd_norm"] = macd_line
+    df["macd_hist_norm"] = macd_hist
 
     # Replace any potential inf or nan resulting from zero-divisions
     df = df.replace([np.inf, -np.inf], np.nan).bfill().fillna(0.0)
