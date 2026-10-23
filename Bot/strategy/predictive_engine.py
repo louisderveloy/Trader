@@ -154,6 +154,11 @@ class PredictiveStrategyEngine:
             logger.debug(f"Could not resolve active weights_set_id: {e}")
         return self._active_weights_set_id
 
+    async def load_active_weights(self) -> None:
+        """Refresh active weights_set_id from database if available."""
+        self._active_weights_set_id = None
+        await self._resolve_weights_set_id()
+
     async def make_decision(
         self,
         candles: List[Any],
