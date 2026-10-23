@@ -7,10 +7,26 @@ loaded from environment variables or database settings.
 
 import logging
 from dataclasses import dataclass
+from typing import Optional
 
 from .types import PositionSizeMode, StopLossMode, TakeProfitMode
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class TradingEngineConfig:
+    """Trading engine selection configuration."""
+
+    engine_type: str = "indicators"  # "indicators" or "predictive_model"
+    onnx_model_path: str = "/models/feature_extractor.onnx"
+    xgboost_model_path: str = "/models/xgboost_trading_model.json"
+
+    def __post_init__(self):
+        """Validate configuration."""
+        valid_engines = ("indicators", "predictive_model")
+        if self.engine_type not in valid_engines:
+            raise ValueError(f"engine_type must be one of {valid_engines}, got {self.engine_type}")
 
 
 @dataclass
@@ -20,19 +36,32 @@ class StrategyConfig:
     entry_threshold: float = 0.6  # Weighted score threshold to enter position
     exit_threshold: float = -0.3  # Weighted score threshold to exit position
     confirmation_candles: int = 2  # Anti-repainting: required consecutive candles
+    engine_type: str = "indicators"  # "indicators" or "predictive_model"
 
     def __post_init__(self):
         """Validate configuration."""
-        if not -1.0 <= self.entry_threshold <= 1.0:
-            raise ValueError(f"entry_threshold must be in [-1, 1], got {self.entry_threshold}")
-        if not -1.0 <= self.exit_threshold <= 1.0:
-            raise ValueError(f"exit_threshold must be in [-1, 1], got {self.exit_threshold}")
-        if self.exit_threshold >= self.entry_threshold:
-            raise ValueError(
-                f"exit_threshold ({self.exit_threshold}) must be < entry_threshold ({self.entry_threshold})"
-            )
-        if self.confirmation_candles < 1:
-            raise ValueError(f"confirmation_candles must be >= 1, got {self.confirmation_candles}")
+        if self.engine_type == "predictive_model":
+            if not 0.0 <= self.entry_threshold <= 1.0:
+                raise ValueError(
+                    f"entry_threshold must be in [0, 1] for predictive_model, got {self.entry_threshold}"
+                )
+            if not 0.0 <= self.exit_threshold <= 1.0:
+                raise ValueError(
+                    f"exit_threshold must be in [0, 1] for predictive_model, got {self.exit_threshold}"
+                )
+            if self.confirmation_candles < 1:
+                raise ValueError(f"confirmation_candles must be >= 1, got {self.confirmation_candles}")
+        else:
+            if not -1.0 <= self.entry_threshold <= 1.0:
+                raise ValueError(f"entry_threshold must be in [-1, 1], got {self.entry_threshold}")
+            if not -1.0 <= self.exit_threshold <= 1.0:
+                raise ValueError(f"exit_threshold must be in [-1, 1], got {self.exit_threshold}")
+            if self.exit_threshold >= self.entry_threshold:
+                raise ValueError(
+                    f"exit_threshold ({self.exit_threshold}) must be < entry_threshold ({self.entry_threshold})"
+                )
+            if self.confirmation_candles < 1:
+                raise ValueError(f"confirmation_candles must be >= 1, got {self.confirmation_candles}")
 
 
 @dataclass
@@ -123,13 +152,20 @@ class StrategyEngineConfig:
     stop_loss: StopLossConfig
     take_profit: TakeProfitConfig
     cooldown: CooldownConfig
+    trading_engine: Optional[TradingEngineConfig] = None
+
+    def __post_init__(self):
+        if self.trading_engine is None:
+            self.trading_engine = TradingEngineConfig(engine_type=self.strategy.engine_type)
+        elif self.strategy.engine_type != self.trading_engine.engine_type:
+            self.strategy.engine_type = self.trading_engine.engine_type
 
     @classmethod
     def from_env(cls) -> "StrategyEngineConfig":
         """
         Load configuration from environment variables.
 
-        This method reads all STRATEGY_*, RISK_*, SL_*, TP_*, and COOLDOWN_*
+        This method reads all TRADING_ENGINE_*, STRATEGY_*, RISK_*, SL_*, TP_*, and COOLDOWN_*
         environment variables and constructs a complete configuration object.
 
         Returns:
@@ -140,11 +176,19 @@ class StrategyEngineConfig:
         """
         import os
 
+        # Trading engine configuration
+        trading_engine = TradingEngineConfig(
+            engine_type=os.getenv("TRADING_ENGINE_TYPE", "indicators"),
+            onnx_model_path=os.getenv("PREDICTIVE_ONNX_MODEL_PATH", "/models/feature_extractor.onnx"),
+            xgboost_model_path=os.getenv("PREDICTIVE_XGBOOST_MODEL_PATH", "/models/xgboost_trading_model.json"),
+        )
+
         # Strategy configuration
         strategy = StrategyConfig(
             entry_threshold=float(os.getenv("STRATEGY_ENTRY_THRESHOLD", "0.6")),
             exit_threshold=float(os.getenv("STRATEGY_EXIT_THRESHOLD", "-0.3")),
-            confirmation_candles=int(os.getenv("STRATEGY_CONFIRMATION_CANDLES", "2"))
+            confirmation_candles=int(os.getenv("STRATEGY_CONFIRMATION_CANDLES", "2")),
+            engine_type=trading_engine.engine_type,
         )
 
         # Risk configuration
@@ -155,7 +199,7 @@ class StrategyEngineConfig:
             position_size_mode=PositionSizeMode(position_size_mode_str),
             fixed_size_percent=float(os.getenv("RISK_FIXED_SIZE_PERCENT", "10.0")),
             atr_multiplier=float(os.getenv("RISK_ATR_MULTIPLIER", "2.0")),
-            capital_risk_percent=float(os.getenv("RISK_CAPITAL_RISK_PERCENT", "1.0"))
+            capital_risk_percent=float(os.getenv("RISK_CAPITAL_RISK_PERCENT", "1.0")),
         )
 
         # Stop-loss configuration
@@ -163,7 +207,7 @@ class StrategyEngineConfig:
         stop_loss = StopLossConfig(
             mode=StopLossMode(sl_mode_str),
             atr_multiplier=float(os.getenv("SL_ATR_MULTIPLIER", "2.0")),
-            fixed_percent=float(os.getenv("SL_FIXED_PERCENT", "2.0"))
+            fixed_percent=float(os.getenv("SL_FIXED_PERCENT", "2.0")),
         )
 
         # Take-profit configuration
@@ -171,7 +215,7 @@ class StrategyEngineConfig:
         take_profit = TakeProfitConfig(
             mode=TakeProfitMode(tp_mode_str),
             atr_multiplier=float(os.getenv("TP_ATR_MULTIPLIER", "3.0")),
-            fixed_percent=float(os.getenv("TP_FIXED_PERCENT", "4.0"))
+            fixed_percent=float(os.getenv("TP_FIXED_PERCENT", "4.0")),
         )
 
         # Cooldown configuration
@@ -184,7 +228,8 @@ class StrategyEngineConfig:
             risk=risk,
             stop_loss=stop_loss,
             take_profit=take_profit,
-            cooldown=cooldown
+            cooldown=cooldown,
+            trading_engine=trading_engine,
         )
 
     @classmethod
@@ -214,7 +259,8 @@ class StrategyEngineConfig:
 
         if not row or not row["config"]:
             raise ValueError(
-                "No configuration found in database. Please create a config first using 'python -m main config create'")
+                "No configuration found in database. Please create a config first using 'python -m main config create'"
+            )
 
         # Parse config
         config = row["config"]
@@ -223,12 +269,22 @@ class StrategyEngineConfig:
 
         logger.debug(f"Loaded config: {config}")
 
+        # Extract trading engine config
+        trading_engine_data = config.get("trading_engine", {})
+        engine_type = trading_engine_data.get("engine_type", "indicators")
+        trading_engine = TradingEngineConfig(
+            engine_type=engine_type,
+            onnx_model_path=trading_engine_data.get("onnx_model_path", "/models/feature_extractor.onnx"),
+            xgboost_model_path=trading_engine_data.get("xgboost_model_path", "/models/xgboost_trading_model.json"),
+        )
+
         # Extract strategy config
         strategy_data = config.get("strategy", {})
         strategy = StrategyConfig(
             entry_threshold=float(strategy_data.get("entry_threshold", 0.6)),
             exit_threshold=float(strategy_data.get("exit_threshold", -0.3)),
-            confirmation_candles=int(strategy_data.get("confirmation_candles", 2))
+            confirmation_candles=int(strategy_data.get("confirmation_candles", 2)),
+            engine_type=engine_type,
         )
 
         # Extract risk config
@@ -240,7 +296,7 @@ class StrategyEngineConfig:
             position_size_mode=PositionSizeMode(position_size_mode_str),
             fixed_size_percent=float(risk_data.get("fixed_size_percent", 10.0)),
             atr_multiplier=float(risk_data.get("atr_multiplier", 2.0)),
-            capital_risk_percent=float(risk_data.get("capital_risk_percent", 1.0))
+            capital_risk_percent=float(risk_data.get("capital_risk_percent", 1.0)),
         )
 
         # Extract stop-loss config
@@ -249,7 +305,7 @@ class StrategyEngineConfig:
         stop_loss = StopLossConfig(
             mode=StopLossMode(sl_mode_str),
             atr_multiplier=float(sl_data.get("atr_multiplier", 2.0)),
-            fixed_percent=float(sl_data.get("fixed_percent", 2.0))
+            fixed_percent=float(sl_data.get("fixed_percent", 2.0)),
         )
 
         # Extract take-profit config
@@ -258,7 +314,7 @@ class StrategyEngineConfig:
         take_profit = TakeProfitConfig(
             mode=TakeProfitMode(tp_mode_str),
             atr_multiplier=float(tp_data.get("atr_multiplier", 3.0)),
-            fixed_percent=float(tp_data.get("fixed_percent", 4.0))
+            fixed_percent=float(tp_data.get("fixed_percent", 4.0)),
         )
 
         # Extract cooldown config
@@ -272,7 +328,8 @@ class StrategyEngineConfig:
             risk=risk,
             stop_loss=stop_loss,
             take_profit=take_profit,
-            cooldown=cooldown
+            cooldown=cooldown,
+            trading_engine=trading_engine,
         )
 
         return config_instance, row["id"]
@@ -285,10 +342,16 @@ class StrategyEngineConfig:
             Dictionary matching A3_snapshots_format.md specification
         """
         return {
+            "trading_engine": {
+                "engine_type": self.trading_engine.engine_type,
+                "onnx_model_path": self.trading_engine.onnx_model_path,
+                "xgboost_model_path": self.trading_engine.xgboost_model_path,
+            },
             "strategy": {
                 "entry_threshold": self.strategy.entry_threshold,
                 "exit_threshold": self.strategy.exit_threshold,
-                "confirmation_candles": self.strategy.confirmation_candles
+                "confirmation_candles": self.strategy.confirmation_candles,
+                "engine_type": self.strategy.engine_type,
             },
             "risk": {
                 "max_trades_per_day": self.risk.max_trades_per_day,
@@ -296,19 +359,19 @@ class StrategyEngineConfig:
                 "position_size_mode": self.risk.position_size_mode.value,
                 "fixed_size_percent": self.risk.fixed_size_percent,
                 "atr_multiplier": self.risk.atr_multiplier,
-                "capital_risk_percent": self.risk.capital_risk_percent
+                "capital_risk_percent": self.risk.capital_risk_percent,
             },
             "stop_loss": {
                 "mode": self.stop_loss.mode.value,
                 "atr_multiplier": self.stop_loss.atr_multiplier,
-                "fixed_percent": self.stop_loss.fixed_percent
+                "fixed_percent": self.stop_loss.fixed_percent,
             },
             "take_profit": {
                 "mode": self.take_profit.mode.value,
                 "atr_multiplier": self.take_profit.atr_multiplier,
-                "fixed_percent": self.take_profit.fixed_percent
+                "fixed_percent": self.take_profit.fixed_percent,
             },
             "cooldown": {
-                "after_trade_seconds": self.cooldown.after_trade_seconds
-            }
+                "after_trade_seconds": self.cooldown.after_trade_seconds,
+            },
         }
