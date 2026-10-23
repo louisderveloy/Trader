@@ -2,12 +2,14 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import {
   Config,
+  TradingEngineConfig,
   RiskConfig,
   StrategyConfig,
   StopLossTakeProfitConfig,
   CooldownConfig,
   UserIndicator,
   getConfig,
+  updateTradingEngineConfig,
   updateRiskConfig,
   updateStrategyConfig,
   updateStopLossTakeProfitConfig,
@@ -24,6 +26,7 @@ export const useConfigStore = defineStore('config', () => {
   const error = ref<string | null>(null)
 
   // Computed
+  const tradingEngine = computed(() => config.value?.trading_engine)
   const strategy = computed(() => config.value?.strategy)
   const risk = computed(() => config.value?.risk)
   const stopLossTakeProfit = computed(() => config.value?.stop_loss_take_profit)
@@ -42,6 +45,19 @@ export const useConfigStore = defineStore('config', () => {
       throw err
     } finally {
       isLoading.value = false
+    }
+  }
+
+  async function updateTradingEngine(updates: Partial<TradingEngineConfig>): Promise<void> {
+    error.value = null
+    try {
+      const updated = await updateTradingEngineConfig(updates)
+      if (config.value) {
+        config.value.trading_engine = updated
+      }
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'Failed to update trading engine configuration'
+      throw err
     }
   }
 
@@ -134,6 +150,7 @@ export const useConfigStore = defineStore('config', () => {
     error,
 
     // Computed
+    tradingEngine,
     strategy,
     risk,
     stopLossTakeProfit,
@@ -143,6 +160,7 @@ export const useConfigStore = defineStore('config', () => {
 
     // Actions
     fetchConfig,
+    updateTradingEngine,
     updateStrategy,
     updateRisk,
     updateStopLossTakeProfit,

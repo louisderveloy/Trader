@@ -229,6 +229,11 @@ class Settings(BaseSettings):
         default="15m", description="Default timeframe"
     )
 
+    # Trading Engine
+    trading_engine_type: str = Field(
+        default="indicators", description="Trading engine type: indicators or predictive_model"
+    )
+
     # Strategy
     strategy_entry_threshold: float = Field(
         default=0.6, description="Entry threshold [-1, 1]"

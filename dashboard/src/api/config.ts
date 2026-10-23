@@ -6,6 +6,10 @@ API client functions for reading and updating bot configuration.
 
 import { apiClient } from './client'
 
+export interface TradingEngineConfig {
+  engine_type: 'indicators' | 'predictive_model'
+}
+
 export interface StrategyConfig {
   entry_threshold: number
   exit_threshold: number
@@ -49,6 +53,7 @@ export interface IndicatorConfig {
 }
 
 export interface Config {
+  trading_engine: TradingEngineConfig
   binance: BinanceConfig
   strategy: StrategyConfig
   risk: RiskConfig
@@ -70,6 +75,16 @@ export interface UserIndicator {
  */
 export async function getConfig(): Promise<Config> {
   const response = await apiClient.get<Config>('/config')
+  return response.data
+}
+
+/**
+ * Update trading engine configuration
+ */
+export async function updateTradingEngineConfig(
+  config: Partial<TradingEngineConfig>
+): Promise<TradingEngineConfig> {
+  const response = await apiClient.patch<TradingEngineConfig>('/config/trading-engine', config)
   return response.data
 }
 

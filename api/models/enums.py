@@ -87,6 +87,12 @@ class TakeProfitMode(str, Enum):
     FIXED = "fixed"
 
 
+class TradingEngineType(str, Enum):
+    """Trading engine type."""
+    INDICATORS = "indicators"
+    PREDICTIVE_MODEL = "predictive_model"
+
+
 # Valid indicator names for weights validation
 VALID_INDICATORS = {
     "ema",

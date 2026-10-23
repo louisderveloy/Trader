@@ -132,6 +132,11 @@ async def apply_db_config_to_settings(db_pool: asyncpg.Pool, settings_obj: "Sett
         logger.info("No persisted configuration found in database, using defaults")
         return
 
+    # Apply trading engine config
+    trading_engine_config = config_dict.get("trading_engine", {})
+    if "engine_type" in trading_engine_config:
+        settings_obj.trading_engine_type = str(trading_engine_config["engine_type"])
+
     # Apply strategy config
     strategy_config = config_dict.get("strategy", {})
     if "entry_threshold" in strategy_config:

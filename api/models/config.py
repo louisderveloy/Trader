@@ -8,7 +8,25 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from .enums import PositionSizeMode, StopLossMode, TakeProfitMode
+from .enums import PositionSizeMode, StopLossMode, TakeProfitMode, TradingEngineType
+
+
+class TradingEngineConfigResponse(BaseModel):
+    """Trading engine configuration response."""
+
+    engine_type: str = Field(
+        ...,
+        description="Active trading engine: 'indicators' (Scoring Multi-Indicateurs) or 'predictive_model' (Modèle Prédictif)"
+    )
+
+
+class TradingEngineConfigUpdate(BaseModel):
+    """Request to update trading engine configuration."""
+
+    engine_type: TradingEngineType = Field(
+        ...,
+        description="Trading engine: 'indicators' or 'predictive_model'"
+    )
 
 
 class IndicatorConfigResponse(BaseModel):
@@ -70,6 +88,10 @@ class BinanceConfigResponse(BaseModel):
 class ConfigResponse(BaseModel):
     """Complete configuration response."""
 
+    trading_engine: TradingEngineConfigResponse = Field(
+        default_factory=lambda: TradingEngineConfigResponse(engine_type="indicators"),
+        description="Trading engine settings"
+    )
     binance: BinanceConfigResponse = Field(..., description="Binance settings")
     strategy: StrategyConfigResponse = Field(..., description="Strategy settings")
     risk: RiskConfigResponse = Field(..., description="Risk management settings")
